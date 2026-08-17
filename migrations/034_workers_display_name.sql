@@ -1,0 +1,16 @@
+-- Migration 034: workers.display_name
+-- ARCHITECTURE CHANGE REQUIRED (documented per gate instructions section 3
+-- before implementing): no field anywhere in the schema can represent a
+-- caregiver's human-readable name for display to family. `users` has only
+-- email/phone (both must be excluded from any family-facing response --
+-- see sanitization rules). `workers` and organization_worker_memberships
+-- have no name field either (internal_role is a job title like 'CNA', not
+-- a person's name). Family Timeline cannot show "who" cared for the
+-- recipient without this.
+--
+-- Minimal, additive fix: a single nullable text column on `workers` (the
+-- professional identity table, not the global `users` identity table).
+-- Nullable because a worker profile can exist before this is filled in
+-- (matching the existing nullable-by-design pattern already used for
+-- workers.user_id). No existing row, query, or constraint is affected.
+ALTER TABLE workers ADD COLUMN display_name text;

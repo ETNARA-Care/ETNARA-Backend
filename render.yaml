@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: etnara-care-backend-staging
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: PGPOOL_MAX
+        value: 5
+      - key: SESSION_DURATION_HOURS
+        value: 12
+      - key: ALLOWED_ORIGIN
+        value: https://rafaelvegafigueroa-eng.github.io
+      # DATABASE_URL, MIGRATIONS_DATABASE_URL y APP_RUNTIME_PASSWORD se
+      # configuran manualmente en el dashboard de Render como secretos --
+      # nunca se escriben aqui ni se commitean (ver instrucciones).
+
+databases:
+  - name: etnara-care-staging-db
+    plan: free
+    databaseName: etnara_care_staging
+    user: etnara_admin
