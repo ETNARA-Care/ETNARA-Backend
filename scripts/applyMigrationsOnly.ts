@@ -14,7 +14,7 @@ import { Client } from "pg";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, "..", "migrations");
 
-async function main() {
+async function main(): Promise<void> {
   const adminUrl = process.env.MIGRATIONS_DATABASE_URL;
   if (!adminUrl) throw new Error("MIGRATIONS_DATABASE_URL is required for applyMigrationsOnly.");
 
