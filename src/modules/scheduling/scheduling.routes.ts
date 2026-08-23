@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createShift,
   listShifts,
+  listMyShifts,
   getShift,
   updateShift,
   cancelShift,
@@ -13,6 +14,7 @@ import {
   InvalidShiftTimesError,
   RecipientNotInOrgError,
   RoomNotInOrgError,
+  WorkerNotLinkedError,
 } from "./scheduling.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -45,6 +47,10 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(400).json({ error: err.message });
     return true;
   }
+  if (err instanceof WorkerNotLinkedError) {
+    res.status(403).json({ error: "USER_HAS_NO_WORKER_PROFILE" });
+    return true;
+  }
   return false;
 }
 
@@ -65,6 +71,29 @@ router.post(
     try {
       const shift = await createShift(req.auth!.userId, orgIdParsed.data, bodyParsed.data);
       res.status(201).json({ shift });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+// Registrada explícitamente ANTES de "/shifts" y "/shifts/:shiftId": path
+// literal distinto ("me" en la 3ra posición vs "shifts") -- Express no las
+// confundiría en ningún orden, pero se coloca primero por claridad
+// defensiva, igual que "/shifts/coverage" se registra antes que
+// "/shifts/:shiftId" más abajo.
+router.get(
+  "/organizations/:organizationId/me/shifts",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const shifts = await listMyShifts(req.auth!.userId, orgIdParsed.data);
+      res.status(200).json({ shifts });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

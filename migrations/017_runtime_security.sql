@@ -39,7 +39,7 @@ $$;
 -- an admin could accidentally grant bypass later without noticing), no
 -- CREATEDB/CREATEROLE/REPLICATION.
 
-GRANT CONNECT ON DATABASE railway TO app_runtime;
+GRANT CONNECT ON DATABASE caretest TO app_runtime;
 -- NOTE: replace 'caretest' with the real deployment database name.
 
 GRANT USAGE ON SCHEMA public TO app_runtime;

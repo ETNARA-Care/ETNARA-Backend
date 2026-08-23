@@ -102,11 +102,13 @@ export async function createOrLinkWorker(
 
 export async function listWorkforce(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    const result = await sql<MembershipRow>`
-      SELECT id, worker_id, organization_id, status, internal_role, hired_at, ended_at, created_at, updated_at
-      FROM organization_worker_memberships
-      WHERE organization_id = ${organizationId}
-      ORDER BY created_at
+    const result = await sql<MembershipRow & { display_name: string | null }>`
+      SELECT owm.id, owm.worker_id, owm.organization_id, owm.status, owm.internal_role,
+             owm.hired_at, owm.ended_at, owm.created_at, owm.updated_at, w.display_name
+      FROM organization_worker_memberships owm
+      JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.organization_id = ${organizationId}
+      ORDER BY owm.created_at
     `.execute(trx);
     return result.rows;
   });

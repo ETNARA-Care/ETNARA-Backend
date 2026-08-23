@@ -2,6 +2,8 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
+import { WorkerNotLinkedError } from "../verification/verification.service.js";
+export { WorkerNotLinkedError };
 
 export class ShiftNotFoundError extends Error {
   constructor() {
@@ -151,6 +153,40 @@ export async function listShifts(userId: string, organizationId: string, filter:
       WHERE ${whereClause}
       GROUP BY s.id
       ${havingClause}
+      ORDER BY s.scheduled_start
+    `.execute(trx);
+    return result.rows;
+  });
+}
+
+/**
+ * "Mis turnos" para el worker autenticado -- resuelve el worker desde el
+ * userId del token (NUNCA aceptado del cliente), igual que ya hace
+ * verification.service.ts para check-in/check-out. Un solo JOIN, sin
+ * N+1: solo devuelve shifts que tienen una assignment activa para ESE
+ * worker en ESA organización. No modifica ni depende de ningún cambio a
+ * la RLS de `shifts` -- es una consulta más restrictiva por encima de
+ * ella, tal como ya hacía listShifts con sus propios filtros.
+ */
+export async function listMyShifts(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const workerRow = await sql<{ id: string }>`
+      SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1
+    `.execute(trx);
+    const workerId = workerRow.rows[0]?.id;
+    if (!workerId) throw new WorkerNotLinkedError();
+
+    const result = await sql<ShiftRow>`
+      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end,
+             s.status, s.created_at, s.updated_at
+      FROM shifts s
+      JOIN assignments a
+        ON a.shift_id = s.id
+      JOIN organization_worker_memberships owm
+        ON owm.id = a.organization_worker_membership_id
+       AND owm.status = 'active'
+      WHERE s.organization_id = ${organizationId}
+        AND owm.worker_id = ${workerId}
       ORDER BY s.scheduled_start
     `.execute(trx);
     return result.rows;

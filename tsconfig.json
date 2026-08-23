@@ -8,14 +8,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
-    "rootDir": "src",
-    
-
-
+ "rootDir": "src",
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["src"],
-
+  "include": ["src", "tests"]
 }
