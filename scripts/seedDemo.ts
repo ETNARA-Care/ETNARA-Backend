@@ -41,9 +41,9 @@ async function main() {
   const supervisorId = await createUser("supervisor@demo.etnara.care");
   await addMembership(supervisorId, "ORGANIZATION_ADMIN");
   const caregiver1Id = await createUser("maria@demo.etnara.care");
-  await addMembership(caregiver1Id);
+  await addMembership(caregiver1Id, "WORKER");
   const caregiver2Id = await createUser("carlos@demo.etnara.care");
-  await addMembership(caregiver2Id);
+  await addMembership(caregiver2Id, "WORKER");
   const familyId = await createUser("familia@demo.etnara.care");
   await addMembership(familyId, "FAMILY");
 
