@@ -1,5 +1,5 @@
 /**
- * Bootstrap de staging: aplica las 37 migraciones (solo si el schema no
+ * Bootstrap de staging: aplica las 38 migraciones (solo si el schema no
  * existe todavia), rota la contraseña placeholder de app_runtime a un
  * valor real, y siembra los datos demo -- idempotente.
  *
@@ -37,12 +37,12 @@ async function main() {
     return;
   }
 
-  console.log("Base vacia detectada. Aplicando 37 migraciones en orden...");
+  console.log("Base vacia detectada. Aplicando 38 migraciones en orden...");
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => /^\d{3}_.*\.sql$/.test(f))
     .sort();
-  if (files.length !== 37) {
-    throw new Error(`Se esperaban 37 migraciones, se encontraron ${files.length}. Abortando.`);
+  if (files.length !== 38) {
+    throw new Error(`Se esperaban 38 migraciones, se encontraron ${files.length}. Abortando.`);
   }
   for (const file of files) {
     const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
