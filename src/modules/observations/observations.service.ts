@@ -39,12 +39,50 @@ export class InvalidObservationStatusTransitionError extends Error {
     this.name = "InvalidObservationStatusTransitionError";
   }
 }
+/**
+ * Thrown by the raw/full (non-curated) observation reads when the caller
+ * is Family and only Family -- i.e. has no worker profile and is not an
+ * org manager for this org. CRITICAL FIX (found via live testing, not
+ * assumed): migration 038 grants Family row-level SELECT access to
+ * observations for RECIPIENTS THEY ARE AUTHORIZED FOR, so it can (and
+ * empirically does) leak full rows -- including the free-text
+ * `description`, which may hold clinical/internal phrasing -- through
+ * THIS endpoint if it isn't blocked here. Family must use the dedicated
+ * family-safe endpoint (`listFamilyObservations`), which curates columns.
+ */
+export class FamilyMustUseFamilyEndpointError extends Error {
+  constructor() {
+    super("FAMILY_MUST_USE_FAMILY_SAFE_ENDPOINT");
+    this.name = "FamilyMustUseFamilyEndpointError";
+  }
+}
 
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
   if (!uuidSchema.safeParse(value).success) {
     throw new InvalidTenantContextError(`${label} must be a valid UUID, received: ${JSON.stringify(value)}`);
   }
+}
+
+/**
+ * Staff = org manager (admin/supervisor) OR has an active worker
+ * membership in this org. Anyone who is neither (i.e. a Family-only
+ * caller) must be redirected to the family-safe, column-curated
+ * endpoints instead of the raw ones this guards.
+ */
+async function assertStaffCaller(trx: unknown): Promise<void> {
+  const check = await sql<{ is_staff: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        JOIN organization_worker_memberships owm ON owm.worker_id = w.id AND owm.status = 'active'
+        WHERE w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+          AND owm.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      )
+    ) as is_staff
+  `.execute(trx as never);
+  if (!check.rows[0]?.is_staff) throw new FamilyMustUseFamilyEndpointError();
 }
 
 const OBSERVATION_CATEGORIES = [
@@ -137,6 +175,7 @@ export interface ListObservationsFilter {
 
 export async function listObservations(userId: string, organizationId: string, filter: ListObservationsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const conditions = [sql`organization_id = ${organizationId}`];
     if (filter.careRecipientId) conditions.push(sql`care_recipient_id = ${filter.careRecipientId}`);
     if (filter.status) conditions.push(sql`status = ${filter.status}`);
@@ -150,9 +189,60 @@ export async function listObservations(userId: string, organizationId: string, f
   });
 }
 
+export interface FamilyObservationItem {
+  id: string;
+  careRecipientId: string;
+  category: string;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * Family-safe view: category + status + timestamp only. The free-text
+ * `description` field is deliberately NEVER returned here -- it may
+ * contain clinical/internal phrasing not yet reviewed by a supervisor
+ * (observations start as unreviewed "open" alerts), matching the
+ * requirement that family never sees internal/clinical notes that aren't
+ * meant for them. RLS (observations_family_read, migration 038) grants
+ * row-level access; this function additionally narrows the columns
+ * returned, the same defense-in-depth idiom already used for care_event
+ * photo visibility (033).
+ */
+export async function listFamilyObservations(
+  userId: string,
+  organizationId: string,
+  careRecipientId: string
+): Promise<FamilyObservationItem[]> {
+  assertUuid(careRecipientId, "careRecipientId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const relationship = await sql<{ id: string }>`
+      SELECT id FROM family_relationships
+      WHERE user_id = ${userId} AND organization_id = ${organizationId}
+        AND care_recipient_id = ${careRecipientId} AND status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    if (!relationship.rows[0]) throw new RecipientNotFoundError();
+
+    const result = await sql<{ id: string; care_recipient_id: string; category: string; status: string; created_at: string }>`
+      SELECT id, care_recipient_id, category, status, created_at
+      FROM observations
+      WHERE organization_id = ${organizationId} AND care_recipient_id = ${careRecipientId}
+      ORDER BY created_at DESC
+    `.execute(trx);
+    return result.rows.map((r) => ({
+      id: r.id,
+      careRecipientId: r.care_recipient_id,
+      category: r.category,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  });
+}
+
 export async function getObservation(userId: string, organizationId: string, observationId: string) {
   assertUuid(observationId, "observationId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const result = await sql<ObservationRow>`
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id, care_event_id, category, description, status, created_at
       FROM observations WHERE id = ${observationId} AND organization_id = ${organizationId} LIMIT 1
