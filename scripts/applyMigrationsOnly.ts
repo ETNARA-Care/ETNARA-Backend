@@ -1,15 +1,19 @@
 /**
- * Aplica exclusivamente las 36 migraciones si el schema no existe todavía.
+ * Aplica exclusivamente las migraciones PENDIENTES (registradas en
+ * `schema_migrations`), sin sembrar datos demo ni rotar contraseñas.
+ *
+ * Ya no usa "¿existe `organizations`?" como gate: cada archivo se aplica
+ * una sola vez de forma independiente -- ver scripts/lib/runMigrations.ts.
  *
  * Requiere:
  *   MIGRATIONS_DATABASE_URL -- conexion administrativa (superusuario del proveedor).
  *
  * Uso: MIGRATIONS_DATABASE_URL=... npx tsx scripts/applyMigrationsOnly.ts
  */
-import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { applyPendingMigrations } from "./lib/runMigrations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, "..", "migrations");
@@ -21,31 +25,11 @@ async function main(): Promise<void> {
   const client = new Client({ connectionString: adminUrl });
   await client.connect();
 
-  const existing = await client.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_name = 'organizations' LIMIT 1`
-  );
-  if (existing.rows.length > 0) {
-    console.log("Schema ya existe -- no se aplican migraciones.");
-    await client.end();
-    return;
-  }
-
-  console.log("Base vacia detectada. Aplicando 36 migraciones en orden...");
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => /^\d{3}_.*\.sql$/.test(f))
-    .sort();
-  if (files.length !== 36) {
-    await client.end();
-    throw new Error(`Se esperaban 36 migraciones, se encontraron ${files.length}. Abortando.`);
-  }
-  for (const file of files) {
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-    await client.query(sql);
-    console.log(`  OK: ${file}`);
-  }
+  console.log("Aplicando migraciones pendientes (idempotente, no borra ni resetea nada)...");
+  await applyPendingMigrations(client, MIGRATIONS_DIR);
 
   await client.end();
-  console.log("Todas las migraciones aplicadas. Conexion cerrada.");
+  console.log("Listo. Conexion cerrada.");
 }
 
 main().catch((err) => {
