@@ -1,0 +1,36 @@
+name: ETNARA Autopilot
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  autopilot:
+    if: github.event.label.name == 'agent-task'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install OpenAI SDK
+        run: npm install openai@latest
+
+      - name: Run ETNARA Manager
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ secrets.ETNARA_GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/etnara-autopilot.mjs
