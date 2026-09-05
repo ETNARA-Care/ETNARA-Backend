@@ -1,12 +1,19 @@
 name: ETNARA Autopilot
 
 on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "GitHub Issue number"
+        required: true
+        default: "2"
+
   issues:
     types: [labeled]
 
 jobs:
   autopilot:
-    if: github.event.label.name == 'agent-task'
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent-task'
     runs-on: ubuntu-latest
 
     permissions:
@@ -27,9 +34,9 @@ jobs:
 
       - name: Run ETNARA Manager
         env:
-OPENAI_API_KEY: ${{ secrets.OPENAIKEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAIKEY }}
           GH_TOKEN: ${{ secrets.ETNARA_GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           REPOSITORY: ${{ github.repository }}
