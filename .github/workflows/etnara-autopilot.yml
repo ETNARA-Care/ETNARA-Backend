@@ -27,7 +27,7 @@ jobs:
 
       - name: Run ETNARA Manager
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAPIKEY }}
+OPENAI_API_KEY: ${{ secrets.OPENAIKEY }}
           GH_TOKEN: ${{ secrets.ETNARA_GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
