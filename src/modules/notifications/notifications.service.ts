@@ -41,6 +41,10 @@ function summarizeType(notificationType: string): string {
   switch (notificationType) {
     case "NEW_MESSAGE":
       return "Nuevo mensaje";
+    case "NEW_CARE_EVENT":
+      return "Nueva actividad de cuidado";
+    case "NEW_INCIDENT":
+      return "Nuevo incidente";
     default:
       return "Notificación";
   }

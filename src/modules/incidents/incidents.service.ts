@@ -57,12 +57,41 @@ export class AssigneeNotInOrgError extends Error {
     this.name = "AssigneeNotInOrgError";
   }
 }
+/**
+ * See the identical guard in observations.service.ts for the full
+ * rationale: migration 038 grants Family row-level SELECT access to
+ * incidents for recipients they're authorized for, so the raw
+ * listIncidents/getIncident endpoints -- confirmed via live testing to
+ * leak actions_taken/resolution/assigned_to_user_id otherwise -- must
+ * reject Family-only callers and point them at listFamilyIncidents.
+ */
+export class FamilyMustUseFamilyEndpointError extends Error {
+  constructor() {
+    super("FAMILY_MUST_USE_FAMILY_SAFE_ENDPOINT");
+    this.name = "FamilyMustUseFamilyEndpointError";
+  }
+}
 
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
   if (!uuidSchema.safeParse(value).success) {
     throw new InvalidTenantContextError(`${label} must be a valid UUID, received: ${JSON.stringify(value)}`);
   }
+}
+
+async function assertStaffCaller(trx: unknown): Promise<void> {
+  const check = await sql<{ is_staff: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        JOIN organization_worker_memberships owm ON owm.worker_id = w.id AND owm.status = 'active'
+        WHERE w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+          AND owm.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      )
+    ) as is_staff
+  `.execute(trx as never);
+  if (!check.rows[0]?.is_staff) throw new FamilyMustUseFamilyEndpointError();
 }
 
 // severity is `text NOT NULL` in the real schema -- deliberately NOT an
@@ -114,6 +143,47 @@ async function resolveMembership(trx: unknown, workerId: string, organizationId:
     LIMIT 1
   `.execute(trx as never);
   return result.rows[0] ?? null;
+}
+
+/**
+ * Notifies every org admin/supervisor (always -- incidents are always
+ * relevant to Administration) and every family member who is currently
+ * authorized for this recipient AND opted in (can_receive_notifications)
+ * (incidents are relevant to Family too, per the family-safe incident view
+ * added alongside this). RLS (notifications_insert, migration 038)
+ * independently re-verifies every target user is authorized for this same
+ * care_recipient_id before allowing any of these inserts.
+ */
+async function notifyIncidentCreated(
+  trx: unknown,
+  organizationId: string,
+  careRecipientId: string,
+  incidentId: string
+): Promise<void> {
+  await sql`
+    INSERT INTO notifications (user_id, organization_id, notification_type, related_entity_type, related_entity_id, care_recipient_id, channel, status, sent_at)
+    SELECT om.user_id, ${organizationId}, 'NEW_INCIDENT', 'incident', ${incidentId}, ${careRecipientId}, 'in_app', 'sent', now()
+    FROM organization_memberships om
+    JOIN user_roles ur ON ur.organization_membership_id = om.id
+    JOIN roles r ON r.id = ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+    WHERE om.organization_id = ${organizationId} AND om.status = 'active'
+  `.execute(trx as never);
+
+  await sql`
+    INSERT INTO notifications (user_id, organization_id, notification_type, related_entity_type, related_entity_id, care_recipient_id, channel, status, sent_at)
+    SELECT fr.user_id, ${organizationId}, 'NEW_INCIDENT', 'incident', ${incidentId}, ${careRecipientId}, 'in_app', 'sent', now()
+    FROM family_relationships fr
+    WHERE fr.care_recipient_id = ${careRecipientId}
+      AND fr.organization_id = ${organizationId}
+      AND fr.status = 'active'
+      AND fr.can_receive_notifications = true
+      AND EXISTS (
+        SELECT 1 FROM user_roles ur
+        JOIN organization_memberships om ON ur.organization_membership_id = om.id
+        JOIN roles r ON ur.role_id = r.id
+        WHERE om.user_id = fr.user_id AND om.organization_id = ${organizationId} AND r.code = 'FAMILY'
+      )
+  `.execute(trx as never);
 }
 
 async function assertOrgManager(trx: unknown): Promise<void> {
@@ -179,6 +249,8 @@ export async function createIncident(
       );
     }
 
+    await notifyIncidentCreated(trx, organizationId, input.careRecipientId, result.rows[0].id);
+
     return result.rows[0];
   });
 }
@@ -238,6 +310,8 @@ export async function escalateObservationToIncident(
       trx
     );
 
+    await notifyIncidentCreated(trx, organizationId, obs.rows[0].care_recipient_id, result.rows[0].id);
+
     return result.rows[0];
   });
 }
@@ -249,6 +323,7 @@ export interface ListIncidentsFilter {
 
 export async function listIncidents(userId: string, organizationId: string, filter: ListIncidentsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const conditions = [sql`organization_id = ${organizationId}`];
     if (filter.careRecipientId) conditions.push(sql`care_recipient_id = ${filter.careRecipientId}`);
     if (filter.status) conditions.push(sql`status = ${filter.status}`);
@@ -264,9 +339,67 @@ export async function listIncidents(userId: string, organizationId: string, filt
   });
 }
 
+export interface FamilyIncidentItem {
+  id: string;
+  careRecipientId: string;
+  severity: string;
+  description: string;
+  status: string;
+  createdAt: string;
+}
+
+/**
+ * Family-safe view: severity + description ("what happened") + status +
+ * timestamp only. Deliberately never returns actions_taken, resolution, or
+ * assigned_to_user_id -- those are internal/administrative fields (who is
+ * handling it, internal remediation notes) that don't belong to Family per
+ * the approved scope ("no expongas información que no corresponda al rol
+ * familiar"). RLS (incidents_family_read, migration 038) grants row-level
+ * access; this function additionally narrows the columns returned.
+ */
+export async function listFamilyIncidents(
+  userId: string,
+  organizationId: string,
+  careRecipientId: string
+): Promise<FamilyIncidentItem[]> {
+  assertUuid(careRecipientId, "careRecipientId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const relationship = await sql<{ id: string }>`
+      SELECT id FROM family_relationships
+      WHERE user_id = ${userId} AND organization_id = ${organizationId}
+        AND care_recipient_id = ${careRecipientId} AND status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    if (!relationship.rows[0]) throw new RecipientNotFoundError();
+
+    const result = await sql<{
+      id: string;
+      care_recipient_id: string;
+      severity: string;
+      description: string;
+      status: string;
+      created_at: string;
+    }>`
+      SELECT id, care_recipient_id, severity, description, status, created_at
+      FROM incidents
+      WHERE organization_id = ${organizationId} AND care_recipient_id = ${careRecipientId}
+      ORDER BY created_at DESC
+    `.execute(trx);
+    return result.rows.map((r) => ({
+      id: r.id,
+      careRecipientId: r.care_recipient_id,
+      severity: r.severity,
+      description: r.description,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  });
+}
+
 export async function getIncident(userId: string, organizationId: string, incidentId: string) {
   assertUuid(incidentId, "incidentId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const result = await sql<IncidentRow>`
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id,
              escalated_from_observation_id, severity, description, actions_taken,
