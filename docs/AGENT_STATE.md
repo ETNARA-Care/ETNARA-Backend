@@ -33,10 +33,9 @@ Additional corrections completed:
 
 ## Mandatory Next Step
 
-Validate all migrations twice against the disposable PostgreSQL 16 service in
-GitHub Actions. The first run exposed a hard-coded `caretest` database name in
-migration 017; migration 040 and the fresh-install correction must pass before
-PR #3 is merged or deployed to Railway.
+PostgreSQL 16 validation now passes: all migrations install from an empty
+database and a second bootstrap completes idempotently. Obtain explicit approval
+before merging PR #3 and deploying it to Railway.
 
 ## Current Product Priority
 
@@ -81,13 +80,12 @@ Verify actual deployment configuration before changing deployment behavior.
 - GitHub CI initial run passed.
 
 ### Failures / Risks
-- The first PostgreSQL integration run correctly failed at migration 017 because
-  it granted access to a hard-coded `caretest` database. A portability fix and
-  additive migration 040 are pending CI validation.
+- No known validation failures remain.
+- Railway deployment and post-deployment checks remain pending.
 - Railway deployment remains intentionally untouched.
 
 ### Uncommitted Work
-- Updated CI migration validation and this checkpoint.
+- This final validation checkpoint only.
 
 ### Exact Next Step
-- Publish the CI update to PR #3 and require a successful PostgreSQL migration run.
+- With user approval, merge PR #3, monitor Railway, and verify migrations 038-040.

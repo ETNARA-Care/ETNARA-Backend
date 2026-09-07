@@ -6,7 +6,7 @@
 - draft PR #3 published
 - PostgreSQL validation found and corrected migration 017 database-name coupling
 - additive migration 040 ensures existing databases receive the correct grant
-- repeat PostgreSQL migration validation pending in CI
+- all migrations and a second idempotent bootstrap passed on PostgreSQL 16
 - merge and Railway deployment intentionally pending
 
 ---
