@@ -4,11 +4,11 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: main
+Branch: codex/fix-cross-portal-security
 
-## Last Known Backend Checkpoint
+## Current Backend Checkpoint
 
-Previous agent work reportedly implemented and validated locally:
+The recovered backend work is implemented, reviewed, and published in draft PR #3:
 
 - migrations 038/039
 - messaging auto-participant fix
@@ -21,28 +21,20 @@ Previous agent work reportedly implemented and validated locally:
 - security fix blocking Family from raw / uncurated endpoints
 - regression testing for Family data leakage
 
-## Important Warning
+Additional corrections completed:
 
-At the end of that previous session, the agent reported:
-
-- backend changes were NOT committed or pushed
-- code review was NOT completed
-- CodeQL was NOT completed
-- ETNARAMVP frontend work had NOT started
-- AgencyResidentProfilePage still needed conversion from mock to real backend data
-
-Do not assume this checkpoint is still accurate.
+- Family access requires an active FAMILY membership.
+- Family observations are limited to reviewed records.
+- Failed migrations roll back and are not marked as applied.
+- Migration execution is protected by an advisory lock.
+- The demo password is supplied through `DEMO_PASSWORD`, never source code.
+- Local build, 9 tests, and npm audit pass.
+- GitHub CI passed on the published backend commit.
 
 ## Mandatory Next Step
 
-Before implementing anything:
-
-1. Run git status
-2. Run git diff
-3. Confirm whether the previously reported backend changes still exist
-4. Confirm whether migrations 038/039 exist
-5. Do not recreate work that is already present
-6. Record findings here
+Validate all migrations twice against the disposable PostgreSQL 16 service in
+GitHub Actions. Do not merge PR #3 or deploy to Railway until that check passes.
 
 ## Current Product Priority
 
@@ -72,20 +64,26 @@ Verify actual deployment configuration before changing deployment behavior.
 ## Session Handoff
 
 ### Completed
-- Agent rules created
+- Backend recovery and security review completed.
+- Draft backend PR #3 published.
+- Local TypeScript/build/tests/audit validation passed.
 
 ### Files Changed
-- AGENTS.md
-- docs/AGENT_STATE.md
+- Backend family-safe access, messaging, notifications, migrations, and tests.
+- `.github/workflows/etnara-ci.yml` adds real PostgreSQL migration validation.
 
 ### Tests Run
-- None yet
+- 9 local tests passed.
+- TypeScript/build passed.
+- npm audit reports 0 vulnerabilities.
+- GitHub CI initial run passed.
 
 ### Failures / Risks
-- Backend pending-work state still needs verification
+- PostgreSQL integration run is pending on the updated CI workflow.
+- Railway deployment remains intentionally untouched.
 
 ### Uncommitted Work
-- To be determined
+- Updated CI migration validation and this checkpoint.
 
 ### Exact Next Step
-- Inspect repository state before continuing backend work
+- Publish the CI update to PR #3 and require a successful PostgreSQL migration run.

@@ -10,6 +10,20 @@ jobs:
   validate-backend:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: etnara_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d etnara_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,8 +44,18 @@ jobs:
         run: npm run build
 
       - name: Tests
-        run: npm test -- --runInBand
-        continue-on-error: true
+        run: npm test
+
+      - name: PostgreSQL migration validation
+        shell: bash
+        run: |
+          runtime_password="$(openssl rand -hex 24)"
+          demo_password="$(openssl rand -hex 24)"
+          export MIGRATIONS_DATABASE_URL="postgres://postgres@localhost:5432/etnara_ci"
+          export APP_RUNTIME_PASSWORD="$runtime_password"
+          export DEMO_PASSWORD="$demo_password"
+          npm run bootstrap:staging
+          npm run bootstrap:staging
 
       - name: Diff safety check
         run: git diff --check
