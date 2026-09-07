@@ -89,3 +89,16 @@ Verify actual deployment configuration before changing deployment behavior.
 
 ### Exact Next Step
 - With user approval, merge PR #3, monitor Railway, and verify migrations 038-040.
+
+## 2026-09-07 — Demo shift eligibility gate
+
+- Branch: `fix/demo-shift-eligibility`
+- The staging bootstrap now creates one idempotent, organization-scoped demo
+  requirement set named `Demo: membresía activa`.
+- It intentionally has no mandatory credential requirements, so active demo
+  worker memberships can pass the existing eligibility engine during real shift
+  assignment and check-in.
+- It never creates or changes a global requirement set or another organization.
+- Backend TypeScript build passes; 10 tests pass.
+- Exact next step: publish this isolated PR, merge only with user approval,
+  monitor Railway bootstrap, then deploy the paired frontend shifts PR.
