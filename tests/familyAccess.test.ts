@@ -29,4 +29,11 @@ describe("Family access regression contracts", () => {
     expect(migration).toMatch(/CREATE POLICY message_threads_create[\s\S]*app_user_authorized_for_recipient/);
     expect(migration).toMatch(/CREATE POLICY message_thread_participants_write[\s\S]*app_user_authorized_for_recipient/);
   });
+
+  it("adds newly assigned workers to existing recipient conversations", () => {
+    const assignments = read("src/modules/assignments/assignments.service.ts");
+    const backfill = read("migrations/041_assignment_message_participants.sql");
+    expect(assignments).toMatch(/INSERT INTO message_thread_participants[\s\S]*ON CONFLICT \(message_thread_id, user_id\) DO NOTHING/);
+    expect(backfill).toMatch(/JOIN assignments a[\s\S]*JOIN workers w[\s\S]*ON CONFLICT \(message_thread_id, user_id\) DO NOTHING/);
+  });
 });

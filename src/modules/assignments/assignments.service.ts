@@ -84,8 +84,9 @@ export async function createAssignment(
       scheduled_start: string;
       scheduled_end: string;
       care_recipient_id: string | null;
+      room_id: string | null;
     }>`
-      SELECT id, status, scheduled_start, scheduled_end, care_recipient_id FROM shifts
+      SELECT id, status, scheduled_start, scheduled_end, care_recipient_id, room_id FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       LIMIT 1
     `.execute(trx);
@@ -93,12 +94,15 @@ export async function createAssignment(
     if (!shift) throw new ShiftNotFoundError();
     if (shift.status === "cancelled") throw new ShiftCancelledError();
 
-    const membershipRow = await sql<{ id: string; status: string }>`
-      SELECT id, status FROM organization_worker_memberships
-      WHERE id = ${input.organizationWorkerMembershipId} AND organization_id = ${organizationId}
+    const membershipRow = await sql<{ id: string; status: string; user_id: string | null }>`
+      SELECT owm.id, owm.status, w.user_id
+      FROM organization_worker_memberships owm
+      JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.id = ${input.organizationWorkerMembershipId} AND owm.organization_id = ${organizationId}
       LIMIT 1
     `.execute(trx);
-    if (!membershipRow.rows[0]) throw new MembershipNotInOrgError();
+    const membership = membershipRow.rows[0];
+    if (!membership) throw new MembershipNotInOrgError();
 
     const eligibility = await evaluateWorkerEligibility(userId, organizationId, input.organizationWorkerMembershipId);
     if (eligibility.eligibilityStatus !== "eligible") {
@@ -132,6 +136,26 @@ export async function createAssignment(
     await sql`UPDATE shifts SET status = 'confirmed', updated_at = now() WHERE id = ${shiftId} AND status = 'unassigned'`.execute(
       trx
     );
+
+    // An assignment grants this worker recipient-scoped messaging access.
+    // Add the linked user to every existing family_agency thread for the
+    // shift context now, so the worker can see it immediately without
+    // requiring another participant to resolve the conversation again.
+    if (membership.user_id) {
+      await sql`
+        INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
+        SELECT mt.organization_id, mt.id, ${membership.user_id}, true
+        FROM message_threads mt
+        WHERE mt.organization_id = ${organizationId}
+          AND mt.thread_type = 'family_agency'
+          AND mt.care_recipient_id IS NOT NULL
+          AND (
+            mt.care_recipient_id = ${shift.care_recipient_id}
+            OR (${shift.room_id} IS NOT NULL AND app_recipient_room_id(mt.care_recipient_id) = ${shift.room_id})
+          )
+        ON CONFLICT (message_thread_id, user_id) DO NOTHING
+      `.execute(trx);
+    }
 
     return result.rows[0];
   });
