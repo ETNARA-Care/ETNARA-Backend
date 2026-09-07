@@ -102,3 +102,15 @@ Verify actual deployment configuration before changing deployment behavior.
 - Backend TypeScript build passes; 10 tests pass.
 - Exact next step: publish this isolated PR, merge only with user approval,
   monitor Railway bootstrap, then deploy the paired frontend shifts PR.
+
+## 2026-09-07 — Assignment-to-messaging follow-up
+
+- Branch: `fix/worker-actions-messaging`
+- New worker assignments now add the linked worker user to existing
+  family_agency conversations for the exact direct or room-based recipient
+  context, idempotently and inside the assignment transaction.
+- Migration 041 backfills workers assigned after migration 039, including the
+  current live-test assignment.
+- Backend TypeScript build passes; 11 tests pass.
+- Exact next step: publish the isolated PR and merge only with user approval,
+  then deploy the paired V23 care-actions PR.
