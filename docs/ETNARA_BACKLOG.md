@@ -2,33 +2,16 @@
 
 ## In Progress
 
-### ETN-001 — Recover previous backend work
-Goal:
-Verify whether the uncommitted backend changes from the previous agent session still exist.
-
-Acceptance criteria:
-- git status reviewed
-- git diff reviewed
-- migrations 038/039 verified
-- previous messaging / notifications / family-safe endpoint work confirmed or marked missing
-- AGENT_STATE updated
+### ETN-003 — Commit and push backend
+- draft PR #3 published
+- PostgreSQL validation found and corrected migration 017 database-name coupling
+- additive migration 040 ensures existing databases receive the correct grant
+- all migrations and a second idempotent bootstrap passed on PostgreSQL 16
+- merge and Railway deployment intentionally pending
 
 ---
 
 ## Next
-
-### ETN-002 — Backend review and security validation
-- TypeScript
-- build
-- tests
-- code review
-- security / RLS review
-- Family leak regression
-
-### ETN-003 — Commit and push backend
-- commit only verified backend changes
-- push to main or approved branch
-- confirm Railway deployment
 
 ### ETN-004 — Connect Administration to real backend data
 Repository: ETNARAMVP
@@ -76,6 +59,12 @@ Status: Complete
 
 ### SETUP-002 — Create AGENT_STATE.md
 Status: Complete
+
+### ETN-001 — Recover previous backend work
+Status: Complete
+
+### ETN-002 — Backend review and security validation
+Status: Complete — TypeScript, build, 9 tests, authorization review, leak regression, and dependency audit passed.
 
 ---
 

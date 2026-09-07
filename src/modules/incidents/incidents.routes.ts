@@ -5,6 +5,7 @@ import {
   escalateObservationToIncident,
   listIncidents,
   getIncident,
+  listFamilyIncidents,
   updateIncidentStatus,
   assignIncident,
   addTimelineEntry,
@@ -24,6 +25,7 @@ import {
   InvalidStatusTransitionError,
   InvalidFileForAttachmentError,
   AssigneeNotInOrgError,
+  FamilyMustUseFamilyEndpointError,
 } from "./incidents.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -74,6 +76,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof AssigneeNotInOrgError) {
     res.status(400).json({ error: "ASSIGNEE_NOT_IN_ORGANIZATION" });
+    return true;
+  }
+  if (err instanceof FamilyMustUseFamilyEndpointError) {
+    res.status(403).json({ error: "FAMILY_MUST_USE_FAMILY_SAFE_ENDPOINT" });
     return true;
   }
   return false;
@@ -323,6 +329,28 @@ router.get(
         String(req.params.incidentId)
       );
       res.status(200).json({ attachments });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/care-recipients/:careRecipientId/family-incidents",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const incidents = await listFamilyIncidents(
+        req.auth!.userId,
+        orgIdParsed.data,
+        String(req.params.careRecipientId)
+      );
+      res.status(200).json({ incidents });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
