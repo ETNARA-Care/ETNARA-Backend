@@ -1,7 +1,7 @@
 /**
  * Datos demo reproducibles para ETNARA Care.
  * Uso: DATABASE_URL=... npx tsx scripts/seedDemo.ts
- * Contraseña de todos los usuarios demo: Demo1234!
+ * La contraseña de los usuarios demo se toma de DEMO_PASSWORD.
  *
  * Idempotente: cada paso busca primero si la fila ya existe (por su clave
  * natural) y solo la crea si falta. Esto permite volver a correr el script
@@ -124,6 +124,28 @@ async function main() {
     );
     return membership.rows[0].id as string;
   }
+
+  async function ensureDemoRequirementSet(): Promise<void> {
+    // La API de asignaciones siempre evalúa elegibilidad. La organización
+    // demo necesita una política explícita para que esa evaluación exista;
+    // un set sin requisitos obligatorios significa que cualquier membership
+    // activa es elegible. Se limita a ESTA organización demo y nunca crea ni
+    // modifica una política global o de una organización real.
+    const name = "Demo: membresía activa";
+    const existing = await client.query(
+      `SELECT id FROM requirement_sets WHERE organization_id = $1 AND name = $2 LIMIT 1`,
+      [orgId, name]
+    );
+    if (existing.rows.length > 0) return;
+    await client.query(
+      `INSERT INTO requirement_sets (organization_id, organization_type, name)
+       VALUES ($1, 'HOME_CARE_AGENCY', $2)`,
+      [orgId, name]
+    );
+  }
+
+  console.log("Verificando política de elegibilidad demo...");
+  await ensureDemoRequirementSet();
 
   console.log("Creando usuarios demo faltantes...");
   const admin = await createUser("admin@demo.etnara.care");
