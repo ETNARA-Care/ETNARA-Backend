@@ -4,7 +4,9 @@
 
 ### ETN-003 — Commit and push backend
 - draft PR #3 published
-- PostgreSQL migration validation pending in CI
+- PostgreSQL validation found and corrected migration 017 database-name coupling
+- additive migration 040 ensures existing databases receive the correct grant
+- repeat PostgreSQL migration validation pending in CI
 - merge and Railway deployment intentionally pending
 
 ---

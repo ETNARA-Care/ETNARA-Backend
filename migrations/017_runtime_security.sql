@@ -39,8 +39,14 @@ $$;
 -- an admin could accidentally grant bypass later without noticing), no
 -- CREATEDB/CREATEROLE/REPLICATION.
 
-GRANT CONNECT ON DATABASE caretest TO app_runtime;
--- NOTE: replace 'caretest' with the real deployment database name.
+DO $$
+BEGIN
+    EXECUTE format(
+        'GRANT CONNECT ON DATABASE %I TO app_runtime',
+        current_database()
+    );
+END
+$$;
 
 GRANT USAGE ON SCHEMA public TO app_runtime;
 
