@@ -87,7 +87,8 @@ export async function resolveOrCreateFamilyConversation(
           SELECT 1 FROM user_roles ur
           JOIN organization_memberships om ON ur.organization_membership_id = om.id
           JOIN roles r ON ur.role_id = r.id
-          WHERE om.user_id = ${userId} AND om.organization_id = ${organizationId} AND r.code = 'FAMILY'
+          WHERE om.user_id = ${userId} AND om.organization_id = ${organizationId}
+            AND om.status = 'active' AND r.code = 'FAMILY'
         )
       LIMIT 1
     `.execute(trx);
@@ -134,6 +135,60 @@ export async function resolveOrCreateFamilyConversation(
       VALUES (${organizationId}, ${thread.id}, ${userId}, true)
       ON CONFLICT (message_thread_id, user_id) DO NOTHING
     `.execute(trx);
+
+    // Root-cause fix: resolving/creating a thread used to only ever add
+    // the CALLING user as a participant. If only one side of a
+    // conversation (e.g. only the caregiver, or only the family member)
+    // ever called this endpoint for a given recipient, the other side
+    // could never see the thread at all via listConversations/listMessages
+    // (both filtered strictly by message_thread_participants.user_id) --
+    // confirmed empirically. Every OTHER party independently authorized
+    // for this exact recipient (active family members still holding the
+    // FAMILY role, workers with an active assignment, and org
+    // admins/supervisors) is now added too, idempotently. RLS
+    // (message_thread_participants_write, migration 038) independently
+    // re-verifies that both the calling actor and each added user are
+    // authorized for this same recipient before allowing any of these
+    // inserts -- this loop cannot add an unauthorized/unrelated user even
+    // if the query below were wrong.
+    const otherAuthorizedUsers = await sql<{ user_id: string }>`
+      SELECT fr.user_id
+      FROM family_relationships fr
+      WHERE fr.care_recipient_id = ${careRecipientId} AND fr.organization_id = ${organizationId} AND fr.status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM user_roles ur
+          JOIN organization_memberships om ON ur.organization_membership_id = om.id
+          JOIN roles r ON ur.role_id = r.id
+          WHERE om.user_id = fr.user_id AND om.organization_id = ${organizationId}
+            AND om.status = 'active' AND r.code = 'FAMILY'
+        )
+      UNION
+      SELECT DISTINCT w.user_id
+      FROM assignments a
+      JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id AND owm.status = 'active'
+      JOIN workers w ON w.id = owm.worker_id
+      LEFT JOIN shifts s ON s.id = a.shift_id
+      WHERE a.organization_id = ${organizationId}
+        AND (
+              a.care_recipient_id = ${careRecipientId}
+              OR s.care_recipient_id = ${careRecipientId}
+              OR (s.room_id IS NOT NULL AND s.room_id = app_recipient_room_id(${careRecipientId}))
+        )
+      UNION
+      SELECT DISTINCT om.user_id
+      FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+      WHERE om.organization_id = ${organizationId} AND om.status = 'active'
+    `.execute(trx);
+    for (const other of otherAuthorizedUsers.rows) {
+      if (other.user_id === userId) continue;
+      await sql`
+        INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
+        VALUES (${organizationId}, ${thread.id}, ${other.user_id}, true)
+        ON CONFLICT (message_thread_id, user_id) DO NOTHING
+      `.execute(trx);
+    }
 
     // Now that the caller is a real participant, they have genuine RLS
     // visibility on the thread -- re-fetch for authoritative field values

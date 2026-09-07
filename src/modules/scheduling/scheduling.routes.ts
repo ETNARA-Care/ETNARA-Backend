@@ -8,6 +8,7 @@ import {
   updateShift,
   cancelShift,
   getCoverageSummary,
+  listFamilyShifts,
   createShiftSchema,
   updateShiftSchema,
   ShiftNotFoundError,
@@ -15,6 +16,7 @@ import {
   RecipientNotInOrgError,
   RoomNotInOrgError,
   WorkerNotLinkedError,
+  FamilyMustUseFamilyEndpointError,
 } from "./scheduling.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -49,6 +51,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof WorkerNotLinkedError) {
     res.status(403).json({ error: "USER_HAS_NO_WORKER_PROFILE" });
+    return true;
+  }
+  if (err instanceof FamilyMustUseFamilyEndpointError) {
+    res.status(403).json({ error: "FAMILY_MUST_USE_FAMILY_SAFE_ENDPOINT" });
     return true;
   }
   return false;
@@ -195,6 +201,24 @@ router.post(
     try {
       const shift = await cancelShift(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
       res.status(200).json({ shift });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/care-recipients/:careRecipientId/family-shifts",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const shifts = await listFamilyShifts(req.auth!.userId, orgIdParsed.data, String(req.params.careRecipientId));
+      res.status(200).json({ shifts });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

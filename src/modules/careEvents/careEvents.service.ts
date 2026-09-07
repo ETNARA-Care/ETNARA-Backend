@@ -244,6 +244,29 @@ export async function createCareEvent(
       `.execute(trx);
     }
 
+    // Notify every family member currently authorized for this recipient
+    // and who opted in (can_receive_notifications) -- so a new care event
+    // is discoverable even before the family portal's next timeline poll.
+    // RLS (notifications_insert, migration 038) independently re-verifies
+    // both this worker and each target family user are authorized for
+    // THIS SAME care_recipient_id before allowing any of these inserts.
+    await sql`
+      INSERT INTO notifications (user_id, organization_id, notification_type, related_entity_type, related_entity_id, care_recipient_id, channel, status, sent_at)
+      SELECT fr.user_id, ${organizationId}, 'NEW_CARE_EVENT', 'care_event', ${event.id}, ${input.careRecipientId}, 'in_app', 'sent', now()
+      FROM family_relationships fr
+      WHERE fr.care_recipient_id = ${input.careRecipientId}
+        AND fr.organization_id = ${organizationId}
+        AND fr.status = 'active'
+        AND fr.can_receive_notifications = true
+        AND EXISTS (
+          SELECT 1 FROM user_roles ur
+          JOIN organization_memberships om ON ur.organization_membership_id = om.id
+          JOIN roles r ON ur.role_id = r.id
+          WHERE om.user_id = fr.user_id AND om.organization_id = ${organizationId}
+            AND om.status = 'active' AND r.code = 'FAMILY'
+        )
+    `.execute(trx);
+
     return event;
   });
 }

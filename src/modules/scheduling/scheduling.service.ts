@@ -29,12 +29,41 @@ export class RoomNotInOrgError extends Error {
     this.name = "RoomNotInOrgError";
   }
 }
+/**
+ * See the identical guard in observations.service.ts/incidents.service.ts
+ * for the full rationale: migration 038 grants Family row-level SELECT
+ * access to shifts for recipients they're authorized for, so the raw
+ * listShifts/getShift endpoints must reject Family-only callers and point
+ * them at listFamilyShifts (which additionally omits internal detail like
+ * assignment_count/room_id).
+ */
+export class FamilyMustUseFamilyEndpointError extends Error {
+  constructor() {
+    super("FAMILY_MUST_USE_FAMILY_SAFE_ENDPOINT");
+    this.name = "FamilyMustUseFamilyEndpointError";
+  }
+}
 
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
   if (!uuidSchema.safeParse(value).success) {
     throw new InvalidTenantContextError(`${label} must be a valid UUID, received: ${JSON.stringify(value)}`);
   }
+}
+
+async function assertStaffCaller(trx: unknown): Promise<void> {
+  const check = await sql<{ is_staff: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        JOIN organization_worker_memberships owm ON owm.worker_id = w.id AND owm.status = 'active'
+        WHERE w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+          AND owm.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      )
+    ) as is_staff
+  `.execute(trx as never);
+  if (!check.rows[0]?.is_staff) throw new FamilyMustUseFamilyEndpointError();
 }
 
 // Whitelist -- organization_id is NEVER read from the body, for create or
@@ -126,6 +155,7 @@ export interface ListShiftsFilter {
 
 export async function listShifts(userId: string, organizationId: string, filter: ListShiftsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const conditions = [sql`s.organization_id = ${organizationId}`];
     if (filter.dateFrom) conditions.push(sql`s.scheduled_start >= ${filter.dateFrom}`);
     if (filter.dateTo) conditions.push(sql`s.scheduled_start <= ${filter.dateTo}`);
@@ -193,9 +223,82 @@ export async function listMyShifts(userId: string, organizationId: string) {
   });
 }
 
+export interface FamilyShiftSummary {
+  id: string;
+  careRecipientId: string;
+  scheduledStart: string;
+  scheduledEnd: string;
+  status: string;
+  checkedInAt: string | null;
+  checkedOutAt: string | null;
+}
+
+/**
+ * Family-safe view: schedule window + shift status + a derived
+ * checked-in/checked-out summary (timestamps only, taken from
+ * verification_events). Deliberately never returns GPS coordinates or the
+ * verification method code -- those are internal operational detail, not
+ * something Family needs ("Family debe poder ver estado/resumen
+ * permitido, no necesariamente toda la información operativa interna").
+ * Handles both direct home-care linkage (shifts.care_recipient_id) and
+ * residential room-based linkage (shifts.room_id resolved via
+ * app_recipient_room_id), matching the same dual-linkage pattern already
+ * used by worker assignment checks (030) and the family timeline (033).
+ */
+export async function listFamilyShifts(
+  userId: string,
+  organizationId: string,
+  careRecipientId: string
+): Promise<FamilyShiftSummary[]> {
+  assertUuid(careRecipientId, "careRecipientId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const relationship = await sql<{ id: string }>`
+      SELECT id FROM family_relationships
+      WHERE user_id = ${userId} AND organization_id = ${organizationId}
+        AND care_recipient_id = ${careRecipientId} AND status = 'active'
+        AND EXISTS (
+          SELECT 1 FROM user_roles ur
+          JOIN organization_memberships om ON om.id = ur.organization_membership_id
+          JOIN roles r ON r.id = ur.role_id
+          WHERE om.user_id = ${userId} AND om.organization_id = ${organizationId}
+            AND om.status = 'active' AND r.code = 'FAMILY'
+        )
+      LIMIT 1
+    `.execute(trx);
+    if (!relationship.rows[0]) throw new RecipientNotInOrgError();
+
+    const result = await sql<{
+      id: string;
+      scheduled_start: string;
+      scheduled_end: string;
+      status: string;
+      checked_in_at: string | null;
+      checked_out_at: string | null;
+    }>`
+      SELECT s.id, s.scheduled_start, s.scheduled_end, s.status,
+             (SELECT min(ve.occurred_at) FROM verification_events ve WHERE ve.shift_id = s.id AND ve.event_type = 'check_in') as checked_in_at,
+             (SELECT max(ve.occurred_at) FROM verification_events ve WHERE ve.shift_id = s.id AND ve.event_type = 'check_out') as checked_out_at
+      FROM shifts s
+      WHERE s.organization_id = ${organizationId}
+        AND (s.care_recipient_id = ${careRecipientId} OR s.room_id = app_recipient_room_id(${careRecipientId}))
+      ORDER BY s.scheduled_start DESC
+    `.execute(trx);
+    return result.rows.map((r) => ({
+      id: r.id,
+      careRecipientId,
+      scheduledStart: r.scheduled_start,
+      scheduledEnd: r.scheduled_end,
+      status: r.status,
+      checkedInAt: r.checked_in_at,
+      checkedOutAt: r.checked_out_at,
+    }));
+  });
+}
+
 export async function getShift(userId: string, organizationId: string, shiftId: string) {
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
       SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, status, created_at, updated_at
       FROM shifts
@@ -266,6 +369,7 @@ export interface CoverageSummary {
 
 export async function getCoverageSummary(userId: string, organizationId: string): Promise<CoverageSummary> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertStaffCaller(trx);
     const result = await sql<{ total: number; covered: number; uncovered: number; cancelled: number }>`
       SELECT
         count(*)::int AS total,

@@ -1,7 +1,15 @@
 /**
- * Bootstrap de staging: aplica las 38 migraciones (solo si el schema no
- * existe todavia), rota la contraseña placeholder de app_runtime a un
- * valor real, y siembra los datos demo -- idempotente.
+ * Bootstrap de staging: aplica las migraciones PENDIENTES (llevando un
+ * registro en `schema_migrations`, no un unico gate de "¿existe
+ * `organizations`?"), rota la contraseña de app_runtime al valor real
+ * (operacion en si idempotente -- fijar la misma password de nuevo no
+ * tiene efecto adverso), y siembra los datos demo -- todo idempotente.
+ *
+ * Importante: este script YA NO se detiene solo porque `organizations`
+ * exista. Antes, una vez que staging tenia el schema base, cualquier
+ * migracion agregada despues (034_workers_display_name.sql en adelante)
+ * nunca se aplicaba. Ahora cada archivo de `migrations/` se aplica una
+ * sola vez, registrado individualmente -- ver scripts/lib/runMigrations.ts.
  *
  * Requiere DOS variables de entorno distintas:
  *   MIGRATIONS_DATABASE_URL -- conexion administrativa (superusuario del
@@ -11,10 +19,10 @@
  *
  * Uso: MIGRATIONS_DATABASE_URL=... APP_RUNTIME_PASSWORD=... npx tsx scripts/bootstrapStaging.ts
  */
-import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
+import { applyPendingMigrations } from "./lib/runMigrations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, "..", "migrations");
@@ -28,27 +36,8 @@ async function main() {
   const client = new Client({ connectionString: adminUrl });
   await client.connect();
 
-  const existing = await client.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_name = 'organizations' LIMIT 1`
-  );
-  if (existing.rows.length > 0) {
-    console.log("Schema ya existe -- bootstrap omitido (idempotente).");
-    await client.end();
-    return;
-  }
-
-  console.log("Base vacia detectada. Aplicando 38 migraciones en orden...");
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => /^\d{3}_.*\.sql$/.test(f))
-    .sort();
-  if (files.length !== 38) {
-    throw new Error(`Se esperaban 38 migraciones, se encontraron ${files.length}. Abortando.`);
-  }
-  for (const file of files) {
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
-    await client.query(sql);
-    console.log(`  OK: ${file}`);
-  }
+  console.log("Aplicando migraciones pendientes (idempotente, no borra ni resetea nada)...");
+  await applyPendingMigrations(client, MIGRATIONS_DIR);
 
   console.log("Rotando password placeholder de app_runtime...");
   await client.query(`ALTER ROLE app_runtime PASSWORD '${runtimePassword.replace(/'/g, "''")}'`);
