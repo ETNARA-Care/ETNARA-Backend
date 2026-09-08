@@ -70,6 +70,30 @@ interface AssignmentRow {
   created_at: string;
 }
 
+async function syncAssignedWorkerConversationAccess(
+  userId: string,
+  organizationId: string,
+  workerUserId: string,
+  careRecipientId: string | null,
+  roomId: string | null
+): Promise<void> {
+  await withTenantContext({ userId, organizationId }, async (trx) => {
+    await sql`
+      INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
+      SELECT mt.organization_id, mt.id, ${workerUserId}, true
+      FROM message_threads mt
+      WHERE mt.organization_id = ${organizationId}
+        AND mt.thread_type = 'family_agency'
+        AND mt.care_recipient_id IS NOT NULL
+        AND (
+          mt.care_recipient_id = ${careRecipientId}
+          OR (${roomId} IS NOT NULL AND app_recipient_room_id(mt.care_recipient_id) = ${roomId})
+        )
+      ON CONFLICT (message_thread_id, user_id) DO NOTHING
+    `.execute(trx);
+  });
+}
+
 export async function createAssignment(
   userId: string,
   organizationId: string,
@@ -77,7 +101,7 @@ export async function createAssignment(
   input: CreateAssignmentInput
 ): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
-  return withTenantContext({ userId, organizationId }, async (trx) => {
+  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
     const shiftRow = await sql<{
       id: string;
       status: string;
@@ -137,28 +161,34 @@ export async function createAssignment(
       trx
     );
 
-    // An assignment grants this worker recipient-scoped messaging access.
-    // Add the linked user to every existing family_agency thread for the
-    // shift context now, so the worker can see it immediately without
-    // requiring another participant to resolve the conversation again.
-    if (membership.user_id) {
-      await sql`
-        INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
-        SELECT mt.organization_id, mt.id, ${membership.user_id}, true
-        FROM message_threads mt
-        WHERE mt.organization_id = ${organizationId}
-          AND mt.thread_type = 'family_agency'
-          AND mt.care_recipient_id IS NOT NULL
-          AND (
-            mt.care_recipient_id = ${shift.care_recipient_id}
-            OR (${shift.room_id} IS NOT NULL AND app_recipient_room_id(mt.care_recipient_id) = ${shift.room_id})
-          )
-        ON CONFLICT (message_thread_id, user_id) DO NOTHING
-      `.execute(trx);
-    }
-
-    return result.rows[0];
+    return {
+      assignment: result.rows[0],
+      workerUserId: membership.user_id,
+      careRecipientId: shift.care_recipient_id,
+      roomId: shift.room_id,
+    };
   });
+
+  // Participant synchronization intentionally runs only AFTER the assignment
+  // transaction commits. Its RLS authorization can now see the committed
+  // assignment, and a secondary messaging failure can never roll back the
+  // operational assignment or leave the shift falsely unassigned.
+  if (saved.workerUserId) {
+    try {
+      await syncAssignedWorkerConversationAccess(
+        userId,
+        organizationId,
+        saved.workerUserId,
+        saved.careRecipientId,
+        saved.roomId
+      );
+    } catch (error) {
+      const details = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+      console.error(`Assignment saved but messaging participant synchronization failed: ${details}`);
+    }
+  }
+
+  return saved.assignment;
 }
 
 export async function listAssignments(userId: string, organizationId: string, shiftId: string) {
