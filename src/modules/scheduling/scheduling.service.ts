@@ -231,6 +231,14 @@ export interface FamilyShiftSummary {
   status: string;
   checkedInAt: string | null;
   checkedOutAt: string | null;
+  caregiver: {
+    displayName: string;
+    credentials: Array<{
+      typeCode: string;
+      typeName: string;
+      expiresAt: string | null;
+    }>;
+  } | null;
 }
 
 /**
@@ -274,11 +282,56 @@ export async function listFamilyShifts(
       status: string;
       checked_in_at: string | null;
       checked_out_at: string | null;
+      caregiver_display_name: string | null;
+      caregiver_credentials: Array<{
+        typeCode: string;
+        typeName: string;
+        expiresAt: string | null;
+      }>;
     }>`
       SELECT s.id, s.scheduled_start, s.scheduled_end, s.status,
              (SELECT min(ve.occurred_at) FROM verification_events ve WHERE ve.shift_id = s.id AND ve.event_type = 'check_in') as checked_in_at,
-             (SELECT max(ve.occurred_at) FROM verification_events ve WHERE ve.shift_id = s.id AND ve.event_type = 'check_out') as checked_out_at
+             (SELECT max(ve.occurred_at) FROM verification_events ve WHERE ve.shift_id = s.id AND ve.event_type = 'check_out') as checked_out_at,
+             assigned_worker.display_name AS caregiver_display_name,
+             COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                 'typeCode', ct.code,
+                 'typeName', ct.name,
+                 'expiresAt', c.expires_at
+               ) ORDER BY ct.name)
+               FROM credentials c
+               JOIN credential_types ct ON ct.id = c.credential_type_id
+               WHERE c.worker_id = assigned_worker.worker_id
+                 AND c.status = 'active'
+                 AND (c.expires_at IS NULL OR c.expires_at >= current_date)
+                 AND (
+                   EXISTS (
+                     SELECT 1 FROM credential_platform_verifications cpv
+                     WHERE cpv.credential_id = c.id AND cpv.status = 'verified'
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM organization_credential_reviews ocr
+                     WHERE ocr.credential_id = c.id
+                       AND ocr.organization_id = ${organizationId}
+                       AND ocr.review_status = 'approved'
+                   )
+                 )
+             ), '[]'::jsonb) AS caregiver_credentials
       FROM shifts s
+      LEFT JOIN LATERAL (
+        SELECT w.id AS worker_id, COALESCE(w.display_name, 'Cuidador asignado') AS display_name
+        FROM assignments a
+        JOIN organization_worker_memberships owm
+          ON owm.id = a.organization_worker_membership_id
+         AND owm.organization_id = a.organization_id
+         AND owm.status = 'active'
+        JOIN workers w ON w.id = owm.worker_id
+        WHERE a.shift_id = s.id
+          AND a.organization_id = ${organizationId}
+          AND (a.care_recipient_id IS NULL OR a.care_recipient_id = ${careRecipientId})
+        ORDER BY a.created_at DESC
+        LIMIT 1
+      ) assigned_worker ON true
       WHERE s.organization_id = ${organizationId}
         AND (s.care_recipient_id = ${careRecipientId} OR s.room_id = app_recipient_room_id(${careRecipientId}))
       ORDER BY s.scheduled_start DESC
@@ -291,6 +344,9 @@ export async function listFamilyShifts(
       status: r.status,
       checkedInAt: r.checked_in_at,
       checkedOutAt: r.checked_out_at,
+      caregiver: r.caregiver_display_name
+        ? { displayName: r.caregiver_display_name, credentials: r.caregiver_credentials ?? [] }
+        : null,
     }));
   });
 }

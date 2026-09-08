@@ -4,7 +4,7 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: codex/fix-cross-portal-security
+Branch: feature/shift-incidents-credentials
 
 ## Current Backend Checkpoint
 
@@ -63,6 +63,21 @@ Frontend is deployed through GitHub Pages.
 Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
+
+### 2026-09-08 — Family-safe caregiver identity and credentials
+
+- Family shift summaries now include the assigned caregiver display name and
+  only verified, active credential summaries; document and internal review
+  fields remain excluded.
+- Added authenticated caregiver `GET /organizations/:id/me/credentials` using
+  the worker resolved from the session rather than a client-supplied worker ID.
+- Demo seed adds idempotent, explicitly fictitious verified credentials for
+  María, including CPR expiring in 45 days to validate the warning state.
+- Raw credential routes now reject Family; only managers/platform admins and
+  the worker themself may access them.
+- Backend build and 15/15 tests pass.
+- Production remains unchanged. Exact next step: final diff review, commit, and
+  request authorization to publish the coordinated backend PR first.
 
 ### Completed
 - Backend recovery and security review completed.

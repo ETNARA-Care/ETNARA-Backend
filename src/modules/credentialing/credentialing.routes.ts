@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   createCredential,
   listCredentials,
+  listMyCredentialSummaries,
   getCredential,
   updateCredential,
   createCredentialSchema,
@@ -13,6 +14,7 @@ import {
   createOrUpdateOrganizationReview,
   organizationReviewSchema,
   WorkerNotLinkedError,
+  CredentialAccessDeniedError,
   CredentialNotFoundError,
   CredentialTypeNotFoundError,
   InvalidFileOwnershipError,
@@ -46,6 +48,10 @@ function handleTenantError(err: unknown, res: Response): boolean {
     res.status(404).json({ error: "NOT_FOUND" });
     return true;
   }
+  if (err instanceof CredentialAccessDeniedError) {
+    res.status(403).json({ error: "CREDENTIAL_ACCESS_DENIED" });
+    return true;
+  }
   if (err instanceof CredentialTypeNotFoundError) {
     res.status(400).json({ error: "INVALID_CREDENTIAL_TYPE" });
     return true;
@@ -56,6 +62,24 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   return false;
 }
+
+router.get(
+  "/organizations/:organizationId/me/credentials",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const credentials = await listMyCredentialSummaries(req.auth!.userId, orgIdParsed.data);
+      res.status(200).json({ credentials });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
 
 router.post(
   "/organizations/:organizationId/workers/:workerId/credentials",

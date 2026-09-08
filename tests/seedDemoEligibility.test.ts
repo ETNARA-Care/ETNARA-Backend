@@ -12,4 +12,12 @@ describe("demo shift eligibility bootstrap", () => {
     expect(seed).toMatch(/INSERT INTO requirement_sets \(organization_id, organization_type, name\)/);
     expect(seed).not.toMatch(/INSERT INTO requirement_sets \(organization_id, organization_type, name\)[\s\S]*VALUES \(NULL/);
   });
+
+  it("seeds verified credentials idempotently for María", () => {
+    const seed = readFileSync(join(root, "scripts/seedDemo.ts"), "utf8");
+    expect(seed).toMatch(/ensureDemoCredential/);
+    expect(seed).toMatch(/credential_platform_verifications/);
+    expect(seed).toMatch(/"CPR", "external_provider", 45/);
+    expect(seed).toMatch(/Dato ficticio para validar el portal demo/);
+  });
 });
