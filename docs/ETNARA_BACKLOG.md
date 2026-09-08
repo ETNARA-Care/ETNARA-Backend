@@ -2,6 +2,18 @@
 
 ## In Progress
 
+### ETN-010 — Family-safe caregiver credentials
+
+- add caregiver self-credential summary
+- add assigned caregiver name and verified credential summary to family shifts
+- seed idempotent demo credentials for María
+- preserve document and internal review privacy
+
+Status: Implemented and validated locally on
+`feature/shift-incidents-credentials`; PR publication pending.
+
+---
+
 ### ETN-003 — Commit and push backend
 - draft PR #3 published
 - PostgreSQL validation found and corrected migration 017 database-name coupling

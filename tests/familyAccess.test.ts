@@ -39,4 +39,28 @@ describe("Family access regression contracts", () => {
     expect(messaging).toMatch(/SELECT DISTINCT w\.user_id[\s\S]*FROM assignments a[\s\S]*INSERT INTO message_thread_participants/);
     expect(backfill).toMatch(/JOIN assignments a[\s\S]*JOIN workers w[\s\S]*ON CONFLICT \(message_thread_id, user_id\) DO NOTHING/);
   });
+
+  it("keeps the Family shift caregiver summary curated and verified", () => {
+    const scheduling = read("src/modules/scheduling/scheduling.service.ts");
+    expect(scheduling).toMatch(/assigned_worker\.display_name AS caregiver_display_name/);
+    expect(scheduling).toMatch(/credential_platform_verifications[\s\S]*status = 'verified'/);
+    expect(scheduling).toMatch(/organization_credential_reviews[\s\S]*review_status = 'approved'/);
+    expect(scheduling).not.toMatch(/FamilyShiftSummary[\s\S]{0,800}(document_id|issuing_entity_name)/);
+  });
+
+  it("provides a caregiver self-credential route without accepting a worker id", () => {
+    const routes = read("src/modules/credentialing/credentialing.routes.ts");
+    const service = read("src/modules/credentialing/credentialing.service.ts");
+    expect(routes).toMatch(/organizations\/:organizationId\/me\/credentials/);
+    expect(service).toMatch(/WHERE w\.user_id = \$\{userId\}/);
+    expect(service).toMatch(/document\/file[\s\S]*excluded/);
+  });
+
+  it("blocks Family from the raw credential endpoints", () => {
+    const service = read("src/modules/credentialing/credentialing.service.ts");
+    const routes = read("src/modules/credentialing/credentialing.routes.ts");
+    expect(service).toMatch(/app_is_org_manager\(\)[\s\S]*app_is_superadmin\(\)[\s\S]*w\.user_id/);
+    expect(service).toMatch(/throw new CredentialAccessDeniedError/);
+    expect(routes).toMatch(/CREDENTIAL_ACCESS_DENIED/);
+  });
 });

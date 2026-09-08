@@ -125,6 +125,55 @@ async function main() {
     return membership.rows[0].id as string;
   }
 
+  async function ensureDemoCredential(
+    workerId: string,
+    verifiedByUserId: string,
+    typeCode: string,
+    issuingEntityType: "government" | "external_provider" | "platform",
+    expiresInDays?: number
+  ): Promise<void> {
+    const existing = await client.query(
+      `SELECT c.id
+       FROM credentials c
+       JOIN credential_types ct ON ct.id = c.credential_type_id
+       WHERE c.worker_id = $1 AND ct.code = $2 AND c.status <> 'revoked'
+       ORDER BY c.created_at DESC LIMIT 1`,
+      [workerId, typeCode]
+    );
+    let credentialId = existing.rows[0]?.id as string | undefined;
+    if (!credentialId) {
+      const created = await client.query(
+        `INSERT INTO credentials (
+           worker_id, credential_type_id, issuing_entity_name, issuing_entity_type,
+           issued_at, expires_at, status
+         )
+         SELECT $1, id, 'ETNARA Demo', $3::issuing_entity_type_enum,
+                current_date,
+                CASE WHEN $4::int IS NULL THEN NULL ELSE (current_date + $4::int) END,
+                'active'
+         FROM credential_types WHERE code = $2
+         RETURNING id`,
+        [workerId, typeCode, issuingEntityType, expiresInDays ?? null]
+      );
+      credentialId = created.rows[0]?.id as string | undefined;
+    }
+    if (!credentialId) throw new Error(`Credential type ${typeCode} is missing`);
+
+    const verification = await client.query(
+      `SELECT id FROM credential_platform_verifications
+       WHERE credential_id = $1 AND status = 'verified' LIMIT 1`,
+      [credentialId]
+    );
+    if (verification.rows.length === 0) {
+      await client.query(
+        `INSERT INTO credential_platform_verifications (
+           credential_id, verified_by_user_id, status, notes
+         ) VALUES ($1,$2,'verified','Dato ficticio para validar el portal demo')`,
+        [credentialId, verifiedByUserId]
+      );
+    }
+  }
+
   async function ensureDemoRequirementSet(): Promise<void> {
     // La API de asignaciones siempre evalúa elegibilidad. La organización
     // demo necesita una política explícita para que esa evaluación exista;
@@ -184,6 +233,14 @@ async function main() {
   const worker2Id = await findOrCreateWorker(caregiver2Id, "Carlos Soto");
   const membership1Id = await findOrCreateWorkerMembership(worker1Id, "CNA");
   await findOrCreateWorkerMembership(worker2Id, "HHA");
+
+  console.log("Verificando credenciales demo de María...");
+  await ensureDemoCredential(worker1Id, adminId, "IDENTITY", "government");
+  await ensureDemoCredential(worker1Id, adminId, "BACKGROUND_CHECK", "platform", 365);
+  await ensureDemoCredential(worker1Id, adminId, "LEY_300", "government", 300);
+  await ensureDemoCredential(worker1Id, adminId, "CPR", "external_provider", 45);
+  await ensureDemoCredential(worker1Id, adminId, "BLS", "external_provider", 365);
+  await ensureDemoCredential(worker1Id, adminId, "INTERNAL_TRAINING", "platform", 730);
 
   console.log("Habilitando tipos de evento...");
   const typeRows = await client.query(`SELECT id FROM care_event_types`);

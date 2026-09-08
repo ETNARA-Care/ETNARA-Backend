@@ -9,6 +9,12 @@ export class WorkerNotLinkedError extends Error {
     this.name = "WorkerNotLinkedError";
   }
 }
+export class CredentialAccessDeniedError extends Error {
+  constructor() {
+    super("CREDENTIAL_ACCESS_DENIED");
+    this.name = "CredentialAccessDeniedError";
+  }
+}
 export class CredentialNotFoundError extends Error {
   constructor() {
     super("CREDENTIAL_NOT_FOUND");
@@ -70,6 +76,15 @@ interface CredentialRow {
   updated_at: string;
 }
 
+export interface MyCredentialSummary {
+  id: string;
+  typeCode: string;
+  typeName: string;
+  status: string;
+  expiresAt: string | null;
+  verificationStatus: "verified" | "pending" | "rejected";
+}
+
 /**
  * Confirms the actor's organization has a real, active reason to touch this
  * worker's credentials: an active organization_worker_membership. This is
@@ -83,6 +98,19 @@ async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, wor
     LIMIT 1
   `.execute(trx as never);
   if (!result.rows[0]) throw new WorkerNotLinkedError();
+
+  const actor = await sql<{ allowed: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR app_is_superadmin()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        WHERE w.id = ${workerId}
+          AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      )
+    ) AS allowed
+  `.execute(trx as never);
+  if (!actor.rows[0]?.allowed) throw new CredentialAccessDeniedError();
 }
 
 async function resolveCredentialTypeId(trx: unknown, code: string): Promise<string> {
@@ -156,6 +184,80 @@ export async function listCredentials(userId: string, organizationId: string, wo
       ORDER BY ct.code
     `.execute(trx);
     return result.rows;
+  });
+}
+
+/**
+ * Caregiver self-service summary. The worker identity is resolved from the
+ * authenticated user rather than accepted from the client, and document/file
+ * identifiers are deliberately excluded from the response.
+ */
+export async function listMyCredentialSummaries(
+  userId: string,
+  organizationId: string
+): Promise<MyCredentialSummary[]> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const worker = await sql<{ id: string }>`
+      SELECT w.id
+      FROM workers w
+      JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+      WHERE w.user_id = ${userId}
+        AND owm.organization_id = ${organizationId}
+        AND owm.status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    if (!worker.rows[0]) throw new WorkerNotLinkedError();
+
+    const result = await sql<{
+      id: string;
+      type_code: string;
+      type_name: string;
+      status: string;
+      expires_at: string | null;
+      verification_status: "verified" | "pending" | "rejected";
+    }>`
+      SELECT c.id, ct.code AS type_code, ct.name AS type_name,
+             CASE
+               WHEN c.status = 'active' AND c.expires_at IS NOT NULL AND c.expires_at < current_date THEN 'expired'
+               ELSE c.status::text
+             END AS status,
+             c.expires_at,
+             CASE
+               WHEN EXISTS (
+                 SELECT 1 FROM credential_platform_verifications cpv
+                 WHERE cpv.credential_id = c.id AND cpv.status = 'verified'
+               ) OR EXISTS (
+                 SELECT 1 FROM organization_credential_reviews ocr
+                 WHERE ocr.credential_id = c.id
+                   AND ocr.organization_id = ${organizationId}
+                   AND ocr.review_status = 'approved'
+               ) THEN 'verified'
+               WHEN EXISTS (
+                 SELECT 1 FROM credential_platform_verifications cpv
+                 WHERE cpv.credential_id = c.id AND cpv.status = 'rejected'
+               ) OR EXISTS (
+                 SELECT 1 FROM organization_credential_reviews ocr
+                 WHERE ocr.credential_id = c.id
+                   AND ocr.organization_id = ${organizationId}
+                   AND ocr.review_status = 'rejected'
+               ) THEN 'rejected'
+               ELSE 'pending'
+             END AS verification_status
+      FROM credentials c
+      JOIN credential_types ct ON ct.id = c.credential_type_id
+      WHERE c.worker_id = ${worker.rows[0].id}
+        AND c.status <> 'revoked'
+      ORDER BY ct.name
+    `.execute(trx);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      typeCode: row.type_code,
+      typeName: row.type_name,
+      status: row.status,
+      expiresAt: row.expires_at,
+      verificationStatus: row.verification_status,
+    }));
   });
 }
 
