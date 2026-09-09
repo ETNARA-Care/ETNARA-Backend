@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-012 — Railway migration startup gate
+
+- apply pending migrations before serving requests
+- preserve the existing idempotent migration ledger and demo seed
+- block deployment when the production database cannot be upgraded safely
+- verify the live caregiver shift and assignment-response contracts
+
+Status: Hotfix implemented locally; validation and PR publication in progress.
+
+---
+
 ### ETN-011 — Caregiver assignment response
 
 - pending → accepted/rejected transition

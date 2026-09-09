@@ -6,7 +6,7 @@
   "scripts": {
     "test": "tsc -p tsconfig.test.json && vitest run",
     "build": "tsc",
-    "start": "tsx src/index.ts",
+    "start": "npm run bootstrap:staging && tsx src/index.ts",
     "bootstrap:staging": "tsx scripts/bootstrapStaging.ts"
   },
   "keywords": [],

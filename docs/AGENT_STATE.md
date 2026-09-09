@@ -4,7 +4,7 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-5/assignment-responses
+Branch: hotfix/railway-run-migrations
 
 ## Current Backend Checkpoint
 
@@ -63,6 +63,19 @@ Frontend is deployed through GitHub Pages.
 Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
+
+### 2026-09-09 — Railway migration startup hotfix
+
+- Live caregiver reads and assignment responses returned `INTERNAL_ERROR`
+  after Phase 5.2 because Railway started the API without applying migration
+  042 to its persistent database.
+- Production startup now runs the existing idempotent staging bootstrap before
+  launching the server, applying only migrations not recorded in
+  `schema_migrations` and preserving existing data.
+- A regression test requires the migration gate to remain in the production
+  start command.
+- Exact next step: validate, publish, merge after approval, then verify the
+  caregiver shifts endpoint and assignment response against Railway.
 
 ### 2026-09-09 — Phase 5.2 assignment responses
 
