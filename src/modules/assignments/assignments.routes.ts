@@ -4,7 +4,9 @@ import {
   createAssignment,
   listAssignments,
   removeAssignment,
+  respondToMyAssignment,
   createAssignmentSchema,
+  respondAssignmentSchema,
   ShiftNotFoundError,
   MembershipNotInOrgError,
   WorkerNotEligibleError,
@@ -12,6 +14,7 @@ import {
   DuplicateAssignmentError,
   ScheduleConflictError,
   AssignmentNotFoundError,
+  AssignmentAlreadyRespondedError,
 } from "./assignments.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -54,8 +57,40 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(409).json({ error: "SCHEDULE_CONFLICT" });
     return true;
   }
+  if (err instanceof AssignmentAlreadyRespondedError) {
+    res.status(409).json({ error: "ASSIGNMENT_ALREADY_RESPONDED" });
+    return true;
+  }
   return false;
 }
+
+router.post(
+  "/organizations/:organizationId/me/shifts/:shiftId/respond",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    const bodyParsed = respondAssignmentSchema.safeParse(req.body);
+    if (!bodyParsed.success) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const assignment = await respondToMyAssignment(
+        req.auth!.userId,
+        orgIdParsed.data,
+        String(req.params.shiftId),
+        bodyParsed.data
+      );
+      res.status(200).json({ assignment });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
 
 router.post(
   "/organizations/:organizationId/shifts/:shiftId/assignments",

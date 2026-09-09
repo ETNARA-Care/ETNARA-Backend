@@ -4,7 +4,7 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: feature/shift-incidents-credentials
+Branch: phase-5/assignment-responses
 
 ## Current Backend Checkpoint
 
@@ -63,6 +63,19 @@ Frontend is deployed through GitHub Pages.
 Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
+
+### 2026-09-09 — Phase 5.2 assignment responses
+
+- New assignments start pending; pre-existing assignments migrate as accepted.
+- The authenticated assigned worker can accept or reject exactly once.
+- Check-in requires an accepted assignment.
+- Rejection preserves the response record and releases the shift for a new
+  assignment; rejected records do not grant coverage or messaging access.
+- The assigned worker and organization managers receive in-app notifications.
+- Local build and all 20 backend tests pass; GitHub CI will validate every
+  migration twice against PostgreSQL 16.
+- Exact next step: publish the coordinated backend PR and wait for CI before
+  requesting merge authorization.
 
 ### 2026-09-08 — Family-safe caregiver identity and credentials
 
