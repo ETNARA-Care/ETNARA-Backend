@@ -45,6 +45,12 @@ function summarizeType(notificationType: string): string {
       return "Nueva actividad de cuidado";
     case "NEW_INCIDENT":
       return "Nuevo incidente";
+    case "SHIFT_ASSIGNMENT_PENDING":
+      return "Nuevo turno pendiente de respuesta";
+    case "SHIFT_ASSIGNMENT_ACCEPTED":
+      return "Turno aceptado por la cuidadora";
+    case "SHIFT_ASSIGNMENT_REJECTED":
+      return "Turno rechazado por la cuidadora";
     default:
       return "Notificación";
   }

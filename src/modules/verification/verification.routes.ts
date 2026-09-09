@@ -13,6 +13,7 @@ import {
   ShiftCancelledError,
   ShiftCompletedError,
   NoAssignmentError,
+  AssignmentNotAcceptedError,
   WorkerNotEligibleError,
   InvalidVerificationMethodError,
   AlreadyCheckedInError,
@@ -54,6 +55,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof ShiftCompletedError) {
     res.status(409).json({ error: "SHIFT_COMPLETED" });
+    return true;
+  }
+  if (err instanceof AssignmentNotAcceptedError) {
+    res.status(409).json({ error: "ASSIGNMENT_NOT_ACCEPTED" });
     return true;
   }
   if (err instanceof WorkerNotEligibleError) {

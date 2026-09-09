@@ -169,6 +169,7 @@ export async function resolveOrCreateFamilyConversation(
       JOIN workers w ON w.id = owm.worker_id
       LEFT JOIN shifts s ON s.id = a.shift_id
       WHERE a.organization_id = ${organizationId}
+        AND a.response_status = 'accepted'
         AND (
               a.care_recipient_id = ${careRecipientId}
               OR s.care_recipient_id = ${careRecipientId}

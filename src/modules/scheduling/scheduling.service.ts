@@ -107,6 +107,8 @@ interface ShiftRow {
   status: string;
   created_at: string;
   updated_at: string;
+  assignment_id?: string;
+  assignment_response_status?: "pending" | "accepted";
 }
 
 export async function createShift(
@@ -179,7 +181,7 @@ export async function listShifts(userId: string, organizationId: string, filter:
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end,
              s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
       FROM shifts s
-      LEFT JOIN assignments a ON a.shift_id = s.id
+      LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
       GROUP BY s.id
       ${havingClause}
@@ -208,7 +210,8 @@ export async function listMyShifts(userId: string, organizationId: string) {
 
     const result = await sql<ShiftRow>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end,
-             s.status, s.created_at, s.updated_at
+             s.status, s.created_at, s.updated_at, a.id AS assignment_id,
+             a.response_status AS assignment_response_status
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
@@ -217,6 +220,7 @@ export async function listMyShifts(userId: string, organizationId: string) {
        AND owm.status = 'active'
       WHERE s.organization_id = ${organizationId}
         AND owm.worker_id = ${workerId}
+        AND a.response_status IN ('pending', 'accepted')
       ORDER BY s.scheduled_start
     `.execute(trx);
     return result.rows;
@@ -328,6 +332,7 @@ export async function listFamilyShifts(
         JOIN workers w ON w.id = owm.worker_id
         WHERE a.shift_id = s.id
           AND a.organization_id = ${organizationId}
+          AND a.response_status = 'accepted'
           AND (a.care_recipient_id IS NULL OR a.care_recipient_id = ${careRecipientId})
         ORDER BY a.created_at DESC
         LIMIT 1

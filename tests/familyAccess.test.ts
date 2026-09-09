@@ -30,12 +30,12 @@ describe("Family access regression contracts", () => {
     expect(migration).toMatch(/CREATE POLICY message_thread_participants_write[\s\S]*app_user_authorized_for_recipient/);
   });
 
-  it("synchronizes messaging only after the assignment transaction commits", () => {
+  it("synchronizes messaging only after assignment acceptance commits", () => {
     const assignments = read("src/modules/assignments/assignments.service.ts");
     const messaging = read("src/modules/messaging/messaging.service.ts");
     const backfill = read("migrations/041_assignment_message_participants.sql");
-    expect(assignments).toMatch(/const saved = await withTenantContext[\s\S]*await syncAssignedWorkerConversationAccess/);
-    expect(assignments).toMatch(/try \{[\s\S]*await syncAssignedWorkerConversationAccess[\s\S]*catch \(error\)/);
+    expect(assignments).toMatch(/input\.decision === "accepted"[\s\S]*await syncAssignedWorkerConversationAccess/);
+    expect(assignments).toMatch(/Assignment accepted but messaging synchronization failed/);
     expect(messaging).toMatch(/SELECT DISTINCT w\.user_id[\s\S]*FROM assignments a[\s\S]*INSERT INTO message_thread_participants/);
     expect(backfill).toMatch(/JOIN assignments a[\s\S]*JOIN workers w[\s\S]*ON CONFLICT \(message_thread_id, user_id\) DO NOTHING/);
   });

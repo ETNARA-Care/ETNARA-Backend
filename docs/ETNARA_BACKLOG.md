@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-011 — Caregiver assignment response
+
+- pending → accepted/rejected transition
+- assigned-worker-only response authority
+- check-in gate and duplicate-response protection
+- caregiver/admin notifications
+- rejected assignment audit preservation
+
+Status: Implemented and validated locally on `phase-5/assignment-responses`;
+PR publication in progress.
+
+---
+
 ### ETN-010 — Family-safe caregiver credentials
 
 - add caregiver self-credential summary

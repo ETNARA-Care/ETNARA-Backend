@@ -34,6 +34,12 @@ export class NoAssignmentError extends Error {
     this.name = "NoAssignmentError";
   }
 }
+export class AssignmentNotAcceptedError extends Error {
+  constructor() {
+    super("ASSIGNMENT_NOT_ACCEPTED");
+    this.name = "AssignmentNotAcceptedError";
+  }
+}
 export class WorkerNotEligibleError extends Error {
   constructor(status: string) {
     super(`WORKER_NOT_ELIGIBLE_${status.toUpperCase()}`);
@@ -167,12 +173,14 @@ export async function checkIn(
     if (shift.status === "cancelled") throw new ShiftCancelledError();
     if (shift.status === "completed") throw new ShiftCompletedError();
 
-    const assignmentRow = await sql<{ id: string }>`
-      SELECT id FROM assignments
+    const assignmentRow = await sql<{ id: string; response_status: string }>`
+      SELECT id, response_status FROM assignments
       WHERE shift_id = ${shiftId} AND organization_worker_membership_id = ${membership.id} AND organization_id = ${organizationId}
+        AND response_status IN ('pending', 'accepted')
       LIMIT 1
     `.execute(trx);
     if (!assignmentRow.rows[0]) throw new NoAssignmentError();
+    if (assignmentRow.rows[0].response_status !== "accepted") throw new AssignmentNotAcceptedError();
 
     const eligibility = await evaluateWorkerEligibility(userId, organizationId, membership.id);
     if (eligibility.eligibilityStatus !== "eligible") {

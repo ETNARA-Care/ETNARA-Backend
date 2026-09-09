@@ -46,6 +46,12 @@ export class AssignmentNotFoundError extends Error {
     this.name = "AssignmentNotFoundError";
   }
 }
+export class AssignmentAlreadyRespondedError extends Error {
+  constructor() {
+    super("ASSIGNMENT_ALREADY_RESPONDED");
+    this.name = "AssignmentAlreadyRespondedError";
+  }
+}
 
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
@@ -60,6 +66,12 @@ export const createAssignmentSchema = z.object({
 });
 export type CreateAssignmentInput = z.infer<typeof createAssignmentSchema>;
 
+export const respondAssignmentSchema = z.object({
+  decision: z.enum(["accepted", "rejected"]),
+  reason: z.string().trim().max(500).optional(),
+});
+export type RespondAssignmentInput = z.infer<typeof respondAssignmentSchema>;
+
 interface AssignmentRow {
   id: string;
   organization_id: string;
@@ -67,6 +79,9 @@ interface AssignmentRow {
   organization_worker_membership_id: string;
   care_recipient_id: string | null;
   role_in_shift: string | null;
+  response_status: "pending" | "accepted" | "rejected";
+  responded_at: string | null;
+  response_reason: string | null;
   created_at: string;
 }
 
@@ -136,6 +151,7 @@ export async function createAssignment(
     const existing = await sql<{ id: string }>`
       SELECT id FROM assignments
       WHERE shift_id = ${shiftId} AND organization_worker_membership_id = ${input.organizationWorkerMembershipId}
+        AND response_status IN ('pending', 'accepted')
       LIMIT 1
     `.execute(trx);
     if (existing.rows[0]) throw new DuplicateAssignmentError();
@@ -144,6 +160,7 @@ export async function createAssignment(
       SELECT a.id FROM assignments a
       JOIN shifts s ON s.id = a.shift_id
       WHERE a.organization_worker_membership_id = ${input.organizationWorkerMembershipId}
+        AND a.response_status IN ('pending', 'accepted')
         AND s.status != 'cancelled'
         AND s.scheduled_start < ${shift.scheduled_end}
         AND s.scheduled_end > ${shift.scheduled_start}
@@ -154,12 +171,25 @@ export async function createAssignment(
     const result = await sql<AssignmentRow>`
       INSERT INTO assignments (organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift)
       VALUES (${organizationId}, ${shiftId}, ${input.organizationWorkerMembershipId}, ${shift.care_recipient_id}, ${input.roleInShift ?? null})
-      RETURNING id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift, created_at
+      RETURNING id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift,
+                response_status, responded_at, response_reason, created_at
     `.execute(trx);
 
     await sql`UPDATE shifts SET status = 'confirmed', updated_at = now() WHERE id = ${shiftId} AND status = 'unassigned'`.execute(
       trx
     );
+
+    if (membership.user_id) {
+      await sql`
+        INSERT INTO notifications (
+          user_id, organization_id, notification_type, related_entity_type,
+          related_entity_id, care_recipient_id, channel, status, sent_at
+        ) VALUES (
+          ${membership.user_id}, ${organizationId}, 'SHIFT_ASSIGNMENT_PENDING', 'assignment',
+          ${result.rows[0].id}, ${shift.care_recipient_id}, 'in_app', 'sent', now()
+        )
+      `.execute(trx);
+    }
 
     return {
       assignment: result.rows[0],
@@ -169,25 +199,6 @@ export async function createAssignment(
     };
   });
 
-  // Participant synchronization intentionally runs only AFTER the assignment
-  // transaction commits. Its RLS authorization can now see the committed
-  // assignment, and a secondary messaging failure can never roll back the
-  // operational assignment or leave the shift falsely unassigned.
-  if (saved.workerUserId) {
-    try {
-      await syncAssignedWorkerConversationAccess(
-        userId,
-        organizationId,
-        saved.workerUserId,
-        saved.careRecipientId,
-        saved.roomId
-      );
-    } catch (error) {
-      const details = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
-      console.error(`Assignment saved but messaging participant synchronization failed: ${details}`);
-    }
-  }
-
   return saved.assignment;
 }
 
@@ -195,13 +206,103 @@ export async function listAssignments(userId: string, organizationId: string, sh
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const result = await sql<AssignmentRow>`
-      SELECT id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift, created_at
+      SELECT id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift,
+             response_status, responded_at, response_reason, created_at
       FROM assignments
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
-      ORDER BY created_at
+      ORDER BY created_at DESC
     `.execute(trx);
     return result.rows;
   });
+}
+
+export async function respondToMyAssignment(
+  userId: string,
+  organizationId: string,
+  shiftId: string,
+  input: RespondAssignmentInput
+): Promise<AssignmentRow> {
+  assertUuid(shiftId, "shiftId");
+  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+    const result = await sql<AssignmentRow & { worker_user_id: string | null; room_id: string | null }>`
+      SELECT a.id, a.organization_id, a.shift_id, a.organization_worker_membership_id,
+             a.care_recipient_id, a.role_in_shift, a.response_status, a.responded_at,
+             a.response_reason, a.created_at, w.user_id AS worker_user_id, s.room_id
+      FROM assignments a
+      JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id
+      JOIN workers w ON w.id = owm.worker_id
+      JOIN shifts s ON s.id = a.shift_id
+      WHERE a.shift_id = ${shiftId}
+        AND a.organization_id = ${organizationId}
+        AND w.user_id = ${userId}
+        AND owm.status = 'active'
+      ORDER BY a.created_at DESC
+      LIMIT 1
+      FOR UPDATE OF a
+    `.execute(trx);
+    const assignment = result.rows[0];
+    if (!assignment) throw new AssignmentNotFoundError();
+    if (assignment.response_status !== "pending") throw new AssignmentAlreadyRespondedError();
+
+    const shift = await sql<{ status: string }>`
+      SELECT status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
+    `.execute(trx);
+    if (!shift.rows[0]) throw new ShiftNotFoundError();
+    if (shift.rows[0].status === "cancelled") throw new ShiftCancelledError();
+
+    if (input.decision === "rejected") {
+      await sql`
+        UPDATE shifts SET status = 'unassigned', updated_at = now()
+        WHERE id = ${shiftId} AND organization_id = ${organizationId} AND status = 'confirmed'
+      `.execute(trx);
+    }
+
+    const updated = await sql<AssignmentRow>`
+      UPDATE assignments
+      SET response_status = ${input.decision}, responded_at = now(),
+          response_reason = ${input.reason?.trim() || null}
+      WHERE id = ${assignment.id} AND response_status = 'pending'
+      RETURNING id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id,
+                role_in_shift, response_status, responded_at, response_reason, created_at
+    `.execute(trx);
+    if (!updated.rows[0]) throw new AssignmentAlreadyRespondedError();
+
+    await sql`
+      INSERT INTO notifications (
+        user_id, organization_id, notification_type, related_entity_type,
+        related_entity_id, care_recipient_id, channel, status, sent_at
+      )
+      SELECT DISTINCT om.user_id, ${organizationId},
+        ${input.decision === "accepted" ? "SHIFT_ASSIGNMENT_ACCEPTED" : "SHIFT_ASSIGNMENT_REJECTED"},
+        'assignment', ${assignment.id}, ${assignment.care_recipient_id}, 'in_app', 'sent', now()
+      FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id
+      WHERE om.organization_id = ${organizationId}
+        AND om.status = 'active'
+        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+        AND om.user_id <> ${userId}
+    `.execute(trx);
+
+    return { assignment: updated.rows[0], workerUserId: assignment.worker_user_id, roomId: assignment.room_id };
+  });
+
+  if (input.decision === "accepted" && saved.workerUserId) {
+    try {
+      await syncAssignedWorkerConversationAccess(
+        userId,
+        organizationId,
+        saved.workerUserId,
+        saved.assignment.care_recipient_id,
+        saved.roomId
+      );
+    } catch (error) {
+      const details = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
+      console.error(`Assignment accepted but messaging synchronization failed: ${details}`);
+    }
+  }
+
+  return saved.assignment;
 }
 
 /**
@@ -244,7 +345,8 @@ export async function removeAssignment(
     );
 
     const remaining = await sql<{ count: string }>`
-      SELECT count(*) FROM assignments WHERE shift_id = ${shiftId}
+      SELECT count(*) FROM assignments
+      WHERE shift_id = ${shiftId} AND response_status IN ('pending', 'accepted')
     `.execute(trx);
     if (Number(remaining.rows[0].count) === 0) {
       await sql`UPDATE shifts SET status = 'unassigned', updated_at = now() WHERE id = ${shiftId} AND status != 'cancelled'`.execute(
