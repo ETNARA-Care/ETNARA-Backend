@@ -7,6 +7,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path: string) => readFileSync(join(root, path), "utf8");
 
 describe("Assignment response contracts", () => {
+  it("applies pending migrations before the Railway server starts", () => {
+    const packageJson = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
+    expect(packageJson.scripts?.start).toMatch(/^npm run bootstrap:staging && /);
+  });
+
   it("stores one explicit pending, accepted, or rejected response", () => {
     const migration = read("migrations/042_assignment_responses.sql");
     const service = read("src/modules/assignments/assignments.service.ts");
