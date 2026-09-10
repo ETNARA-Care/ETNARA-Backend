@@ -2,6 +2,16 @@
 
 ## In Progress
 
+### ETN-013 — Diagnose live caregiver shift read failure
+
+- preserve the generic `INTERNAL_ERROR` client response
+- log only bounded technical metadata for `listMyShifts`
+- reproduce against Railway and correct the proven database/query fault
+
+Status: Diagnostic logging implemented; TypeScript build and all 22 tests pass.
+
+---
+
 ### ETN-012 — Railway migration startup gate
 
 - apply pending migrations before serving requests

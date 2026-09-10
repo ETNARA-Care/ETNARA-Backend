@@ -64,6 +64,19 @@ Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
 
+### 2026-09-10 — Caregiver shift production diagnostics
+
+- Railway bootstrap now completes and migration 042 is recorded, but the live
+  caregiver shifts endpoint still returns `INTERNAL_ERROR`.
+- Added bounded server-side logging for unmatched `listMyShifts` failures:
+  operation, error name/message, and PostgreSQL code only.
+- Client responses remain generic and no request body, user ID, organization
+  ID, SQL text, or clinical data is logged.
+- Exact next step: deploy this diagnostic hotfix, reproduce the read-only
+  caregiver shifts request, and use the resulting Railway error to implement
+  the smallest corrective migration or query fix.
+
+
 ### 2026-09-09 — Railway migration startup hotfix
 
 - Live caregiver reads and assignment responses returned `INTERNAL_ERROR`

@@ -28,6 +28,24 @@ import { MembershipNotActiveError, InvalidTenantContextError } from "../../conte
 const router = Router();
 const uuidParam = z.string().uuid();
 
+function logUnexpectedSchedulingError(operation: string, err: unknown): void {
+  const error = err instanceof Error ? err : new Error(String(err));
+  const databaseCode =
+    typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+      ? err.code
+      : undefined;
+
+  // Keep the client response intentionally generic while retaining the
+  // minimum server-side detail required to diagnose production failures.
+  // Never include request bodies, user IDs, organization IDs, or SQL text.
+  console.error("Unexpected scheduling route error", {
+    operation,
+    name: error.name,
+    message: error.message,
+    databaseCode,
+  });
+}
+
 function handleError(err: unknown, res: Response): boolean {
   if (err instanceof MembershipNotActiveError || err instanceof OrganizationAccessDeniedError) {
     res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
@@ -101,7 +119,10 @@ router.get(
       const shifts = await listMyShifts(req.auth!.userId, orgIdParsed.data);
       res.status(200).json({ shifts });
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) {
+        logUnexpectedSchedulingError("listMyShifts", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );
