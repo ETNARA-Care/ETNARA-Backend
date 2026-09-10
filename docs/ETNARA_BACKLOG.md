@@ -2,6 +2,16 @@
 
 ## In Progress
 
+### ETN-014 — Diagnose live assignment-response failure
+
+- preserve the generic `INTERNAL_ERROR` client response
+- log only bounded technical metadata for `respondToMyAssignment`
+- reproduce against Railway and correct the proven database/query fault
+
+Status: Diagnostic logging implemented; TypeScript build and all 23 tests pass.
+
+---
+
 ### ETN-013 — Diagnose live caregiver shift read failure
 
 - preserve the generic `INTERNAL_ERROR` client response
