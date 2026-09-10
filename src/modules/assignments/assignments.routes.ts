@@ -26,6 +26,23 @@ import { MembershipNotActiveError, InvalidTenantContextError } from "../../conte
 const router = Router();
 const uuidParam = z.string().uuid();
 
+function logUnexpectedAssignmentError(operation: string, err: unknown): void {
+  const error = err instanceof Error ? err : new Error("Unknown error");
+  const databaseCode =
+    typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
+      ? err.code
+      : undefined;
+
+  // Keep production diagnostics bounded. Never include request bodies, user IDs,
+  // organization IDs, shift IDs, SQL text, or clinical information.
+  console.error("Unexpected assignment operation failure", {
+    operation,
+    name: error.name,
+    message: error.message,
+    ...(databaseCode ? { databaseCode } : {}),
+  });
+}
+
 function handleError(err: unknown, res: Response): boolean {
   if (err instanceof MembershipNotActiveError || err instanceof OrganizationAccessDeniedError) {
     res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
@@ -87,7 +104,10 @@ router.post(
       );
       res.status(200).json({ assignment });
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) {
+        logUnexpectedAssignmentError("respondToMyAssignment", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );
