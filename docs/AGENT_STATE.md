@@ -64,6 +64,17 @@ Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
 
+### 2026-09-10 — Assignment-response production diagnostics
+
+- The caregiver shift list and detail now load, but accepting or rejecting a
+  pending assignment still returns `INTERNAL_ERROR` in Railway.
+- Added bounded server-side logging for unmatched `respondToMyAssignment`
+  failures: operation, error name/message, and PostgreSQL code only.
+- Client responses remain generic and no request body, user ID, organization
+  ID, shift ID, SQL text, or clinical data is logged.
+- Exact next step: deploy this diagnostic hotfix, reproduce one assignment
+  response, and use the Railway error to implement the smallest proven fix.
+
 ### 2026-09-10 — Caregiver shift production diagnostics
 
 - Railway bootstrap now completes and migration 042 is recorded, but the live
