@@ -72,6 +72,21 @@ export const respondAssignmentSchema = z.object({
 });
 export type RespondAssignmentInput = z.infer<typeof respondAssignmentSchema>;
 
+const assignmentResponseStages = new Set([
+  "context",
+  "load_assignment",
+  "load_shift",
+  "update_shift",
+  "update_assignment",
+  "commit",
+]);
+
+export function getAssignmentResponseFailureStage(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("etnaraStage" in error)) return null;
+  const stage = error.etnaraStage;
+  return typeof stage === "string" && assignmentResponseStages.has(stage) ? stage : null;
+}
+
 interface AssignmentRow {
   id: string;
   organization_id: string;
@@ -249,7 +264,11 @@ export async function respondToMyAssignment(
   input: RespondAssignmentInput
 ): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
-  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+  let responseStage = "context";
+  let saved: { assignment: AssignmentRow; workerUserId: string | null; roomId: string | null };
+  try {
+    saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+    responseStage = "load_assignment";
     const result = await sql<AssignmentRow & { worker_user_id: string | null; room_id: string | null }>`
       SELECT a.id, a.organization_id, a.shift_id, a.organization_worker_membership_id,
              a.care_recipient_id, a.role_in_shift, a.response_status, a.responded_at,
@@ -270,6 +289,7 @@ export async function respondToMyAssignment(
     if (!assignment) throw new AssignmentNotFoundError();
     if (assignment.response_status !== "pending") throw new AssignmentAlreadyRespondedError();
 
+    responseStage = "load_shift";
     const shift = await sql<{ status: string }>`
       SELECT status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
@@ -277,12 +297,14 @@ export async function respondToMyAssignment(
     if (shift.rows[0].status === "cancelled") throw new ShiftCancelledError();
 
     if (input.decision === "rejected") {
+      responseStage = "update_shift";
       await sql`
         UPDATE shifts SET status = 'unassigned', updated_at = now()
         WHERE id = ${shiftId} AND organization_id = ${organizationId} AND status = 'confirmed'
       `.execute(trx);
     }
 
+    responseStage = "update_assignment";
     const updated = await sql<AssignmentRow>`
       UPDATE assignments
       SET response_status = ${input.decision}, responded_at = now(),
@@ -293,8 +315,15 @@ export async function respondToMyAssignment(
     `.execute(trx);
     if (!updated.rows[0]) throw new AssignmentAlreadyRespondedError();
 
+    responseStage = "commit";
     return { assignment: updated.rows[0], workerUserId: assignment.worker_user_id, roomId: assignment.room_id };
-  });
+    });
+  } catch (error) {
+    if (typeof error === "object" && error !== null) {
+      Object.defineProperty(error, "etnaraStage", { value: responseStage, enumerable: false });
+    }
+    throw error;
+  }
 
   // Persist the caregiver's decision independently from downstream alerts.
   // A notification delivery/policy failure must never roll back an already
