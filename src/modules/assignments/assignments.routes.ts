@@ -5,6 +5,7 @@ import {
   listAssignments,
   removeAssignment,
   respondToMyAssignment,
+  getAssignmentResponseFailureStage,
   createAssignmentSchema,
   respondAssignmentSchema,
   ShiftNotFoundError,
@@ -106,6 +107,8 @@ router.post(
     } catch (err) {
       if (!handleError(err, res)) {
         logUnexpectedAssignmentError("respondToMyAssignment", err);
+        const stage = getAssignmentResponseFailureStage(err);
+        if (stage) res.setHeader("X-ETNARA-Diagnostic-Stage", stage);
         res.status(500).json({ error: "INTERNAL_ERROR" });
       }
     }
