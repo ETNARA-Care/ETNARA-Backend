@@ -64,6 +64,22 @@ Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
 
+### 2026-09-11 — Phase 5.3 manager assignment notifications
+
+- Confirmed live that caregiver accept/reject succeeds while the Admin inbox
+  remains empty.
+- Root cause: the caregiver RLS context cannot enumerate privileged manager
+  memberships, so the previous notification query inserted zero rows without
+  raising an error.
+- Added a narrowly-scoped, idempotent SECURITY DEFINER function that first
+  proves the caller is the active assigned worker and the stored response
+  matches the requested notification type, then notifies only active Admins
+  and Supervisors in the same organization.
+- Public execution is revoked; only `app_runtime` can call the helper.
+- Local TypeScript build and all 25 backend tests pass.
+- Exact next step: publish, pass PostgreSQL CI, merge, verify Railway migration
+  043, then validate one fresh response appears in the Admin inbox.
+
 ### 2026-09-10 — Assignment-response production diagnostics
 
 - The caregiver shift list and detail now load, but accepting or rejecting a
