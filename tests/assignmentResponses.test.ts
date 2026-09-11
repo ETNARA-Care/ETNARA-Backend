@@ -51,4 +51,14 @@ describe("Assignment response contracts", () => {
     expect(service).toMatch(/SHIFT_ASSIGNMENT_REJECTED/);
     expect(notifications).toMatch(/Nuevo turno pendiente de respuesta/);
   });
+
+  it("does not roll back a caregiver response when manager notification fails", () => {
+    const service = read("src/modules/assignments/assignments.service.ts");
+    const transactionEnd = service.indexOf("return { assignment: updated.rows[0]");
+    const notificationCall = service.indexOf("await notifyManagersOfAssignmentResponse(");
+
+    expect(transactionEnd).toBeGreaterThan(-1);
+    expect(notificationCall).toBeGreaterThan(transactionEnd);
+    expect(service).toMatch(/Assignment response saved but manager notification failed/);
+  });
 });
