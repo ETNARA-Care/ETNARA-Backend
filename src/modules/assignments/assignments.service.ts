@@ -109,6 +109,32 @@ async function syncAssignedWorkerConversationAccess(
   });
 }
 
+async function notifyManagersOfAssignmentResponse(
+  userId: string,
+  organizationId: string,
+  assignment: AssignmentRow,
+  decision: RespondAssignmentInput["decision"]
+): Promise<void> {
+  await withTenantContext({ userId, organizationId }, async (trx) => {
+    await sql`
+      INSERT INTO notifications (
+        user_id, organization_id, notification_type, related_entity_type,
+        related_entity_id, care_recipient_id, channel, status, sent_at
+      )
+      SELECT DISTINCT om.user_id, ${organizationId},
+        ${decision === "accepted" ? "SHIFT_ASSIGNMENT_ACCEPTED" : "SHIFT_ASSIGNMENT_REJECTED"},
+        'assignment', ${assignment.id}, ${assignment.care_recipient_id}, 'in_app', 'sent', now()
+      FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id
+      WHERE om.organization_id = ${organizationId}
+        AND om.status = 'active'
+        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+        AND om.user_id <> ${userId}
+    `.execute(trx);
+  });
+}
+
 export async function createAssignment(
   userId: string,
   organizationId: string,
@@ -267,25 +293,25 @@ export async function respondToMyAssignment(
     `.execute(trx);
     if (!updated.rows[0]) throw new AssignmentAlreadyRespondedError();
 
-    await sql`
-      INSERT INTO notifications (
-        user_id, organization_id, notification_type, related_entity_type,
-        related_entity_id, care_recipient_id, channel, status, sent_at
-      )
-      SELECT DISTINCT om.user_id, ${organizationId},
-        ${input.decision === "accepted" ? "SHIFT_ASSIGNMENT_ACCEPTED" : "SHIFT_ASSIGNMENT_REJECTED"},
-        'assignment', ${assignment.id}, ${assignment.care_recipient_id}, 'in_app', 'sent', now()
-      FROM organization_memberships om
-      JOIN user_roles ur ON ur.organization_membership_id = om.id
-      JOIN roles r ON r.id = ur.role_id
-      WHERE om.organization_id = ${organizationId}
-        AND om.status = 'active'
-        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
-        AND om.user_id <> ${userId}
-    `.execute(trx);
-
     return { assignment: updated.rows[0], workerUserId: assignment.worker_user_id, roomId: assignment.room_id };
   });
+
+  // Persist the caregiver's decision independently from downstream alerts.
+  // A notification delivery/policy failure must never roll back an already
+  // valid acceptance or rejection.
+  try {
+    await notifyManagersOfAssignmentResponse(userId, organizationId, saved.assignment, input.decision);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    const databaseCode =
+      typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+    console.error("Assignment response saved but manager notification failed", {
+      name,
+      ...(databaseCode ? { databaseCode } : {}),
+    });
+  }
 
   if (input.decision === "accepted" && saved.workerUserId) {
     try {
