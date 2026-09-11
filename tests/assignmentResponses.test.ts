@@ -45,10 +45,19 @@ describe("Assignment response contracts", () => {
 
   it("notifies the caregiver and organization managers", () => {
     const service = read("src/modules/assignments/assignments.service.ts");
+    const managerNotifications = read("migrations/043_assignment_manager_notifications.sql");
     const notifications = read("src/modules/notifications/notifications.service.ts");
     expect(service).toMatch(/SHIFT_ASSIGNMENT_PENDING/);
     expect(service).toMatch(/SHIFT_ASSIGNMENT_ACCEPTED/);
     expect(service).toMatch(/SHIFT_ASSIGNMENT_REJECTED/);
+    expect(service).toMatch(/app_notify_assignment_managers/);
+    expect(managerNotifications).toMatch(/SECURITY DEFINER SET search_path = public/);
+    expect(managerNotifications).toMatch(/a\.response_status = v_expected_response/);
+    expect(managerNotifications).toMatch(/w\.user_id = v_actor_user_id/);
+    expect(managerNotifications).toMatch(/r\.code IN \('ORGANIZATION_ADMIN', 'SUPERVISOR'\)/);
+    expect(managerNotifications).toMatch(/REVOKE ALL ON FUNCTION app_notify_assignment_managers\(uuid, text\) FROM PUBLIC/);
+    expect(managerNotifications).toMatch(/GRANT EXECUTE ON FUNCTION app_notify_assignment_managers\(uuid, text\) TO app_runtime/);
+    expect(managerNotifications).toMatch(/NOT EXISTS[\s\S]*existing\.related_entity_id = p_assignment_id/);
     expect(notifications).toMatch(/Nuevo turno pendiente de respuesta/);
   });
 

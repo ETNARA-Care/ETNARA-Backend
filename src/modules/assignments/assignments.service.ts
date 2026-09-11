@@ -131,22 +131,9 @@ async function notifyManagersOfAssignmentResponse(
   decision: RespondAssignmentInput["decision"]
 ): Promise<void> {
   await withTenantContext({ userId, organizationId }, async (trx) => {
-    await sql`
-      INSERT INTO notifications (
-        user_id, organization_id, notification_type, related_entity_type,
-        related_entity_id, care_recipient_id, channel, status, sent_at
-      )
-      SELECT DISTINCT om.user_id, ${organizationId},
-        ${decision === "accepted" ? "SHIFT_ASSIGNMENT_ACCEPTED" : "SHIFT_ASSIGNMENT_REJECTED"},
-        'assignment', ${assignment.id}, ${assignment.care_recipient_id}, 'in_app', 'sent', now()
-      FROM organization_memberships om
-      JOIN user_roles ur ON ur.organization_membership_id = om.id
-      JOIN roles r ON r.id = ur.role_id
-      WHERE om.organization_id = ${organizationId}
-        AND om.status = 'active'
-        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
-        AND om.user_id <> ${userId}
-    `.execute(trx);
+    const notificationType =
+      decision === "accepted" ? "SHIFT_ASSIGNMENT_ACCEPTED" : "SHIFT_ASSIGNMENT_REJECTED";
+    await sql`SELECT app_notify_assignment_managers(${assignment.id}, ${notificationType})`.execute(trx);
   });
 }
 
