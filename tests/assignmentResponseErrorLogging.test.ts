@@ -10,6 +10,7 @@ describe("assignment-response production diagnostics", () => {
     );
 
     expect(source).toContain('logUnexpectedAssignmentError("respondToMyAssignment", err)');
+    expect(source).toContain('res.setHeader("X-ETNARA-Diagnostic-Stage", stage)');
     expect(source).toContain('res.status(500).json({ error: "INTERNAL_ERROR" })');
     expect(source).toContain("Never include request bodies, user IDs,");
     expect(source).toContain("organization IDs, shift IDs, SQL text, or clinical information.");
