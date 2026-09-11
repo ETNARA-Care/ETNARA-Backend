@@ -26,10 +26,17 @@ export function createApp(): Express {
   // credentials:true / Access-Control-Allow-Credentials is deliberately
   // NOT set -- there is no cookie-based session to protect or leak here,
   // and omitting it keeps the surface smaller than it needs to be.
-  const allowedOrigins = env.ALLOWED_ORIGIN.split(",").map((o) => o.trim());
+  // Keep the public ETNARA frontend in the explicit allowlist even when a
+  // deployment still has an older ALLOWED_ORIGIN value configured. This is
+  // an exact origin (not a wildcard), so the API remains closed to unknown
+  // sites while the production GitHub Pages app can always reach it.
+  const allowedOrigins = new Set([
+    "https://etnara-care.github.io",
+    ...env.ALLOWED_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean),
+  ]);
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
+    if (origin && allowedOrigins.has(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
