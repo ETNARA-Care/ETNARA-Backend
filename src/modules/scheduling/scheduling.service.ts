@@ -17,6 +17,12 @@ export class InvalidShiftTimesError extends Error {
     this.name = "InvalidShiftTimesError";
   }
 }
+export class ShiftCannotBeCancelledError extends Error {
+  constructor() {
+    super("SHIFT_CANNOT_BE_CANCELLED");
+    this.name = "ShiftCannotBeCancelledError";
+  }
+}
 export class RecipientNotInOrgError extends Error {
   constructor() {
     super("RECIPIENT_NOT_IN_ORGANIZATION");
@@ -418,7 +424,28 @@ export async function updateShift(
  * are rejected at the assignment layer (see assignments.service.ts).
  */
 export async function cancelShift(userId: string, organizationId: string, shiftId: string): Promise<ShiftRow> {
-  return updateShift(userId, organizationId, shiftId, { status: "cancelled" as never });
+  assertUuid(shiftId, "shiftId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const result = await sql<ShiftRow>`
+      UPDATE shifts
+      SET status = 'cancelled', updated_at = now()
+      WHERE id = ${shiftId}
+        AND organization_id = ${organizationId}
+        AND status IN ('unassigned', 'confirmed')
+        AND scheduled_start > now()
+      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start,
+                scheduled_end, status, created_at, updated_at
+    `.execute(trx);
+    if (result.rows[0]) return result.rows[0];
+
+    const existing = await sql<{ id: string }>`
+      SELECT id FROM shifts
+      WHERE id = ${shiftId} AND organization_id = ${organizationId}
+      LIMIT 1
+    `.execute(trx);
+    if (!existing.rows[0]) throw new ShiftNotFoundError();
+    throw new ShiftCannotBeCancelledError();
+  });
 }
 
 export interface CoverageSummary {
