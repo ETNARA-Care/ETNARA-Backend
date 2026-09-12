@@ -58,6 +58,12 @@ export async function getMe(userId: string): Promise<MeResult> {
       LEFT JOIN user_roles ur ON ur.organization_membership_id = om.id
       LEFT JOIN roles r ON r.id = ur.role_id
       WHERE om.user_id = ${userId} AND om.status = 'active'
+        AND (
+          r.code IS NULL
+          OR r.code NOT IN ('WORKER', 'FAMILY')
+          OR (r.code = 'WORKER' AND app_self_has_active_worker_access(${userId}, om.organization_id))
+          OR (r.code = 'FAMILY' AND app_self_has_active_family_access(${userId}, om.organization_id))
+        )
       ORDER BY o.name
     `.execute(trx);
 

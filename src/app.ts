@@ -16,6 +16,7 @@ import incidentsRoutes from "./modules/incidents/incidents.routes.js";
 import familyTimelineRoutes from "./modules/familyTimeline/familyTimeline.routes.js";
 import messagingRoutes from "./modules/messaging/messaging.routes.js";
 import notificationsRoutes from "./modules/notifications/notifications.routes.js";
+import accessInvitationsRoutes from "./modules/accessInvitations/accessInvitations.routes.js";
 
 export function createApp(): Express {
   const app = express();
@@ -71,6 +72,7 @@ export function createApp(): Express {
   app.use(familyTimelineRoutes);
   app.use(messagingRoutes);
   app.use(notificationsRoutes);
+  app.use(accessInvitationsRoutes);
 
   // Safety-net error handler: never leak stack traces, SQL, or internal
   // details to the client.
