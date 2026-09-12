@@ -11,6 +11,13 @@ export class MembershipNotFoundError extends Error {
   }
 }
 
+export class WorkforceManagementForbiddenError extends Error {
+  constructor() {
+    super("WORKFORCE_MANAGEMENT_FORBIDDEN");
+    this.name = "WorkforceManagementForbiddenError";
+  }
+}
+
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
   if (!uuidSchema.safeParse(value).success) {
@@ -21,6 +28,7 @@ function assertUuid(value: string, label: string): void {
 export const createWorkerSchema = z
   .object({
     workerId: z.string().uuid().optional(),
+    displayName: z.string().trim().min(1).max(120),
     internalRole: z.string().min(1),
     hiredAt: z.string().date().optional(),
   })
@@ -30,7 +38,9 @@ export type CreateWorkerInput = z.infer<typeof createWorkerSchema>;
 const updateMembershipSchema = z
   .object({
     internalRole: z.string().min(1),
+    displayName: z.string().trim().min(1).max(120),
     status: z.enum(["active", "inactive"]),
+    hiredAt: z.string().date().nullable(),
     endedAt: z.string().datetime().nullable(),
   })
   .partial()
@@ -48,6 +58,12 @@ interface MembershipRow {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
+  display_name: string | null;
+}
+
+async function assertWorkforceManager(trx: Parameters<Parameters<typeof withTenantContext>[1]>[0]) {
+  const result = await sql<{ is_manager: boolean }>`SELECT app_is_org_manager() AS is_manager`.execute(trx);
+  if (!result.rows[0]?.is_manager) throw new WorkforceManagementForbiddenError();
 }
 
 export async function createOrLinkWorker(
@@ -56,6 +72,7 @@ export async function createOrLinkWorker(
   input: CreateWorkerInput
 ): Promise<MembershipRow> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertWorkforceManager(trx);
     let workerId = input.workerId;
 
     if (workerId) {
@@ -67,6 +84,7 @@ export async function createOrLinkWorker(
         err.name = "WorkerNotFoundError";
         throw err;
       }
+      await sql`UPDATE workers SET display_name = ${input.displayName}, updated_at = now() WHERE id = ${workerId}`.execute(trx);
     } else {
       // Generate the id client-side and INSERT it explicitly, deliberately
       // avoiding RETURNING id here: a freshly-created worker with no
@@ -76,7 +94,7 @@ export async function createOrLinkWorker(
       // RETURNING would require that same-instant visibility and fail.
       workerId = randomUUID();
       await sql`
-        INSERT INTO workers (id) VALUES (${workerId})
+        INSERT INTO workers (id, display_name) VALUES (${workerId}, ${input.displayName})
       `.execute(trx);
     }
 
@@ -91,12 +109,12 @@ export async function createOrLinkWorker(
       throw err;
     }
 
-    const result = await sql<MembershipRow>`
+    const result = await sql<Omit<MembershipRow, "display_name">>`
       INSERT INTO organization_worker_memberships (worker_id, organization_id, internal_role, hired_at)
       VALUES (${workerId}, ${organizationId}, ${input.internalRole}, ${input.hiredAt ?? null})
       RETURNING id, worker_id, organization_id, status, internal_role, hired_at, ended_at, created_at, updated_at
     `.execute(trx);
-    return result.rows[0];
+    return { ...result.rows[0], display_name: input.displayName };
   });
 }
 
@@ -123,7 +141,7 @@ export async function getWorkerProfile(userId: string, organizationId: string, m
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const membershipResult = await sql<WorkerProfileRow>`
       SELECT owm.id, owm.worker_id, owm.organization_id, owm.status, owm.internal_role,
-             owm.hired_at, owm.ended_at, owm.created_at, owm.updated_at, w.default_scope
+             owm.hired_at, owm.ended_at, owm.created_at, owm.updated_at, w.default_scope, w.display_name
       FROM organization_worker_memberships owm
       JOIN workers w ON w.id = owm.worker_id
       WHERE owm.id = ${membershipId} AND owm.organization_id = ${organizationId}
@@ -157,20 +175,41 @@ export async function updateMembership(
 ): Promise<MembershipRow> {
   assertUuid(membershipId, "organizationWorkerMembershipId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertWorkforceManager(trx);
+    const current = await sql<{ display_name: string | null }>`
+      SELECT w.display_name
+      FROM organization_worker_memberships owm
+      JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.id = ${membershipId} AND owm.organization_id = ${organizationId}
+      LIMIT 1
+    `.execute(trx);
+    if (!current.rows[0]) throw new MembershipNotFoundError();
+
+    if (input.displayName !== undefined) {
+      await sql`
+        UPDATE workers w
+        SET display_name = ${input.displayName}, updated_at = now()
+        FROM organization_worker_memberships owm
+        WHERE owm.id = ${membershipId}
+          AND owm.organization_id = ${organizationId}
+          AND w.id = owm.worker_id
+      `.execute(trx);
+    }
     const fragments = [];
     if (input.internalRole !== undefined) fragments.push(sql`internal_role = ${input.internalRole}`);
     if (input.status !== undefined) fragments.push(sql`status = ${input.status}`);
+    if (input.hiredAt !== undefined) fragments.push(sql`hired_at = ${input.hiredAt}`);
     if (input.endedAt !== undefined) fragments.push(sql`ended_at = ${input.endedAt}`);
     fragments.push(sql`updated_at = now()`);
 
-    const result = await sql<MembershipRow>`
+    const result = await sql<Omit<MembershipRow, "display_name">>`
       UPDATE organization_worker_memberships
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${membershipId} AND organization_id = ${organizationId}
       RETURNING id, worker_id, organization_id, status, internal_role, hired_at, ended_at, created_at, updated_at
     `.execute(trx);
     if (!result.rows[0]) throw new MembershipNotFoundError();
-    return result.rows[0];
+    return { ...result.rows[0], display_name: input.displayName ?? current.rows[0].display_name };
   });
 }
 

@@ -8,6 +8,7 @@ import {
   createWorkerSchema,
   updateMembershipSchema,
   MembershipNotFoundError,
+  WorkforceManagementForbiddenError,
 } from "./workforce.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -30,6 +31,10 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   if (err instanceof MembershipNotFoundError) {
     res.status(404).json({ error: "MEMBERSHIP_NOT_FOUND" });
+    return true;
+  }
+  if (err instanceof WorkforceManagementForbiddenError) {
+    res.status(403).json({ error: "WORKFORCE_MANAGEMENT_FORBIDDEN" });
     return true;
   }
   if (err instanceof Error && err.name === "WorkerNotFoundError") {

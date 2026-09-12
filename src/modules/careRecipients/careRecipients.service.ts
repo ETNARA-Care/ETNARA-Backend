@@ -153,7 +153,10 @@ export async function updateCareRecipient(
     if (input.routines !== undefined)
       fragments.push(sql`routines = ${input.routines ? JSON.stringify(input.routines) : null}`);
     if (input.roomId !== undefined) fragments.push(sql`room_id = ${input.roomId}`);
-    if (input.status !== undefined) fragments.push(sql`status = ${input.status}`);
+    if (input.status !== undefined) {
+      fragments.push(sql`status = ${input.status}`);
+      fragments.push(sql`archived_at = ${input.status === "archived" ? new Date().toISOString() : null}`);
+    }
     fragments.push(sql`updated_at = now()`);
 
     const setClause = sql.join(fragments, sql`, `);
