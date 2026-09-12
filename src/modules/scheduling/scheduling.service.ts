@@ -23,6 +23,12 @@ export class ShiftCannotBeCancelledError extends Error {
     this.name = "ShiftCannotBeCancelledError";
   }
 }
+export class ShiftCancellationForbiddenError extends Error {
+  constructor() {
+    super("SHIFT_CANCELLATION_FORBIDDEN");
+    this.name = "ShiftCancellationForbiddenError";
+  }
+}
 export class RecipientNotInOrgError extends Error {
   constructor() {
     super("RECIPIENT_NOT_IN_ORGANIZATION");
@@ -426,6 +432,11 @@ export async function updateShift(
 export async function cancelShift(userId: string, organizationId: string, shiftId: string): Promise<ShiftRow> {
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    const managerCheck = await sql<{ is_manager: boolean }>`
+      SELECT app_is_org_manager() AS is_manager
+    `.execute(trx);
+    if (!managerCheck.rows[0]?.is_manager) throw new ShiftCancellationForbiddenError();
+
     const result = await sql<ShiftRow>`
       UPDATE shifts
       SET status = 'cancelled', updated_at = now()
