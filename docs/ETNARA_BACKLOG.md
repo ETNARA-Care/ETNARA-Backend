@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-015 — Phase 5.4 actionable assignment notifications
+
+- resolve user-owned assignment notifications to their shift
+- preserve assignment ids as the audited related entity
+- restrict cancellation to future, unstarted shifts
+- preserve cancelled shift and assignment history
+
+Status: Implemented and validated locally; PR publication pending.
+
+---
+
 ### ETN-014 — Diagnose live assignment-response failure
 
 - preserve the generic `INTERNAL_ERROR` client response
