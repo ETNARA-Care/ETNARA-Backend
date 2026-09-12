@@ -32,6 +32,8 @@ interface NotificationRow {
   notification_type: string;
   related_entity_type: string | null;
   related_entity_id: string | null;
+  care_recipient_id: string | null;
+  shift_id: string | null;
   status: string;
   created_at: string;
   read_at: string | null;
@@ -67,7 +69,14 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
       }
     }
     const result = await sql<NotificationRow>`
-      SELECT id, organization_id, notification_type, related_entity_type, related_entity_id, status, created_at, read_at
+      SELECT id, organization_id, notification_type, related_entity_type, related_entity_id,
+             care_recipient_id,
+             CASE
+               WHEN related_entity_type = 'assignment'
+                 THEN app_notification_assignment_shift_id(id)
+               ELSE NULL
+             END AS shift_id,
+             status, created_at, read_at
       FROM notifications
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY created_at DESC, id DESC
@@ -86,6 +95,8 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
       summary: summarizeType(r.notification_type),
       relatedEntityType: r.related_entity_type,
       relatedEntityId: r.related_entity_id,
+      careRecipientId: r.care_recipient_id,
+      shiftId: r.shift_id,
       createdAt: r.created_at,
       readAt: r.read_at,
     }));
@@ -100,12 +111,14 @@ export async function markNotificationRead(userId: string, notificationId: strin
     const result = await sql<NotificationRow>`
       UPDATE notifications SET read_at = now()
       WHERE id = ${notificationId} AND user_id = ${userId} AND read_at IS NULL
-      RETURNING id, organization_id, notification_type, related_entity_type, related_entity_id, status, created_at, read_at
+      RETURNING id, organization_id, notification_type, related_entity_type, related_entity_id,
+                care_recipient_id, NULL::uuid AS shift_id, status, created_at, read_at
     `.execute(trx);
     if (result.rows[0]) return result.rows[0];
 
     const existing = await sql<NotificationRow>`
-      SELECT id, organization_id, notification_type, related_entity_type, related_entity_id, status, created_at, read_at
+      SELECT id, organization_id, notification_type, related_entity_type, related_entity_id,
+             care_recipient_id, NULL::uuid AS shift_id, status, created_at, read_at
       FROM notifications WHERE id = ${notificationId} AND user_id = ${userId} LIMIT 1
     `.execute(trx);
     if (existing.rows[0]) return existing.rows[0];

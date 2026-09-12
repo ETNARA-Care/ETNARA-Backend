@@ -4,7 +4,7 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: hotfix/railway-run-migrations
+Branch: phase-5/actionable-notifications
 
 ## Current Backend Checkpoint
 
@@ -63,6 +63,19 @@ Frontend is deployed through GitHub Pages.
 Verify actual deployment configuration before changing deployment behavior.
 
 ## Session Handoff
+
+### 2026-09-12 — Phase 5.4 actionable notifications and safe cancellation
+
+- Notification responses now include the family-safe recipient id and resolve
+  assignment notifications to their shift through an owner-checked,
+  narrowly-scoped SECURITY DEFINER helper.
+- Administrative cancellation preserves the shift and assignment history and
+  is limited atomically to future, unstarted `unassigned` or `confirmed`
+  shifts; invalid state changes return a conflict.
+- Public helper execution is revoked; only `app_runtime` may execute it.
+- Local TypeScript build and all 27 backend tests pass.
+- Exact next step: publish the backend PR, pass PostgreSQL 16 migration checks,
+  merge, and verify Railway migration 044 before publishing the frontend.
 
 ### 2026-09-11 — Phase 5.3 manager assignment notifications
 
