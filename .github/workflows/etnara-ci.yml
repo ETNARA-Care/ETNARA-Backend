@@ -57,5 +57,10 @@ jobs:
           npm run bootstrap:staging
           npm run bootstrap:staging
 
+      - name: PostgreSQL invitation activation verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+        run: npx tsx scripts/verifyAccessInvitationActivation.ts
+
       - name: Diff safety check
         run: git diff --check

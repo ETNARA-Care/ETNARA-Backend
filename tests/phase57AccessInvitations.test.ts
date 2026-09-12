@@ -59,4 +59,15 @@ describe("Phase 5.7 secure access invitations", () => {
     expect(migration).not.toMatch(/UPDATE public\.users[\s\S]{0,180}password_hash/i);
     expect(migration).toContain("ACCOUNT_ALREADY_EXISTS");
   });
+
+  it("qualifies worker account columns that collide with function output names", () => {
+    const hotfix = read("migrations/046_access_invitation_activation_ambiguity_fix.sql");
+    const verification = read("scripts/verifyAccessInvitationActivation.ts");
+
+    expect(hotfix).toContain("UPDATE public.workers AS target_worker");
+    expect(hotfix).toContain("target_worker.user_id IS NULL");
+    expect(hotfix).toContain("ON CONFLICT ON CONSTRAINT organization_memberships_user_id_organization_id_key");
+    expect(verification).toContain("app_activate_access_invitation");
+    expect(verification).toContain("Activation did not link the worker to the new account");
+  });
 });
