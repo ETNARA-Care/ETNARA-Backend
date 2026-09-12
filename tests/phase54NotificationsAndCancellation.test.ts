@@ -24,7 +24,10 @@ describe("Phase 5.4 actionable notifications and shift cancellation", () => {
 
     expect(service).toMatch(/status IN \('unassigned', 'confirmed'\)/);
     expect(service).toMatch(/scheduled_start > now\(\)/);
+    expect(service).toMatch(/SELECT app_is_org_manager\(\) AS is_manager/);
+    expect(service).toContain("ShiftCancellationForbiddenError");
     expect(service).not.toMatch(/DELETE FROM shifts/);
     expect(routes).toContain('res.status(409).json({ error: "SHIFT_CANNOT_BE_CANCELLED" })');
+    expect(routes).toContain('res.status(403).json({ error: "SHIFT_CANCELLATION_FORBIDDEN" })');
   });
 });
