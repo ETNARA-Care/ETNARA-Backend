@@ -6,7 +6,7 @@ function read(path: string): string {
 }
 
 describe("Phase 5.9 private credential documents", () => {
-  it("uses short-lived private S3 URLs without storing binary content in PostgreSQL", () => {
+  it("uses private S3 storage without storing binary content in PostgreSQL", () => {
     const storage = read("src/modules/storage/objectStorage.ts");
     const service = read("src/modules/credentialing/credentialing.service.ts");
 
@@ -14,6 +14,7 @@ describe("Phase 5.9 private credential documents", () => {
     expect(storage).toContain("GetObjectCommand");
     expect(storage).toContain("expiresIn: 300");
     expect(service).toContain("INSERT INTO stored_files");
+    expect(service).not.toContain("createPrivateUploadUrl");
     expect(service).not.toMatch(/bytea|base64/i);
   });
 
@@ -29,6 +30,7 @@ describe("Phase 5.9 private credential documents", () => {
     expect(routes).toContain("requireAuth");
     expect(routes).toContain("express.raw");
     expect(routes).toContain("Unexpected credential storage failure");
+    expect(routes).toContain('logUnexpectedCredentialStorageError("initiateCredentialDocumentUpload", err)');
     expect(routes).not.toMatch(/request body|originalFilename|storageKey.*console/i);
   });
 

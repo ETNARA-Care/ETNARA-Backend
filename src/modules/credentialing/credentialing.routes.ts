@@ -259,7 +259,10 @@ router.post(
       );
       res.status(201).json({ upload });
     } catch (err) {
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("initiateCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );

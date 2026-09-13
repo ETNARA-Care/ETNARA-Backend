@@ -4,7 +4,7 @@ import { withTenantContext, withPlatformContext } from "../../context/tenantCont
 import { InvalidTenantContextError, UnauthorizedPlatformAccessError } from "../../context/errors.js";
 import { randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
-import { createPrivateDownloadUrl, createPrivateUploadUrl, inspectPrivateObject, uploadPrivateObject } from "../storage/objectStorage.js";
+import { createPrivateDownloadUrl, inspectPrivateObject, uploadPrivateObject } from "../storage/objectStorage.js";
 
 export class WorkerNotLinkedError extends Error {
   constructor() {
@@ -295,8 +295,7 @@ export async function initiateCredentialDocumentUpload(
         ${input.originalFilename}, ${input.sizeBytes}, ${userId}, 'private', 'hidden'
       ) RETURNING id
     `.execute(trx);
-    const uploadUrl = await createPrivateUploadUrl(storageKey, input.contentType);
-    return { fileId: result.rows[0].id, uploadUrl, expiresInSeconds: 300 };
+    return { fileId: result.rows[0].id };
   });
 }
 
