@@ -34,6 +34,7 @@ interface NotificationRow {
   related_entity_id: string | null;
   care_recipient_id: string | null;
   shift_id: string | null;
+  worker_membership_id: string | null;
   status: string;
   created_at: string;
   read_at: string | null;
@@ -53,6 +54,10 @@ function summarizeType(notificationType: string): string {
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":
       return "Turno rechazado por la cuidadora";
+    case "CREDENTIAL_EXPIRING":
+      return "Credencial próxima a vencer";
+    case "CREDENTIAL_EXPIRED":
+      return "Credencial vencida";
     default:
       return "Notificación";
   }
@@ -76,6 +81,11 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
                  THEN app_notification_assignment_shift_id(id)
                ELSE NULL
              END AS shift_id,
+             CASE
+               WHEN related_entity_type = 'credential'
+                 THEN app_notification_credential_membership_id(id)
+               ELSE NULL
+             END AS worker_membership_id,
              status, created_at, read_at
       FROM notifications
       WHERE ${sql.join(conditions, sql` AND `)}
@@ -97,6 +107,7 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
       relatedEntityId: r.related_entity_id,
       careRecipientId: r.care_recipient_id,
       shiftId: r.shift_id,
+      workerMembershipId: r.worker_membership_id,
       createdAt: r.created_at,
       readAt: r.read_at,
     }));
@@ -112,13 +123,15 @@ export async function markNotificationRead(userId: string, notificationId: strin
       UPDATE notifications SET read_at = now()
       WHERE id = ${notificationId} AND user_id = ${userId} AND read_at IS NULL
       RETURNING id, organization_id, notification_type, related_entity_type, related_entity_id,
-                care_recipient_id, NULL::uuid AS shift_id, status, created_at, read_at
+                care_recipient_id, NULL::uuid AS shift_id, NULL::uuid AS worker_membership_id,
+                status, created_at, read_at
     `.execute(trx);
     if (result.rows[0]) return result.rows[0];
 
     const existing = await sql<NotificationRow>`
       SELECT id, organization_id, notification_type, related_entity_type, related_entity_id,
-             care_recipient_id, NULL::uuid AS shift_id, status, created_at, read_at
+             care_recipient_id, NULL::uuid AS shift_id, NULL::uuid AS worker_membership_id,
+             status, created_at, read_at
       FROM notifications WHERE id = ${notificationId} AND user_id = ${userId} LIMIT 1
     `.execute(trx);
     if (existing.rows[0]) return existing.rows[0];

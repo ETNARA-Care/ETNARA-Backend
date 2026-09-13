@@ -2,6 +2,9 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext, withPlatformContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, UnauthorizedPlatformAccessError } from "../../context/errors.js";
+import { randomUUID } from "node:crypto";
+import { env } from "../../config/env.js";
+import { createPrivateDownloadUrl, createPrivateUploadUrl, inspectPrivateObject } from "../storage/objectStorage.js";
 
 export class WorkerNotLinkedError extends Error {
   constructor() {
@@ -31,6 +34,24 @@ export class InvalidFileOwnershipError extends Error {
   constructor(reason: string) {
     super(reason);
     this.name = "InvalidFileOwnershipError";
+  }
+}
+export class CredentialManagementForbiddenError extends Error {
+  constructor() {
+    super("CREDENTIAL_MANAGEMENT_FORBIDDEN");
+    this.name = "CredentialManagementForbiddenError";
+  }
+}
+export class CredentialUploadMismatchError extends Error {
+  constructor() {
+    super("CREDENTIAL_UPLOAD_MISMATCH");
+    this.name = "CredentialUploadMismatchError";
+  }
+}
+export class CredentialDocumentRequiredError extends Error {
+  constructor() {
+    super("CREDENTIAL_DOCUMENT_REQUIRED");
+    this.name = "CredentialDocumentRequiredError";
   }
 }
 
@@ -72,6 +93,14 @@ const updateCredentialSchema = z
   });
 export type UpdateCredentialInput = z.infer<typeof updateCredentialSchema>;
 export { updateCredentialSchema };
+
+const supportedCredentialContentTypes = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const initiateCredentialDocumentUploadSchema = z.object({
+  originalFilename: z.string().trim().min(1).max(180),
+  contentType: z.enum(supportedCredentialContentTypes),
+  sizeBytes: z.number().int().positive().max(env.STORAGE_MAX_FILE_BYTES),
+});
+export type InitiateCredentialDocumentUploadInput = z.infer<typeof initiateCredentialDocumentUploadSchema>;
 
 interface CredentialRow {
   id: string;
@@ -143,6 +172,21 @@ async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, wor
   if (!actor.rows[0]?.allowed) throw new CredentialAccessDeniedError();
 }
 
+async function assertCredentialManager(trx: unknown) {
+  const result = await sql<{ allowed: boolean }>`SELECT (app_is_org_manager() OR app_is_superadmin()) AS allowed`.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new CredentialManagementForbiddenError();
+}
+
+async function assertCredentialBelongsToWorker(trx: unknown, workerId: string, credentialId: string) {
+  const result = await sql<{ id: string; credential_type_id: string; document_id: string | null }>`
+    SELECT id, credential_type_id, document_id FROM credentials
+    WHERE id = ${credentialId} AND worker_id = ${workerId}
+    LIMIT 1
+  `.execute(trx as never);
+  if (!result.rows[0]) throw new CredentialNotFoundError();
+  return result.rows[0];
+}
+
 async function resolveCredentialTypeId(trx: unknown, code: string): Promise<string> {
   const result = await sql<{ id: string }>`
     SELECT id FROM credential_types WHERE code = ${code} LIMIT 1
@@ -183,6 +227,10 @@ export async function createCredential(
         RETURNING id
       `.execute(trx);
       documentId = doc.rows[0].id;
+      await sql`
+        INSERT INTO document_versions (document_id, file_id, version)
+        VALUES (${documentId}, ${input.fileId}, 1)
+      `.execute(trx);
     }
 
     const result = await sql<CredentialRow>`
@@ -204,17 +252,176 @@ export async function listCredentials(userId: string, organizationId: string, wo
   assertUuid(workerId, "workerId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
-    const result = await sql<CredentialRow & { type_code: string }>`
+    const result = await sql<CredentialRow & { type_code: string; document_status: string | null; organization_review_status: string | null; organization_review_notes: string | null }>`
       SELECT c.id, c.worker_id, c.credential_type_id, c.document_id, c.issuing_entity_name,
              c.issuing_entity_type, c.issued_at, c.expires_at, c.status, c.created_at, c.updated_at,
-             ct.code as type_code
+             ct.code as type_code, d.status AS document_status,
+             ocr.review_status AS organization_review_status, ocr.notes AS organization_review_notes
       FROM credentials c
       JOIN credential_types ct ON ct.id = c.credential_type_id
+      LEFT JOIN documents d ON d.id = c.document_id
+      LEFT JOIN organization_credential_reviews ocr
+        ON ocr.credential_id = c.id AND ocr.organization_id = ${organizationId}
       WHERE c.worker_id = ${workerId}
       ORDER BY ct.code
     `.execute(trx);
+    await sql`SELECT app_notify_credential_expiry_managers(${workerId})`.execute(trx);
     return result.rows;
   });
+}
+
+export async function initiateCredentialDocumentUpload(
+  userId: string,
+  organizationId: string,
+  workerId: string,
+  credentialId: string,
+  input: InitiateCredentialDocumentUploadInput
+) {
+  assertUuid(workerId, "workerId");
+  assertUuid(credentialId, "credentialId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertCredentialManager(trx);
+    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    const fileId = randomUUID();
+    const storageKey = `credentials/${workerId}/${credentialId}/${fileId}`;
+    const result = await sql<{ id: string }>`
+      INSERT INTO stored_files (
+        id, scope_type, owner_worker_id, storage_key, content_type,
+        original_filename, size_bytes, uploaded_by_user_id, visibility, status
+      ) VALUES (
+        ${fileId}, 'PLATFORM_PROFESSIONAL', ${workerId}, ${storageKey}, ${input.contentType},
+        ${input.originalFilename}, ${input.sizeBytes}, ${userId}, 'private', 'hidden'
+      ) RETURNING id
+    `.execute(trx);
+    const uploadUrl = await createPrivateUploadUrl(storageKey, input.contentType);
+    return { fileId: result.rows[0].id, uploadUrl, expiresInSeconds: 300 };
+  });
+}
+
+export async function completeCredentialDocumentUpload(
+  userId: string,
+  organizationId: string,
+  workerId: string,
+  credentialId: string,
+  fileId: string
+) {
+  assertUuid(workerId, "workerId");
+  assertUuid(credentialId, "credentialId");
+  assertUuid(fileId, "fileId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertCredentialManager(trx);
+    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    const fileResult = await sql<{ id: string; storage_key: string; content_type: string; original_filename: string; size_bytes: string }>`
+      SELECT id, storage_key, content_type, original_filename, size_bytes
+      FROM stored_files
+      WHERE id = ${fileId} AND owner_worker_id = ${workerId}
+        AND scope_type = 'PLATFORM_PROFESSIONAL' AND status = 'hidden'
+      LIMIT 1
+    `.execute(trx);
+    const file = fileResult.rows[0];
+    if (!file) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+    if (!file.storage_key.startsWith(`credentials/${workerId}/${credentialId}/`)) throw new InvalidFileOwnershipError("FILE_OWNER_MISMATCH");
+    const object = await inspectPrivateObject(file.storage_key);
+    if (object.sizeBytes !== Number(file.size_bytes) || object.contentType !== file.content_type) {
+      throw new CredentialUploadMismatchError();
+    }
+
+    let documentId = credential.document_id;
+    let version = 1;
+    if (!documentId) {
+      const documentResult = await sql<{ id: string }>`
+        INSERT INTO documents (worker_id, credential_type_id, file_id, status)
+        VALUES (${workerId}, ${credential.credential_type_id}, ${fileId}, 'presented')
+        RETURNING id
+      `.execute(trx);
+      documentId = documentResult.rows[0].id;
+      await sql`UPDATE credentials SET document_id = ${documentId}, updated_at = now() WHERE id = ${credentialId}`.execute(trx);
+    } else {
+      const versionResult = await sql<{ next_version: number }>`
+        SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+        FROM document_versions WHERE document_id = ${documentId}
+      `.execute(trx);
+      version = Number(versionResult.rows[0].next_version);
+      await sql`UPDATE documents SET file_id = ${fileId}, status = 'presented', updated_at = now() WHERE id = ${documentId}`.execute(trx);
+    }
+    await sql`
+      INSERT INTO document_versions (document_id, file_id, version)
+      VALUES (${documentId}, ${fileId}, ${version})
+    `.execute(trx);
+    await sql`UPDATE stored_files SET status = 'active' WHERE id = ${fileId}`.execute(trx);
+    await sql`
+      UPDATE organization_credential_reviews
+      SET review_status = 'pending', notes = NULL, reviewed_at = NULL
+      WHERE credential_id = ${credentialId} AND organization_id = ${organizationId}
+    `.execute(trx);
+    return { documentId, fileId, version, status: "presented" as const };
+  });
+}
+
+export async function listCredentialDocumentVersions(
+  userId: string,
+  organizationId: string,
+  workerId: string,
+  credentialId: string
+) {
+  assertUuid(workerId, "workerId");
+  assertUuid(credentialId, "credentialId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    if (!credential.document_id) return [];
+    const result = await sql<{
+      file_id: string; version: number; original_filename: string; content_type: string;
+      size_bytes: string; created_at: string; is_current: boolean;
+      review_status: string | null; review_notes: string | null; reviewed_at: string | null;
+    }>`
+      SELECT dv.file_id, dv.version, sf.original_filename, sf.content_type,
+             sf.size_bytes, dv.created_at, (d.file_id = dv.file_id) AS is_current,
+             review.review_status, review.notes AS review_notes, review.reviewed_at
+      FROM document_versions dv
+      JOIN documents d ON d.id = dv.document_id
+      JOIN stored_files sf ON sf.id = dv.file_id
+      LEFT JOIN LATERAL (
+        SELECT odvr.review_status, odvr.notes, odvr.reviewed_at
+        FROM organization_document_version_reviews odvr
+        WHERE odvr.organization_id = ${organizationId} AND odvr.file_id = dv.file_id
+        ORDER BY odvr.reviewed_at DESC LIMIT 1
+      ) review ON true
+      WHERE dv.document_id = ${credential.document_id} AND sf.status = 'active'
+      ORDER BY dv.version DESC
+    `.execute(trx);
+    return result.rows;
+  });
+}
+
+export async function createCredentialDocumentDownload(
+  userId: string,
+  organizationId: string,
+  workerId: string,
+  credentialId: string,
+  fileId: string
+) {
+  assertUuid(workerId, "workerId");
+  assertUuid(credentialId, "credentialId");
+  assertUuid(fileId, "fileId");
+  const file = await withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    if (!credential.document_id) throw new CredentialNotFoundError();
+    const result = await sql<{ storage_key: string; original_filename: string; content_type: string }>`
+      SELECT sf.storage_key, sf.original_filename, sf.content_type
+      FROM document_versions dv
+      JOIN stored_files sf ON sf.id = dv.file_id
+      WHERE dv.document_id = ${credential.document_id} AND dv.file_id = ${fileId} AND sf.status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    if (!result.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+    return result.rows[0];
+  });
+  const downloadUrl = await createPrivateDownloadUrl(file.storage_key, file.original_filename, file.content_type);
+  return { downloadUrl, expiresInSeconds: 300 };
 }
 
 /**
@@ -405,7 +612,11 @@ export async function listPlatformVerifications(actingUserId: string, credential
 
 export const organizationReviewSchema = z.object({
   reviewStatus: z.enum(["pending", "approved", "rejected"]),
-  notes: z.string().optional(),
+  notes: z.string().trim().max(2000).optional(),
+}).superRefine((input, context) => {
+  if (input.reviewStatus === "rejected" && !input.notes) {
+    context.addIssue({ code: "custom", path: ["notes"], message: "notes are required when rejecting a document" });
+  }
 });
 export type OrganizationReviewInput = z.infer<typeof organizationReviewSchema>;
 
@@ -419,6 +630,7 @@ export async function createOrUpdateOrganizationReview(
   assertUuid(membershipId, "organizationWorkerMembershipId");
   assertUuid(credentialId, "credentialId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertCredentialManager(trx);
     const membershipRow = await sql<{ worker_id: string }>`
       SELECT worker_id FROM organization_worker_memberships
       WHERE id = ${membershipId} AND organization_id = ${organizationId}
@@ -426,10 +638,30 @@ export async function createOrUpdateOrganizationReview(
     `.execute(trx);
     if (!membershipRow.rows[0]) throw new WorkerNotLinkedError();
 
-    const credCheck = await sql<{ id: string }>`
-      SELECT id FROM credentials WHERE id = ${credentialId} AND worker_id = ${membershipRow.rows[0].worker_id} LIMIT 1
+    const credCheck = await sql<{ id: string; document_id: string | null; file_id: string | null }>`
+      SELECT c.id, c.document_id, d.file_id
+      FROM credentials c LEFT JOIN documents d ON d.id = c.document_id
+      WHERE c.id = ${credentialId} AND c.worker_id = ${membershipRow.rows[0].worker_id} LIMIT 1
     `.execute(trx);
     if (!credCheck.rows[0]) throw new CredentialNotFoundError();
+    if (!credCheck.rows[0].document_id) throw new CredentialDocumentRequiredError();
+
+    await sql`
+      UPDATE documents
+      SET status = ${input.reviewStatus === "approved" ? "verified" : input.reviewStatus === "rejected" ? "rejected" : "presented"},
+          updated_at = now()
+      WHERE id = (SELECT document_id FROM credentials WHERE id = ${credentialId})
+    `.execute(trx);
+
+    await sql`
+      INSERT INTO organization_document_version_reviews (
+        organization_id, credential_id, document_id, file_id,
+        review_status, notes, reviewed_by_user_id
+      ) VALUES (
+        ${organizationId}, ${credentialId}, ${credCheck.rows[0].document_id}, ${credCheck.rows[0].file_id},
+        ${input.reviewStatus}, ${input.notes ?? null}, ${userId}
+      )
+    `.execute(trx);
 
     const existing = await sql<{ id: string }>`
       SELECT id FROM organization_credential_reviews
