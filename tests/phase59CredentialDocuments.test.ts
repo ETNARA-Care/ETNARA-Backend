@@ -17,6 +17,19 @@ describe("Phase 5.9 private credential documents", () => {
     expect(service).not.toMatch(/bytea|base64/i);
   });
 
+  it("supports authenticated backend-proxied uploads when browser CORS blocks the bucket", () => {
+    const storage = read("src/modules/storage/objectStorage.ts");
+    const service = read("src/modules/credentialing/credentialing.service.ts");
+    const routes = read("src/modules/credentialing/credentialing.routes.ts");
+
+    expect(storage).toContain("uploadPrivateObject");
+    expect(service).toContain("uploadCredentialDocumentContent");
+    expect(service).toContain("Number(file.size_bytes) !== body.byteLength");
+    expect(routes).toContain("documents/:fileId/content");
+    expect(routes).toContain("requireAuth");
+    expect(routes).toContain("express.raw");
+  });
+
   it("keeps document versions and resets review after replacement", () => {
     const service = read("src/modules/credentialing/credentialing.service.ts");
     const routes = read("src/modules/credentialing/credentialing.routes.ts");

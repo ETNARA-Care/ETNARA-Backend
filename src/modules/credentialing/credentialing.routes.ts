@@ -1,4 +1,4 @@
-import { Router, type Response } from "express";
+import express, { Router, type Response } from "express";
 import { z } from "zod";
 import {
   createCredential,
@@ -27,6 +27,8 @@ import {
   CredentialUploadMismatchError,
   CredentialDocumentRequiredError,
   initiateCredentialDocumentUploadSchema,
+  credentialDocumentContentTypeSchema,
+  uploadCredentialDocumentContent,
 } from "./credentialing.service.js";
 import { StorageNotConfiguredError } from "../storage/objectStorage.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
@@ -39,6 +41,7 @@ import {
   InvalidTenantContextError,
   UnauthorizedPlatformAccessError,
 } from "../../context/errors.js";
+import { env } from "../../config/env.js";
 
 const router = Router();
 const uuidParam = z.string().uuid();
@@ -239,6 +242,33 @@ router.post(
         String(req.params.credentialId), bodyParsed.data
       );
       res.status(201).json({ upload });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/workers/:workerId/credentials/:credentialId/documents/:fileId/content",
+  requireAuth,
+  express.raw({
+    type: ["application/pdf", "image/jpeg", "image/png"],
+    limit: env.STORAGE_MAX_FILE_BYTES,
+  }),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const contentTypeParsed = credentialDocumentContentTypeSchema.safeParse(req.headers["content-type"]);
+    if (!orgIdParsed.success || !contentTypeParsed.success || !Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const upload = await uploadCredentialDocumentContent(
+        req.auth!.userId, orgIdParsed.data, String(req.params.workerId),
+        String(req.params.credentialId), String(req.params.fileId),
+        contentTypeParsed.data, req.body
+      );
+      res.status(200).json({ upload });
     } catch (err) {
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

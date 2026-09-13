@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-017 — Safari-safe private credential upload
+
+- proxy the authenticated document body through the backend when the private
+  Railway bucket does not authorize cross-origin browser PUTs
+- validate manager authority, tenant ownership, MIME type and exact byte size
+- preserve the existing private bucket, completion verification and versioning
+
+Status: Implemented locally; build and 42/42 tests pass. Publication authorized.
+
+---
+
 ### ETN-015 — Phase 5.4 actionable assignment notifications
 
 - resolve user-owned assignment notifications to their shift
