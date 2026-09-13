@@ -41,24 +41,35 @@ function assertUuid(value: string, label: string): void {
   }
 }
 
-export const createCredentialSchema = z.object({
-  credentialTypeCode: z.string().min(1), // resolved to credential_type_id by code, never hardcoded
-  issuingEntityName: z.string().optional(),
-  issuingEntityType: z.enum(["government", "external_provider", "platform"]),
-  issuedAt: z.string().date().optional(),
-  expiresAt: z.string().date().optional(),
-  fileId: z.string().uuid().optional(),
-});
+export const createCredentialSchema = z
+  .object({
+    credentialTypeCode: z.string().min(1), // resolved to credential_type_id by code, never hardcoded
+    issuingEntityName: z.string().optional(),
+    issuingEntityType: z.enum(["government", "external_provider", "platform"]),
+    issuedAt: z.string().date().optional(),
+    expiresAt: z.string().date().optional(),
+    fileId: z.string().uuid().optional(),
+  })
+  .refine((d) => !d.issuedAt || !d.expiresAt || d.expiresAt >= d.issuedAt, {
+    message: "expiresAt must be on or after issuedAt",
+    path: ["expiresAt"],
+  });
 export type CreateCredentialInput = z.infer<typeof createCredentialSchema>;
 
 const updateCredentialSchema = z
   .object({
     issuingEntityName: z.string(),
+    issuingEntityType: z.enum(["government", "external_provider", "platform"]),
+    issuedAt: z.string().date().nullable(),
     expiresAt: z.string().date().nullable(),
     status: z.enum(["active", "expired", "revoked"]),
   })
   .partial()
-  .refine((d) => Object.keys(d).length > 0, { message: "At least one field required" });
+  .refine((d) => Object.keys(d).length > 0, { message: "At least one field required" })
+  .refine((d) => !d.issuedAt || !d.expiresAt || d.expiresAt >= d.issuedAt, {
+    message: "expiresAt must be on or after issuedAt",
+    path: ["expiresAt"],
+  });
 export type UpdateCredentialInput = z.infer<typeof updateCredentialSchema>;
 export { updateCredentialSchema };
 
@@ -83,6 +94,25 @@ export interface MyCredentialSummary {
   status: string;
   expiresAt: string | null;
   verificationStatus: "verified" | "pending" | "rejected";
+}
+
+export interface CredentialTypeCatalogItem {
+  code: string;
+  name: string;
+}
+
+export async function listCredentialTypes(
+  userId: string,
+  organizationId: string
+): Promise<CredentialTypeCatalogItem[]> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const result = await sql<CredentialTypeCatalogItem>`
+      SELECT code, name
+      FROM credential_types
+      ORDER BY name
+    `.execute(trx);
+    return result.rows;
+  });
 }
 
 /**
@@ -300,6 +330,8 @@ export async function updateCredential(
     // this (or any) update path.
     const fragments = [];
     if (input.issuingEntityName !== undefined) fragments.push(sql`issuing_entity_name = ${input.issuingEntityName}`);
+    if (input.issuingEntityType !== undefined) fragments.push(sql`issuing_entity_type = ${input.issuingEntityType}`);
+    if (input.issuedAt !== undefined) fragments.push(sql`issued_at = ${input.issuedAt}`);
     if (input.expiresAt !== undefined) fragments.push(sql`expires_at = ${input.expiresAt}`);
     if (input.status !== undefined) fragments.push(sql`status = ${input.status}`);
     fragments.push(sql`updated_at = now()`);

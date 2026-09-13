@@ -4,6 +4,7 @@ import {
   createCredential,
   listCredentials,
   listMyCredentialSummaries,
+  listCredentialTypes,
   getCredential,
   updateCredential,
   createCredentialSchema,
@@ -62,6 +63,24 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   return false;
 }
+
+router.get(
+  "/organizations/:organizationId/credential-types",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const credentialTypes = await listCredentialTypes(req.auth!.userId, orgIdParsed.data);
+      res.status(200).json({ credentialTypes });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
 
 router.get(
   "/organizations/:organizationId/me/credentials",
