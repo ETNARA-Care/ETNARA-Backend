@@ -40,6 +40,13 @@ const envSchema = z.object({
   // Comma-separated if more than one is ever needed. No default of "*" --
   // an explicit allowlist is required for any authenticated API.
   ALLOWED_ORIGIN: z.string().default("https://rafaelvegafigueroa-eng.github.io"),
+  STORAGE_ENDPOINT: z.string().url().optional(),
+  STORAGE_REGION: z.string().min(1).optional(),
+  STORAGE_BUCKET: z.string().min(1).optional(),
+  STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
+  STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  STORAGE_FORCE_PATH_STYLE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  STORAGE_MAX_FILE_BYTES: z.string().default("10485760").transform((value) => Number.parseInt(value, 10)).pipe(z.number().int().positive()),
 });
 
 export type Env = z.infer<typeof envSchema>;
