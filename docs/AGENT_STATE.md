@@ -20,6 +20,16 @@ Branch: hotfix/secure-credential-upload
 - Exact next step: publish, merge, wait for Railway, then deploy the paired
   frontend and validate one PDF/JPG/PNG upload from Safari.
 
+### Live follow-up
+
+- The frontend and backend hotfixes were confirmed live, but Railway still
+  returns a generic server error while writing or verifying the object.
+- Added bounded diagnostics containing only operation, error name/code and HTTP
+  status. No tenant, worker, credential, filename, object key, request body,
+  database statement or storage secret is logged.
+- Exact next step: deploy the diagnostic, reproduce once, inspect Railway logs,
+  then correct the proven storage-provider response.
+
 ## Current Backend Checkpoint
 
 The recovered backend work is implemented, reviewed, and published in draft PR #3:

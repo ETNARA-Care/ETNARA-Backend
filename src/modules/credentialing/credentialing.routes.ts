@@ -46,6 +46,22 @@ import { env } from "../../config/env.js";
 const router = Router();
 const uuidParam = z.string().uuid();
 
+function logUnexpectedCredentialStorageError(operation: string, err: unknown): void {
+  const technical = err && typeof err === "object"
+    ? err as { name?: unknown; code?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown } }
+    : {};
+  console.error("Unexpected credential storage failure", {
+    operation,
+    errorName: typeof technical.name === "string" ? technical.name : "UnknownError",
+    errorCode: typeof technical.code === "string"
+      ? technical.code
+      : typeof technical.Code === "string" ? technical.Code : undefined,
+    httpStatusCode: typeof technical.$metadata?.httpStatusCode === "number"
+      ? technical.$metadata.httpStatusCode
+      : undefined,
+  });
+}
+
 function handleTenantError(err: unknown, res: Response): boolean {
   if (err instanceof MembershipNotActiveError || err instanceof OrganizationAccessDeniedError) {
     res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
@@ -270,7 +286,10 @@ router.post(
       );
       res.status(200).json({ upload });
     } catch (err) {
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("uploadCredentialDocumentContent", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );
@@ -291,7 +310,10 @@ router.post(
       );
       res.status(200).json({ document });
     } catch (err) {
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("completeCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );

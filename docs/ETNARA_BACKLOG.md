@@ -11,6 +11,10 @@
 
 Status: Implemented locally; build and 42/42 tests pass. Publication authorized.
 
+Live follow-up: browser and API deployments are current, but the server-to-
+bucket operation still fails. Bounded provider diagnostics are being deployed;
+the next correction must follow the actual Railway error code.
+
 ---
 
 ### ETN-015 — Phase 5.4 actionable assignment notifications
