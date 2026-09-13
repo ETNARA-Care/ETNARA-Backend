@@ -28,6 +28,8 @@ describe("Phase 5.9 private credential documents", () => {
     expect(routes).toContain("documents/:fileId/content");
     expect(routes).toContain("requireAuth");
     expect(routes).toContain("express.raw");
+    expect(routes).toContain("Unexpected credential storage failure");
+    expect(routes).not.toMatch(/request body|originalFilename|storageKey.*console/i);
   });
 
   it("keeps document versions and resets review after replacement", () => {
