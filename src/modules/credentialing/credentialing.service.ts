@@ -4,7 +4,7 @@ import { withTenantContext, withPlatformContext } from "../../context/tenantCont
 import { InvalidTenantContextError, UnauthorizedPlatformAccessError } from "../../context/errors.js";
 import { randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
-import { createPrivateDownloadUrl, createPrivateUploadUrl, inspectPrivateObject } from "../storage/objectStorage.js";
+import { createPrivateDownloadUrl, createPrivateUploadUrl, inspectPrivateObject, uploadPrivateObject } from "../storage/objectStorage.js";
 
 export class WorkerNotLinkedError extends Error {
   constructor() {
@@ -95,6 +95,7 @@ export type UpdateCredentialInput = z.infer<typeof updateCredentialSchema>;
 export { updateCredentialSchema };
 
 const supportedCredentialContentTypes = ["application/pdf", "image/jpeg", "image/png"] as const;
+export const credentialDocumentContentTypeSchema = z.enum(supportedCredentialContentTypes);
 export const initiateCredentialDocumentUploadSchema = z.object({
   originalFilename: z.string().trim().min(1).max(180),
   contentType: z.enum(supportedCredentialContentTypes),
@@ -297,6 +298,48 @@ export async function initiateCredentialDocumentUpload(
     const uploadUrl = await createPrivateUploadUrl(storageKey, input.contentType);
     return { fileId: result.rows[0].id, uploadUrl, expiresInSeconds: 300 };
   });
+}
+
+export async function uploadCredentialDocumentContent(
+  userId: string,
+  organizationId: string,
+  workerId: string,
+  credentialId: string,
+  fileId: string,
+  contentType: z.infer<typeof credentialDocumentContentTypeSchema>,
+  body: Buffer
+) {
+  assertUuid(workerId, "workerId");
+  assertUuid(credentialId, "credentialId");
+  assertUuid(fileId, "fileId");
+  if (body.byteLength === 0 || body.byteLength > env.STORAGE_MAX_FILE_BYTES) {
+    throw new CredentialUploadMismatchError();
+  }
+
+  const file = await withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertCredentialManager(trx);
+    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    const result = await sql<{ storage_key: string; content_type: string; size_bytes: string }>`
+      SELECT storage_key, content_type, size_bytes
+      FROM stored_files
+      WHERE id = ${fileId} AND owner_worker_id = ${workerId}
+        AND scope_type = 'PLATFORM_PROFESSIONAL' AND status = 'hidden'
+      LIMIT 1
+    `.execute(trx);
+    return result.rows[0];
+  });
+
+  if (!file) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+  if (!file.storage_key.startsWith(`credentials/${workerId}/${credentialId}/`)) {
+    throw new InvalidFileOwnershipError("FILE_OWNER_MISMATCH");
+  }
+  if (file.content_type !== contentType || Number(file.size_bytes) !== body.byteLength) {
+    throw new CredentialUploadMismatchError();
+  }
+
+  await uploadPrivateObject(file.storage_key, contentType, body);
+  return { fileId };
 }
 
 export async function completeCredentialDocumentUpload(

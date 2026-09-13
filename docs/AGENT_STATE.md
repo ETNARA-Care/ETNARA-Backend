@@ -4,7 +4,21 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-5/actionable-notifications
+Branch: hotfix/secure-credential-upload
+
+## 2026-09-13 — Secure credential upload hotfix
+
+- Live Safari validation proved that credential metadata saves correctly while
+  direct browser PUTs to the Railway bucket are blocked by bucket CORS.
+- Added an authenticated, manager-only binary upload endpoint that validates
+  organization/worker/credential/file ownership, MIME type and the declared
+  byte length before the backend writes the private object to Railway storage.
+- The existing completion step still performs a HEAD check and preserves the
+  immutable document-version and review history.
+- No authentication, RLS, Family exposure or database schema changed.
+- Local TypeScript build and all 42 backend tests pass.
+- Exact next step: publish, merge, wait for Railway, then deploy the paired
+  frontend and validate one PDF/JPG/PNG upload from Safari.
 
 ## Current Backend Checkpoint
 

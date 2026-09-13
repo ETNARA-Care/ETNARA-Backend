@@ -40,6 +40,17 @@ export async function createPrivateUploadUrl(storageKey: string, contentType: st
   return getSignedUrl(s3, new PutObjectCommand({ Bucket: bucket, Key: storageKey, ContentType: contentType }), { expiresIn: 300 });
 }
 
+export async function uploadPrivateObject(storageKey: string, contentType: string, body: Buffer) {
+  const { s3, bucket } = client();
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: storageKey,
+    ContentType: contentType,
+    ContentLength: body.byteLength,
+    Body: body,
+  }));
+}
+
 export async function inspectPrivateObject(storageKey: string) {
   const { s3, bucket } = client();
   const result = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: storageKey }));
