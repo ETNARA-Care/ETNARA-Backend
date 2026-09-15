@@ -176,8 +176,8 @@ export async function updateMembership(
   assertUuid(membershipId, "organizationWorkerMembershipId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertWorkforceManager(trx);
-    const current = await sql<{ display_name: string | null }>`
-      SELECT w.display_name
+    const current = await sql<{ display_name: string | null; status: string }>`
+      SELECT w.display_name, owm.status
       FROM organization_worker_memberships owm
       JOIN workers w ON w.id = owm.worker_id
       WHERE owm.id = ${membershipId} AND owm.organization_id = ${organizationId}
@@ -209,6 +209,21 @@ export async function updateMembership(
       RETURNING id, worker_id, organization_id, status, internal_role, hired_at, ended_at, created_at, updated_at
     `.execute(trx);
     if (!result.rows[0]) throw new MembershipNotFoundError();
+
+    if (input.status !== undefined && input.status !== current.rows[0].status) {
+      await sql`
+        INSERT INTO audit_log (
+          actor_user_id, organization_id, target_organization_id, action,
+          entity_type, entity_id, previous_value, new_value
+        ) VALUES (
+          ${userId}, ${organizationId}, ${organizationId},
+          'WORKER_MEMBERSHIP_STATUS_CHANGED', 'organization_worker_membership', ${membershipId},
+          jsonb_build_object('status', ${current.rows[0].status}),
+          jsonb_build_object('status', ${input.status})
+        )
+      `.execute(trx);
+    }
+
     return { ...result.rows[0], display_name: input.displayName ?? current.rows[0].display_name };
   });
 }
