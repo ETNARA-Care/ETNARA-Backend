@@ -176,21 +176,48 @@ async function main() {
 
   async function ensureDemoRequirementSet(): Promise<void> {
     // La API de asignaciones siempre evalúa elegibilidad. La organización
-    // demo necesita una política explícita para que esa evaluación exista;
-    // un set sin requisitos obligatorios significa que cualquier membership
-    // activa es elegible. Se limita a ESTA organización demo y nunca crea ni
-    // modifica una política global o de una organización real.
+    // demo necesita una política explícita y completa. Se limita a ESTA
+    // organización demo y nunca crea ni modifica una política global o de
+    // una organización real.
     const name = "Demo: membresía activa";
     const existing = await client.query(
       `SELECT id FROM requirement_sets WHERE organization_id = $1 AND name = $2 LIMIT 1`,
       [orgId, name]
     );
-    if (existing.rows.length > 0) return;
-    await client.query(
-      `INSERT INTO requirement_sets (organization_id, organization_type, name)
-       VALUES ($1, 'HOME_CARE_AGENCY', $2)`,
-      [orgId, name]
-    );
+    let requirementSetId = existing.rows[0]?.id as string | undefined;
+    if (!requirementSetId) {
+      const created = await client.query(
+        `INSERT INTO requirement_sets (organization_id, organization_type, name)
+         VALUES ($1, 'HOME_CARE_AGENCY', $2)
+         RETURNING id`,
+        [orgId, name]
+      );
+      requirementSetId = created.rows[0].id as string;
+    }
+
+    const mandatoryCredentialTypes = [
+      "IDENTITY",
+      "BACKGROUND_CHECK",
+      "LEY_300",
+      "CPR",
+      "BLS",
+      "INTERNAL_TRAINING",
+    ];
+    for (const typeCode of mandatoryCredentialTypes) {
+      await client.query(
+        `INSERT INTO requirements (
+           requirement_set_id, credential_type_id, is_mandatory, requires_organization_review
+         )
+         SELECT $1, ct.id, true, false
+         FROM credential_types ct
+         WHERE ct.code = $2
+           AND NOT EXISTS (
+             SELECT 1 FROM requirements r
+             WHERE r.requirement_set_id = $1 AND r.credential_type_id = ct.id
+           )`,
+        [requirementSetId, typeCode]
+      );
+    }
   }
 
   console.log("Verificando política de elegibilidad demo...");
