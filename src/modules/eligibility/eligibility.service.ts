@@ -169,6 +169,19 @@ export async function evaluateWorkerEligibility(
             reason = "OK";
           }
         }
+      } else {
+        // Preserve the normal "latest non-revoked credential" behavior so a
+        // revoked historical record does not hide an older valid credential.
+        // If no usable record exists at all, distinguish an explicitly
+        // revoked credential from one that was never registered.
+        const revokedCredential = await sql<{ id: string }>`
+          SELECT id FROM credentials
+          WHERE worker_id = ${membership.worker_id} AND credential_type_id = ${req.credential_type_id}
+            AND status = 'revoked'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `.execute(trx);
+        if (revokedCredential.rows[0]) reason = "CREDENTIAL_REVOKED";
       }
 
       requirementResults.push({
@@ -220,6 +233,7 @@ export interface ComplianceSummary {
   requirements: Array<{
     requirement: string;
     status: string;
+    isMandatory: boolean;
     requiresOrganizationReview: boolean;
   }>;
 }
@@ -235,6 +249,7 @@ export async function getComplianceSummary(
     requirements: result.requirements.map((r) => ({
       requirement: r.credentialTypeCode,
       status: r.satisfied ? "satisfied" : r.reason,
+      isMandatory: r.isMandatory,
       requiresOrganizationReview: r.requiresOrganizationReview,
     })),
   };
