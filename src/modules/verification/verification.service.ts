@@ -151,6 +151,73 @@ async function findActiveCheckIn(trx: unknown, shiftId: string, membershipId: st
   return laterCheckOut.rows[0] ? null : lastCheckIn;
 }
 
+async function notifyShiftStatus(
+  trx: unknown,
+  actorUserId: string,
+  organizationId: string,
+  shiftId: string,
+  notificationType: "SHIFT_STARTED" | "SHIFT_COMPLETED"
+): Promise<void> {
+  await sql`
+    WITH shift_recipients AS (
+      SELECT DISTINCT cr.id AS care_recipient_id
+      FROM shifts s
+      JOIN care_recipients cr
+        ON cr.organization_id = s.organization_id
+       AND (
+         cr.id = s.care_recipient_id
+         OR (s.care_recipient_id IS NULL AND s.room_id IS NOT NULL AND cr.room_id = s.room_id)
+       )
+      WHERE s.id = ${shiftId} AND s.organization_id = ${organizationId}
+    ), targets AS (
+      SELECT DISTINCT om.user_id, sr.care_recipient_id
+      FROM shift_recipients sr
+      JOIN organization_memberships om
+        ON om.organization_id = ${organizationId} AND om.status = 'active'
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+
+      UNION
+
+      SELECT DISTINCT fr.user_id, sr.care_recipient_id
+      FROM shift_recipients sr
+      JOIN family_relationships fr
+        ON fr.organization_id = ${organizationId}
+       AND fr.care_recipient_id = sr.care_recipient_id
+       AND fr.status = 'active'
+       AND fr.can_receive_notifications = true
+      WHERE EXISTS (
+        SELECT 1
+        FROM organization_memberships om
+        JOIN user_roles ur ON ur.organization_membership_id = om.id
+        JOIN roles r ON r.id = ur.role_id AND r.code = 'FAMILY'
+        WHERE om.user_id = fr.user_id
+          AND om.organization_id = ${organizationId}
+          AND om.status = 'active'
+      )
+    )
+    INSERT INTO notifications (
+      user_id, organization_id, notification_type, related_entity_type,
+      related_entity_id, care_recipient_id, channel, status, sent_at
+    )
+    SELECT
+      targets.user_id, ${organizationId}, ${notificationType}, 'shift',
+      ${shiftId}, targets.care_recipient_id, 'in_app', 'sent', now()
+    FROM targets
+    WHERE targets.user_id <> ${actorUserId}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM notifications existing
+        WHERE existing.user_id = targets.user_id
+          AND existing.organization_id = ${organizationId}
+          AND existing.notification_type = ${notificationType}
+          AND existing.related_entity_type = 'shift'
+          AND existing.related_entity_id = ${shiftId}
+          AND existing.care_recipient_id = targets.care_recipient_id
+      )
+  `.execute(trx as never);
+}
+
 export async function checkIn(
   userId: string,
   organizationId: string,
@@ -206,6 +273,8 @@ export async function checkIn(
     await sql`UPDATE shifts SET status = 'in_progress', updated_at = now() WHERE id = ${shiftId} AND status != 'cancelled'`.execute(
       trx
     );
+
+    await notifyShiftStatus(trx, userId, organizationId, shiftId, "SHIFT_STARTED");
 
     return result.rows[0];
   });
@@ -278,6 +347,7 @@ export async function checkOut(
       await sql`UPDATE shifts SET status = 'completed', updated_at = now() WHERE id = ${shiftId} AND status = 'in_progress'`.execute(
         trx
       );
+      await notifyShiftStatus(trx, userId, organizationId, shiftId, "SHIFT_COMPLETED");
     }
 
     return result.rows[0];
