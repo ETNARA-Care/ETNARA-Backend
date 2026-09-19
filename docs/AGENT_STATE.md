@@ -4,7 +4,23 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: hotfix/secure-credential-upload
+Branch: phase-6/end-to-end-validation
+
+## 2026-09-15 — Phase 6 end-to-end operational synchronization
+
+- Check-in and final checkout now create idempotent, recipient-scoped in-app
+  notifications for active organization managers and opted-in authorized
+  Family members.
+- Notification responses expose the shift destination without leaking
+  verification method, location or other operational details to Family.
+- The accepted-assignment and current work-eligibility gates remain
+  authoritative before check-in; care activities still require an active
+  visit, and incident/message authorization remains unchanged.
+- Phase 5.9 private-document transport remains deferred and isolated.
+- Backend build and all 47 tests pass.
+- Exact next step: publish the coordinated Phase 6 backend/frontend changes
+  after explicit authorization, deploy backend first, then validate one full
+  Admin → María → Family turn in staging.
 
 ## 2026-09-13 — Secure credential upload hotfix
 

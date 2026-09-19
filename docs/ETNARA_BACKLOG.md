@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-019 — Phase 6 end-to-end operational synchronization
+
+- notify authorized Admin and Family when an accepted caregiver starts or
+  completes a shift
+- preserve accepted-assignment and current work-eligibility gates
+- keep notifications recipient-scoped, idempotent and Family-safe
+- validate the same shift across Admin, Caregiver and Family
+
+Status: Implemented locally; backend build and 47/47 tests pass. Coordinated
+publication requires explicit authorization.
+
+---
+
 ### ETN-017 — Safari-safe private credential upload
 
 - proxy the authenticated document body through the backend when the private

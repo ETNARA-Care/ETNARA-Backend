@@ -54,6 +54,10 @@ function summarizeType(notificationType: string): string {
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":
       return "Turno rechazado por la cuidadora";
+    case "SHIFT_STARTED":
+      return "La cuidadora comenzó el turno";
+    case "SHIFT_COMPLETED":
+      return "La cuidadora finalizó el turno";
     case "CREDENTIAL_EXPIRING":
       return "Credencial próxima a vencer";
     case "CREDENTIAL_EXPIRED":
@@ -79,6 +83,8 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
              CASE
                WHEN related_entity_type = 'assignment'
                  THEN app_notification_assignment_shift_id(id)
+               WHEN related_entity_type = 'shift'
+                 THEN related_entity_id
                ELSE NULL
              END AS shift_id,
              CASE
