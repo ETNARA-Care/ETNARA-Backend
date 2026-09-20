@@ -4,7 +4,23 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: fix/demo-caregiver-eligibility
+Branch: phase-7/platform-verification
+
+## 2026-09-20 — Phase 7.6.1 platform credential verification
+
+- Added a platform-only queue of real, current credential documents across
+  organizations; organization roles cannot grant access to it.
+- Platform decisions are now bound to the current stored-file version, retain
+  immutable history and require an audit note on rejection.
+- Work eligibility reads only the latest decision for the current file, so a
+  replacement document returns to pending and a rejection blocks assignment.
+- Document downloads use short-lived private URLs after platform authority and
+  current-file ownership are revalidated.
+- `/me` exposes independently verified platform authority, and only the exact
+  demo administrator is seeded into that authority table.
+- Backend TypeScript build and all 71 tests pass locally.
+- Exact next step: validate migration 055 on PostgreSQL 16, review the final
+  diff and publish only after explicit authorization.
 
 ## 2026-09-20 — Demo caregiver eligibility correction
 
