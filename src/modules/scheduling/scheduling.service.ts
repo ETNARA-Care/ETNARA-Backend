@@ -447,7 +447,23 @@ export async function cancelShift(userId: string, organizationId: string, shiftI
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start,
                 scheduled_end, status, created_at, updated_at
     `.execute(trx);
-    if (result.rows[0]) return result.rows[0];
+    if (result.rows[0]) {
+      await sql`
+        WITH cancelled_campaigns AS (
+          UPDATE coverage_campaigns
+          SET status = 'cancelled', next_wave_at = NULL, updated_at = now()
+          WHERE organization_id = ${organizationId}
+            AND shift_id = ${shiftId}
+            AND status = 'open'
+          RETURNING id
+        )
+        UPDATE coverage_offers
+        SET response_status = 'withdrawn', responded_at = now()
+        WHERE coverage_campaign_id IN (SELECT id FROM cancelled_campaigns)
+          AND response_status IN ('pending', 'queued')
+      `.execute(trx);
+      return result.rows[0];
+    }
 
     const existing = await sql<{ id: string }>`
       SELECT id FROM shifts
