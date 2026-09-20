@@ -118,8 +118,9 @@ export async function evaluateWorkerEligibility(
         id: string;
         status: string;
         expires_at: string | null;
+        document_id: string | null;
       }>`
-        SELECT id, status, expires_at FROM credentials
+        SELECT id, status, expires_at, document_id FROM credentials
         WHERE worker_id = ${membership.worker_id} AND credential_type_id = ${req.credential_type_id}
           AND status != 'revoked'
         ORDER BY created_at DESC
@@ -143,14 +144,22 @@ export async function evaluateWorkerEligibility(
           // A credential only "counts" toward eligibility once the
           // platform has verified it -- verification travels with the
           // worker, but eligibility never assumes it without checking.
-          const platformVerified = await sql<{ id: string }>`
-            SELECT id FROM credential_platform_verifications
-            WHERE credential_id = ${credential.id} AND status = 'verified'
-            ORDER BY verified_at DESC LIMIT 1
+          const platformVerification = await sql<{ status: string }>`
+            SELECT cpv.status
+            FROM credential_platform_verifications cpv
+            LEFT JOIN documents d ON d.id = ${credential.document_id}
+            WHERE cpv.credential_id = ${credential.id}
+              AND (
+                cpv.file_id = d.file_id
+                OR (cpv.file_id IS NULL AND d.id IS NULL)
+              )
+            ORDER BY cpv.verified_at DESC LIMIT 1
           `.execute(trx);
 
-          if (!platformVerified.rows[0]) {
+          if (!platformVerification.rows[0]) {
             reason = "PLATFORM_VERIFICATION_MISSING";
+          } else if (platformVerification.rows[0].status === "rejected") {
+            reason = "PLATFORM_VERIFICATION_REJECTED";
           } else if (req.requires_organization_review) {
             const orgReview = await sql<{ id: string }>`
               SELECT id FROM organization_credential_reviews

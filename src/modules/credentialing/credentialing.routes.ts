@@ -15,6 +15,8 @@ import {
   updateCredentialSchema,
   createPlatformVerification,
   listPlatformVerifications,
+  listPlatformCredentialVerificationQueue,
+  createPlatformCredentialDocumentDownload,
   platformVerificationSchema,
   createOrUpdateOrganizationReview,
   organizationReviewSchema,
@@ -363,6 +365,44 @@ router.post(
 );
 
 // ===================== Platform Verification (platform admin only) =====================
+
+router.get(
+  "/platform/credentials/verification-queue",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const credentials = await listPlatformCredentialVerificationQueue(req.auth!.userId);
+      res.status(200).json({ credentials });
+    } catch (err) {
+      if (err instanceof UnauthorizedPlatformAccessError) {
+        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
+        return;
+      }
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.post(
+  "/platform/credentials/:credentialId/documents/:fileId/download-url",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const download = await createPlatformCredentialDocumentDownload(
+        req.auth!.userId,
+        String(req.params.credentialId),
+        String(req.params.fileId)
+      );
+      res.status(200).json({ download });
+    } catch (err) {
+      if (err instanceof UnauthorizedPlatformAccessError) {
+        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
+        return;
+      }
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
 
 router.post(
   "/platform/credentials/:credentialId/verifications",

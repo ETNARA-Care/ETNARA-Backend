@@ -1,6 +1,6 @@
 import { sql } from "kysely";
 import { z } from "zod";
-import { withUserContext, withTenantContext } from "../../context/tenantContext.js";
+import { isActivePlatformAdmin, withUserContext, withTenantContext } from "../../context/tenantContext.js";
 import { MembershipNotActiveError, InvalidTenantContextError } from "../../context/errors.js";
 
 export class InvalidOrganizationIdError extends Error {
@@ -18,6 +18,7 @@ export class OrganizationAccessDeniedError extends Error {
 
 export interface MeResult {
   user: { id: string; email: string | null; phone: string | null };
+  platformAdmin: boolean;
   organizations: Array<{
     id: string;
     name: string;
@@ -34,6 +35,7 @@ export interface MeResult {
  * advance. Relies on the auth-bootstrap self-lookup RLS policies.
  */
 export async function getMe(userId: string): Promise<MeResult> {
+  const platformAdmin = await isActivePlatformAdmin(userId);
   return withUserContext(userId, async (trx) => {
     const userRows = await sql<{ id: string; email: string | null; phone: string | null }>`
       SELECT id, email, phone FROM users WHERE id = ${userId} LIMIT 1
@@ -81,7 +83,7 @@ export async function getMe(userId: string): Promise<MeResult> {
       if (row.role_code) byOrg.get(row.organization_id)!.roles.push(row.role_code);
     }
 
-    return { user, organizations: Array.from(byOrg.values()) };
+    return { user, platformAdmin, organizations: Array.from(byOrg.values()) };
   });
 }
 
