@@ -4,7 +4,51 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-6/end-to-end-validation
+Branch: phase-7/worker-availability
+
+## 2026-09-20 — Phase 7.3 worker-declared availability
+
+- Caregivers can maintain their own weekly work windows and future periods of
+  unavailability through an authenticated, organization-scoped API.
+- Migration 050 stores availability separately from assignments, protects it
+  with manager-or-self row-level security and preserves eligibility as the
+  authoritative work gate.
+- Coverage recommendations now explain declared availability and exclude a
+  configured caregiver when the proposed turn falls outside it or overlaps a
+  time-off block.
+- Unconfigured availability remains a visible, non-blocking rollout state;
+  ETNARA never creates an assignment from a recommendation.
+- Backend TypeScript build and all 56 tests pass.
+- Exact next step: publish the coordinated backend/frontend changes after
+  explicit authorization, deploy backend first and validate the live workflow.
+
+## 2026-09-19 — Phase 7.2 assisted coverage intelligence
+
+- Added a manager-only recommendation endpoint for a real resident and shift
+  window; it performs no assignment mutation.
+- Candidates are ranked deterministically from fresh work eligibility,
+  schedule conflicts, completed-shift continuity and upcoming seven-day load.
+- Ineligible workers and workers with overlapping pending/accepted shifts are
+  never marked recommended, and every candidate includes reasons and blockers.
+- Backend TypeScript build and all 53 tests pass.
+- Published and merged in backend PR #30. Pull-request and post-merge CI
+  passed; Railway health returned HTTP 200 and the protected recommendation
+  route returned the expected unauthenticated response.
+- Exact next step: validate one recommended and one blocked candidate through
+  the live Administration workflow.
+
+## 2026-09-19 — Phase 7.1 individual care plans
+
+- Activated the existing versioned `care_plans` model through a real API.
+- Plan details now have a validated structure for support level, goals,
+  instructions, precautions and caregiver tasks.
+- Saving creates a new version, supersedes the prior active version and never
+  deletes plan history.
+- Migration 049 narrows plan reads to managers and assigned workers and limits
+  writes to managers; Family receives no raw plan endpoint.
+- Backend TypeScript build and all 50 tests pass.
+- Phase 7.1 was published and merged in backend PR #29; CI and Railway health
+  validation passed before the paired frontend deployment.
 
 ## 2026-09-15 — Phase 6 end-to-end operational synchronization
 

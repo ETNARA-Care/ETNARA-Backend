@@ -36,6 +36,9 @@ interface CandidateRow {
   has_schedule_conflict: boolean;
   continuity_count: number;
   scheduled_minutes_next_7_days: number;
+  availability_configured: boolean;
+  matches_weekly_availability: boolean;
+  has_unavailability_period: boolean;
 }
 
 export interface CoverageCandidate {
@@ -46,6 +49,9 @@ export interface CoverageCandidate {
   hasScheduleConflict: boolean;
   continuityCount: number;
   scheduledMinutesNext7Days: number;
+  availabilityConfigured: boolean;
+  matchesDeclaredAvailability: boolean;
+  hasUnavailabilityPeriod: boolean;
   recommended: boolean;
   rank: number | null;
   reasons: string[];
@@ -101,7 +107,30 @@ export async function recommendCoverage(
             AND load_shift.status != 'cancelled'
             AND load_shift.scheduled_start >= ${input.scheduledStart}
             AND load_shift.scheduled_start < ${input.scheduledStart}::timestamptz + interval '7 days'
-        ), 0)::int AS scheduled_minutes_next_7_days
+        ), 0)::int AS scheduled_minutes_next_7_days,
+        EXISTS (
+          SELECT 1 FROM worker_availability_settings availability_settings
+          WHERE availability_settings.organization_worker_membership_id = owm.id
+        ) AS availability_configured,
+        EXISTS (
+          SELECT 1
+          FROM worker_availability_settings availability_settings
+          JOIN worker_weekly_availability weekly
+            ON weekly.organization_worker_membership_id = availability_settings.organization_worker_membership_id
+          WHERE availability_settings.organization_worker_membership_id = owm.id
+            AND (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone)::date
+              = (${input.scheduledEnd}::timestamptz AT TIME ZONE availability_settings.timezone)::date
+            AND extract(dow FROM (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone))::int
+              = weekly.weekday
+            AND (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone)::time >= weekly.start_time
+            AND (${input.scheduledEnd}::timestamptz AT TIME ZONE availability_settings.timezone)::time <= weekly.end_time
+        ) AS matches_weekly_availability,
+        EXISTS (
+          SELECT 1 FROM worker_unavailability_periods unavailable
+          WHERE unavailable.organization_worker_membership_id = owm.id
+            AND unavailable.starts_at < ${input.scheduledEnd}
+            AND unavailable.ends_at > ${input.scheduledStart}
+        ) AS has_unavailability_period
       FROM organization_worker_memberships owm
       JOIN workers w ON w.id = owm.worker_id
       WHERE owm.organization_id = ${organizationId} AND owm.status = 'active'
@@ -117,12 +146,23 @@ export async function recommendCoverage(
       .filter((requirement) => requirement.isMandatory && !requirement.satisfied)
       .map((requirement) => `${requirement.credentialTypeCode}: ${requirement.reason}`);
     const isEligible = eligibility.eligibilityStatus === "eligible";
-    const recommended = isEligible && !worker.has_schedule_conflict;
+    const matchesDeclaredAvailability = !worker.availability_configured
+      || (worker.matches_weekly_availability && !worker.has_unavailability_period);
+    const recommended = isEligible && !worker.has_schedule_conflict && matchesDeclaredAvailability;
     const reasons = isEligible ? ["Cumple los requisitos obligatorios"] : [];
     const blockers = [...mandatoryFailures];
 
     if (worker.has_schedule_conflict) blockers.push("Tiene otro turno que coincide con este horario");
     else reasons.push("No se encontró conflicto con otro turno");
+    if (!worker.availability_configured) {
+      reasons.push("Disponibilidad semanal aún no configurada");
+    } else if (worker.has_unavailability_period) {
+      blockers.push("Declaró que no está disponible en este horario");
+    } else if (!worker.matches_weekly_availability) {
+      blockers.push("El turno está fuera de su disponibilidad semanal");
+    } else {
+      reasons.push("Coincide con su disponibilidad declarada");
+    }
     if (worker.continuity_count > 0) {
       reasons.push(`Continuidad: ${worker.continuity_count} turno(s) completado(s) con esta persona`);
     }
@@ -137,6 +177,9 @@ export async function recommendCoverage(
       hasScheduleConflict: worker.has_schedule_conflict,
       continuityCount: worker.continuity_count,
       scheduledMinutesNext7Days: worker.scheduled_minutes_next_7_days,
+      availabilityConfigured: worker.availability_configured,
+      matchesDeclaredAvailability,
+      hasUnavailabilityPeriod: worker.has_unavailability_period,
       recommended,
       rank: null,
       reasons,

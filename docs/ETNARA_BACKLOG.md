@@ -2,6 +2,45 @@
 
 ## In Progress
 
+### ETN-022 — Phase 7.3 worker-declared availability
+
+- let each linked caregiver maintain weekly work windows and time-off blocks
+- protect availability with organization-scoped manager-or-self RLS
+- incorporate declared availability into explainable coverage recommendations
+- keep unconfigured availability non-blocking during rollout
+- preserve eligibility gates and explicit human assignment confirmation
+
+Status: Implemented locally; backend build and 56/56 tests pass. Coordinated
+publication requires explicit authorization.
+
+---
+
+### ETN-021 — Phase 7.2 assisted coverage intelligence
+
+- rank active caregivers for a real resident and shift window
+- require current work eligibility and exclude schedule conflicts
+- explain continuity and upcoming seven-day workload without inventing data
+- keep the recommendation read-only and require human assignment confirmation
+
+Status: Published and merged in backend PR #30. Pull-request and post-merge CI
+passed; Railway health and protected-route checks succeeded.
+
+---
+
+### ETN-020 — Phase 7.1 individual care plans
+
+- create versioned, resident-scoped care plans with support level, goals,
+  instructions, precautions and structured tasks
+- restrict plan management to organization managers
+- allow read access only to managers and workers assigned to the resident
+- preserve every previous version and prohibit deletion
+- keep Family off the raw operational care-plan contract
+
+Status: Published and merged in backend PR #29; CI and Railway health checks
+passed before the paired frontend deployment.
+
+---
+
 ### ETN-019 — Phase 6 end-to-end operational synchronization
 
 - notify authorized Admin and Family when an accepted caregiver starts or
