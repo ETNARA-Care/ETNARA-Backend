@@ -86,7 +86,8 @@ export async function withTenantContext<T>(
   });
 }
 
-async function isActivePlatformAdmin(userId: string): Promise<boolean> {
+export async function isActivePlatformAdmin(userId: string): Promise<boolean> {
+  assertValidUuid(userId, "userId");
   const result = await sql<{ user_id: string }>`
     SELECT user_id FROM platform_admins
     WHERE user_id = ${userId} AND revoked_at IS NULL
