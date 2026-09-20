@@ -4,7 +4,23 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/staged-coverage
+Branch: fix/demo-caregiver-eligibility
+
+## 2026-09-20 — Demo caregiver eligibility correction
+
+- The eligibility engine remains authoritative: active membership alone never
+  grants permission to work.
+- Staging bootstrap now gives every active caregiver in the exact organization
+  `Cuidado en Casa Demo` a complete set of valid, fictitious and platform-
+  verified demo credentials.
+- The correction is idempotent, never changes another organization, never
+  weakens RLS and preserves expired or revoked credential history by creating a
+  new valid demo record only when necessary.
+- This supplies eligible demo candidates to validate Phase 7.5 staged waves
+  while the real platform-verifier workflow remains separate.
+- Backend TypeScript build and all 67 tests pass.
+- Exact next step: review the final diff, commit locally and publish only after
+  explicit authorization.
 
 ## 2026-09-20 — Phase 7.5 staged coverage escalation
 

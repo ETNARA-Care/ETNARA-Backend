@@ -27,6 +27,14 @@ async function main() {
 
   console.log("Buscando/creando organización demo...");
   const orgId = await findOrCreateOrganization("Cuidado en Casa Demo");
+  const demoCredentialRequirements = [
+    { typeCode: "IDENTITY", issuingEntityType: "government" },
+    { typeCode: "BACKGROUND_CHECK", issuingEntityType: "platform", expiresInDays: 365 },
+    { typeCode: "LEY_300", issuingEntityType: "government", expiresInDays: 300 },
+    { typeCode: "CPR", issuingEntityType: "external_provider", expiresInDays: 365 },
+    { typeCode: "BLS", issuingEntityType: "external_provider", expiresInDays: 365 },
+    { typeCode: "INTERNAL_TRAINING", issuingEntityType: "platform", expiresInDays: 730 },
+  ] as const;
 
   async function createUser(email: string): Promise<{ id: string; created: boolean }> {
     const existing = await client.query(`SELECT id FROM users WHERE lower(email) = lower($1)`, [email]);
@@ -136,7 +144,8 @@ async function main() {
       `SELECT c.id
        FROM credentials c
        JOIN credential_types ct ON ct.id = c.credential_type_id
-       WHERE c.worker_id = $1 AND ct.code = $2 AND c.status <> 'revoked'
+       WHERE c.worker_id = $1 AND ct.code = $2 AND c.status = 'active'
+         AND (c.expires_at IS NULL OR c.expires_at >= current_date)
        ORDER BY c.created_at DESC LIMIT 1`,
       [workerId, typeCode]
     );
@@ -195,15 +204,7 @@ async function main() {
       requirementSetId = created.rows[0].id as string;
     }
 
-    const mandatoryCredentialTypes = [
-      "IDENTITY",
-      "BACKGROUND_CHECK",
-      "LEY_300",
-      "CPR",
-      "BLS",
-      "INTERNAL_TRAINING",
-    ];
-    for (const typeCode of mandatoryCredentialTypes) {
+    for (const { typeCode } of demoCredentialRequirements) {
       await client.query(
         `INSERT INTO requirements (
            requirement_set_id, credential_type_id, is_mandatory, requires_organization_review
@@ -261,13 +262,27 @@ async function main() {
   const membership1Id = await findOrCreateWorkerMembership(worker1Id, "CNA");
   await findOrCreateWorkerMembership(worker2Id, "HHA");
 
-  console.log("Verificando credenciales demo de María...");
-  await ensureDemoCredential(worker1Id, adminId, "IDENTITY", "government");
-  await ensureDemoCredential(worker1Id, adminId, "BACKGROUND_CHECK", "platform", 365);
-  await ensureDemoCredential(worker1Id, adminId, "LEY_300", "government", 300);
-  await ensureDemoCredential(worker1Id, adminId, "CPR", "external_provider", 45);
-  await ensureDemoCredential(worker1Id, adminId, "BLS", "external_provider", 365);
-  await ensureDemoCredential(worker1Id, adminId, "INTERNAL_TRAINING", "platform", 730);
+  console.log("Verificando credenciales demo de todos los cuidadores activos...");
+  const activeDemoWorkers = await client.query<{ id: string; display_name: string | null }>(
+    `SELECT DISTINCT w.id, w.display_name
+     FROM workers w
+     JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+     WHERE owm.organization_id = $1 AND owm.status = 'active'
+     ORDER BY w.id`,
+    [orgId]
+  );
+  for (const worker of activeDemoWorkers.rows) {
+    for (const requirement of demoCredentialRequirements) {
+      await ensureDemoCredential(
+        worker.id,
+        adminId,
+        requirement.typeCode,
+        requirement.issuingEntityType,
+        "expiresInDays" in requirement ? requirement.expiresInDays : undefined
+      );
+    }
+    console.log(`  apto para pruebas: ${worker.display_name ?? worker.id}`);
+  }
 
   console.log("Habilitando tipos de evento...");
   const typeRows = await client.query(`SELECT id FROM care_event_types`);
