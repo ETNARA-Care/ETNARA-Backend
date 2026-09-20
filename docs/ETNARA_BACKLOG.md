@@ -2,6 +2,18 @@
 
 ## In Progress
 
+### ETN-026 — Demo caregiver eligibility correction
+
+- provision valid fictitious credentials only inside `Cuidado en Casa Demo`
+- include every active demo caregiver so staged waves can be exercised
+- keep production eligibility, platform verification and RLS authoritative
+- preserve credential history and idempotent staging bootstrap behavior
+
+Status: Implemented locally; backend TypeScript build and all 67 tests pass.
+Publication requires explicit authorization.
+
+---
+
 ### ETN-025 — Phase 7.5 staged coverage escalation
 
 - keep a ranked, auditable queue for every open coverage campaign
