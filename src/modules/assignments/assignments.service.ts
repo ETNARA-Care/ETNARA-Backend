@@ -217,7 +217,7 @@ export async function createAssignment(
       UPDATE coverage_offers
       SET response_status = 'withdrawn', responded_at = now()
       WHERE coverage_campaign_id IN (SELECT id FROM closed_campaigns)
-        AND response_status = 'pending'
+        AND response_status IN ('pending', 'queued')
     `.execute(trx);
 
     if (membership.user_id) {

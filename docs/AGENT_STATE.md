@@ -4,7 +4,25 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: fix/coverage-offer-response
+Branch: phase-7/staged-coverage
+
+## 2026-09-20 — Phase 7.5 staged coverage escalation
+
+- A coverage campaign now snapshots every currently recommended candidate and
+  exposes only one ranked wave of three caregivers at a time.
+- Each wave has a bounded 30-minute response window. A concurrency-safe
+  background worker expires unanswered offers and activates the next wave;
+  an all-declined wave progresses immediately.
+- One interested response stops further escalation. ETNARA never creates an
+  assignment; Administration retains the existing final assignment action.
+- Queued caregivers cannot see an offer before activation and every caregiver
+  continues to receive only the work window and requested role.
+- Assignment or cancellation withdraws pending and queued offers without
+  deleting campaign history. Exhausted campaigns can be retried explicitly.
+- Backend TypeScript build and all 67 tests pass locally.
+- Exact next step: publish only after explicit authorization, validate migration
+  054 on PostgreSQL 16 CI, deploy backend before frontend, then test one timed
+  second-wave progression in production.
 
 ## 2026-09-20 — Coverage-offer response hotfix
 
@@ -14,8 +32,8 @@ Branch: fix/coverage-offer-response
   memberships directly; tenant RLS correctly blocks that lookup.
 - Migration 053 adds a narrowly scoped, validated SECURITY DEFINER notifier,
   matching the established assignment-response notification pattern.
-- Exact next step: publish after explicit authorization, apply migration 053,
-  and retry the existing pending offer response.
+- Published and merged in backend PR #36; Railway deployment and the live
+  caregiver response were successfully validated.
 
 ## 2026-09-20 — Phase 7.4 collaborative open-shift offers
 
