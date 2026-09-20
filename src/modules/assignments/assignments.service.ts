@@ -207,6 +207,19 @@ export async function createAssignment(
       trx
     );
 
+    await sql`
+      WITH closed_campaigns AS (
+        UPDATE coverage_campaigns
+        SET status = 'closed', updated_at = now()
+        WHERE organization_id = ${organizationId} AND shift_id = ${shiftId} AND status = 'open'
+        RETURNING id
+      )
+      UPDATE coverage_offers
+      SET response_status = 'withdrawn', responded_at = now()
+      WHERE coverage_campaign_id IN (SELECT id FROM closed_campaigns)
+        AND response_status = 'pending'
+    `.execute(trx);
+
     if (membership.user_id) {
       await sql`
         INSERT INTO notifications (

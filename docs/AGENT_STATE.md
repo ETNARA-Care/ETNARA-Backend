@@ -4,7 +4,22 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: fix/availability-save
+Branch: phase-7/open-shift-offers
+
+## 2026-09-20 — Phase 7.4 collaborative open-shift offers
+
+- Administration can offer an uncovered shift to the three highest-ranked
+  eligible and available caregivers without creating an assignment.
+- Caregivers receive only the work window and requested role; resident identity,
+  care plans and clinical information remain unavailable before assignment.
+- Each caregiver explicitly answers available or unavailable, and Administration
+  sees the responses while retaining mandatory final assignment control.
+- Campaigns and offers are organization-scoped with row-level security,
+  duplicate-open-campaign protection and transactional shift-state locking.
+- A final assignment closes the campaign and withdraws every pending offer.
+- Backend TypeScript build and all 61 tests pass.
+- Exact next step: publish only after explicit authorization, then apply migration
+  052 before validating one Admin → caregiver → Admin response cycle.
 
 ## 2026-09-20 — Availability save hotfix
 

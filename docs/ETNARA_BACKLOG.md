@@ -158,6 +158,16 @@ Status: Implemented and validated locally on
 
 ## Next
 
+### ETN-024 — Phase 7.4 collaborative open-shift offers
+- secure, tenant-scoped offer campaigns for uncovered shifts
+- first controlled wave targets the top three eligible recommendations
+- caregiver interest never creates an automatic assignment
+- final assignment closes the campaign and withdraws pending offers
+- local build and 61/61 tests pass
+
+Status: Implemented and validated locally on `phase-7/open-shift-offers`;
+publication pending explicit authorization.
+
 ### ETN-004 — Connect Administration to real backend data
 Repository: ETNARAMVP
 
