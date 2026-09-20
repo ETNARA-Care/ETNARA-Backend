@@ -4,7 +4,18 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/open-shift-offers
+Branch: fix/coverage-offer-response
+
+## 2026-09-20 — Coverage-offer response hotfix
+
+- Live validation reproduced an HTTP 500 after María selected "Estoy
+  disponible" on a valid Phase 7.4 offer.
+- The worker transaction was attempting to enumerate privileged manager
+  memberships directly; tenant RLS correctly blocks that lookup.
+- Migration 053 adds a narrowly scoped, validated SECURITY DEFINER notifier,
+  matching the established assignment-response notification pattern.
+- Exact next step: publish after explicit authorization, apply migration 053,
+  and retry the existing pending offer response.
 
 ## 2026-09-20 — Phase 7.4 collaborative open-shift offers
 
