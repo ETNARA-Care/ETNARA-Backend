@@ -227,6 +227,12 @@ async function main() {
   console.log("Creando usuarios demo faltantes...");
   const admin = await createUser("admin@demo.etnara.care");
   await addMembership(admin.id, "ORGANIZATION_ADMIN");
+  await client.query(
+    `INSERT INTO platform_admins (user_id, granted_by_user_id)
+     VALUES ($1,$1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [admin.id]
+  );
   const supervisor = await createUser("supervisor@demo.etnara.care");
   await addMembership(supervisor.id, "ORGANIZATION_ADMIN");
   const caregiver1 = await createUser("maria@demo.etnara.care");
