@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-023 — Availability save hotfix
+
+- permit `PUT` in the production portal's exact-origin CORS policy
+- grant availability-table operations to the least-privilege runtime role
+- preserve row-level tenant isolation and authenticated self-only writes
+
+Status: Implemented locally; backend build and 57/57 tests pass. Publication
+authorized.
+
+---
+
 ### ETN-022 — Phase 7.3 worker-declared availability
 
 - let each linked caregiver maintain weekly work windows and time-off blocks

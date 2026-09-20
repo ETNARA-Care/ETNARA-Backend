@@ -32,4 +32,15 @@ describe("Phase 7.3 worker-declared availability", () => {
     expect(coverage).toContain("El turno está fuera de su disponibilidad semanal");
     expect(coverage).not.toContain("INSERT INTO assignments");
   });
+
+  it("allows the browser PUT and grants the runtime role access to availability tables", () => {
+    const app = read("src/app.ts");
+    const grants = read("migrations/051_worker_availability_runtime_grants.sql");
+    expect(app).toContain('"GET,POST,PUT,PATCH,DELETE,OPTIONS"');
+    expect(grants).toContain("GRANT SELECT, INSERT, UPDATE, DELETE");
+    expect(grants).toContain("worker_availability_settings");
+    expect(grants).toContain("worker_weekly_availability");
+    expect(grants).toContain("worker_unavailability_periods");
+    expect(grants).toContain("TO app_runtime");
+  });
 });

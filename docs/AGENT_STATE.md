@@ -4,7 +4,16 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/worker-availability
+Branch: fix/availability-save
+
+## 2026-09-20 — Availability save hotfix
+
+- Added `PUT` to the exact-origin CORS allowlist so the GitHub Pages caregiver
+  portal can complete the availability-save preflight.
+- Added migration 051 granting the least-privilege `app_runtime` role access to
+  the three availability tables; tenant RLS remains authoritative.
+- Backend TypeScript build and all 57 tests pass.
+- Exact next step: publish and validate the live preflight and save workflow.
 
 ## 2026-09-20 — Phase 7.3 worker-declared availability
 
