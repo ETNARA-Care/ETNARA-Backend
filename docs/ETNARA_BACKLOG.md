@@ -184,6 +184,16 @@ Status: Implemented and validated locally on
 
 ## Next
 
+### ETN-027 — Phase 7.6.1 platform credential verification
+- independent platform-admin authority
+- current-file verification queue and private document access
+- auditable verify/reject decisions with required rejection notes
+- automatic eligibility recalculation without a manual apt override
+- local build and 71/71 tests pass
+
+Status: Implemented locally; PostgreSQL migration validation and publication
+remain pending explicit authorization.
+
 ### ETN-024 — Phase 7.4 collaborative open-shift offers
 - secure, tenant-scoped offer campaigns for uncovered shifts
 - first controlled wave targets the top three eligible recommendations
