@@ -11,8 +11,8 @@
 - hide queued offers from caregivers and preserve pre-assignment privacy
 - withdraw pending and queued offers when a shift is assigned or cancelled
 
-Status: Implemented locally on `phase-7/staged-coverage`; backend build and
-67/67 tests pass. Publication requires explicit authorization.
+Status: Complete — published and merged in backend PR #37; CI, PostgreSQL 16
+migration validation and Railway deployment passed.
 
 ---
 
