@@ -191,8 +191,8 @@ Status: Implemented and validated locally on
 - automatic eligibility recalculation without a manual apt override
 - local build and 71/71 tests pass
 
-Status: Implemented locally; PostgreSQL migration validation and publication
-remain pending explicit authorization.
+Status: Complete — published and merged in PR #40; PostgreSQL 16 migration
+validation and Railway deployment passed.
 
 ### ETN-024 — Phase 7.4 collaborative open-shift offers
 - secure, tenant-scoped offer campaigns for uncovered shifts

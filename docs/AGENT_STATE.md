@@ -18,9 +18,12 @@ Branch: phase-7/platform-verification
   current-file ownership are revalidated.
 - `/me` exposes independently verified platform authority, and only the exact
   demo administrator is seeded into that authority table.
-- Backend TypeScript build and all 71 tests pass locally.
-- Exact next step: validate migration 055 on PostgreSQL 16, review the final
-  diff and publish only after explicit authorization.
+- Backend PR #40 was merged after TypeScript, 71/71 tests, migration 055 and
+  the full idempotent migration set passed on PostgreSQL 16.
+- Railway deployed successfully: health returns HTTP 200 and the new protected
+  verification-queue route returns the expected HTTP 401 without a session.
+- Exact next step: validate one real document approval and one rejection using
+  the demo platform administrator.
 
 ## 2026-09-20 — Demo caregiver eligibility correction
 
