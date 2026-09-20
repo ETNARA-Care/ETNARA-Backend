@@ -18,8 +18,11 @@ Branch: phase-7/open-shift-offers
   duplicate-open-campaign protection and transactional shift-state locking.
 - A final assignment closes the campaign and withdraws every pending offer.
 - Backend TypeScript build and all 61 tests pass.
-- Exact next step: publish only after explicit authorization, then apply migration
-  052 before validating one Admin → caregiver → Admin response cycle.
+- Published and merged in backend PR #34. Pull-request CI, PostgreSQL 16
+  migration validation and Railway deployment passed; health returned HTTP 200
+  and the protected coverage-offer route is live.
+- Exact next step: validate one Admin → caregiver → Admin response cycle using
+  real organization roles.
 
 ## 2026-09-20 — Availability save hotfix
 

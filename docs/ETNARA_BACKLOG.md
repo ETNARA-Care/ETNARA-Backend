@@ -165,8 +165,8 @@ Status: Implemented and validated locally on
 - final assignment closes the campaign and withdraws pending offers
 - local build and 61/61 tests pass
 
-Status: Implemented and validated locally on `phase-7/open-shift-offers`;
-publication pending explicit authorization.
+Status: Complete — published and merged in PR #34; CI, PostgreSQL 16 migration
+validation and Railway deployment passed.
 
 ### ETN-004 — Connect Administration to real backend data
 Repository: ETNARAMVP
