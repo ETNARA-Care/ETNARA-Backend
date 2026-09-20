@@ -601,9 +601,83 @@ export async function updateCredential(
 
 export const platformVerificationSchema = z.object({
   status: z.enum(["verified", "rejected"]),
-  notes: z.string().optional(),
+  notes: z.string().trim().max(2000).optional(),
+}).superRefine((input, context) => {
+  if (input.status === "rejected" && !input.notes) {
+    context.addIssue({ code: "custom", path: ["notes"], message: "notes are required when rejecting a credential" });
+  }
 });
 export type PlatformVerificationInput = z.infer<typeof platformVerificationSchema>;
+
+export interface PlatformCredentialQueueItem {
+  credential_id: string;
+  worker_id: string;
+  worker_name: string;
+  credential_type_code: string;
+  credential_type_name: string;
+  issuing_entity_name: string | null;
+  issued_at: string | null;
+  expires_at: string | null;
+  credential_status: string;
+  file_id: string;
+  original_filename: string;
+  content_type: string;
+  uploaded_at: string;
+  verification_status: "pending" | "verified" | "rejected";
+  verified_at: string | null;
+  verification_notes: string | null;
+  organization_names: string[];
+}
+
+export async function listPlatformCredentialVerificationQueue(actingUserId: string) {
+  return withPlatformContext(actingUserId, async (trx) => {
+    const result = await sql<PlatformCredentialQueueItem>`
+      SELECT
+        c.id AS credential_id,
+        w.id AS worker_id,
+        COALESCE(w.display_name, 'Cuidador sin nombre') AS worker_name,
+        ct.code AS credential_type_code,
+        ct.name AS credential_type_name,
+        c.issuing_entity_name,
+        c.issued_at,
+        c.expires_at,
+        c.status AS credential_status,
+        sf.id AS file_id,
+        sf.original_filename,
+        sf.content_type,
+        dv.created_at AS uploaded_at,
+        COALESCE(latest.status::text, 'pending') AS verification_status,
+        latest.verified_at,
+        latest.notes AS verification_notes,
+        ARRAY(
+          SELECT DISTINCT o.name
+          FROM organization_worker_memberships owm
+          JOIN organizations o ON o.id = owm.organization_id
+          WHERE owm.worker_id = w.id AND owm.status = 'active'
+          ORDER BY o.name
+        ) AS organization_names
+      FROM credentials c
+      JOIN workers w ON w.id = c.worker_id
+      JOIN credential_types ct ON ct.id = c.credential_type_id
+      JOIN documents d ON d.id = c.document_id
+      JOIN document_versions dv ON dv.document_id = d.id AND dv.file_id = d.file_id
+      JOIN stored_files sf ON sf.id = d.file_id AND sf.status = 'active'
+      LEFT JOIN LATERAL (
+        SELECT cpv.status, cpv.verified_at, cpv.notes
+        FROM credential_platform_verifications cpv
+        WHERE cpv.credential_id = c.id AND cpv.file_id = d.file_id
+        ORDER BY cpv.verified_at DESC
+        LIMIT 1
+      ) latest ON true
+      WHERE c.status <> 'revoked'
+      ORDER BY
+        CASE WHEN latest.status IS NULL THEN 0 WHEN latest.status = 'rejected' THEN 1 ELSE 2 END,
+        dv.created_at DESC
+      LIMIT 200
+    `.execute(trx);
+    return result.rows;
+  });
+}
 
 /**
  * ONLY callable through withPlatformContext(), which itself re-verifies
@@ -617,25 +691,77 @@ export async function createPlatformVerification(
 ) {
   assertUuid(credentialId, "credentialId");
   return withPlatformContext(actingUserId, async (trx) => {
-    const credCheck = await sql<{ id: string }>`SELECT id FROM credentials WHERE id = ${credentialId} LIMIT 1`.execute(
+    const credCheck = await sql<{ id: string; document_id: string | null; file_id: string | null }>`
+      SELECT c.id, c.document_id, d.file_id
+      FROM credentials c
+      LEFT JOIN documents d ON d.id = c.document_id
+      WHERE c.id = ${credentialId} AND c.status <> 'revoked'
+      LIMIT 1
+    `.execute(
       trx
     );
-    if (!credCheck.rows[0]) throw new CredentialNotFoundError();
+    const credential = credCheck.rows[0];
+    if (!credential) throw new CredentialNotFoundError();
+    if (!credential.document_id || !credential.file_id) throw new CredentialDocumentRequiredError();
+
+    const latestDecision = await sql<{
+      id: string; credential_id: string; verified_by_user_id: string;
+      verified_at: string; status: string; notes: string | null; file_id: string;
+    }>`
+      SELECT id, credential_id, verified_by_user_id, verified_at, status, notes, file_id
+      FROM credential_platform_verifications
+      WHERE credential_id = ${credentialId} AND file_id = ${credential.file_id}
+      ORDER BY verified_at DESC LIMIT 1
+    `.execute(trx);
+    if (
+      latestDecision.rows[0]?.status === input.status
+      && latestDecision.rows[0]?.notes === (input.notes ?? null)
+    ) return latestDecision.rows[0];
 
     const result = await sql<{
       id: string;
       credential_id: string;
+      file_id: string;
       verified_by_user_id: string;
       verified_at: string;
       status: string;
       notes: string | null;
     }>`
-      INSERT INTO credential_platform_verifications (credential_id, verified_by_user_id, status, notes)
-      VALUES (${credentialId}, ${actingUserId}, ${input.status}, ${input.notes ?? null})
-      RETURNING id, credential_id, verified_by_user_id, verified_at, status, notes
+      INSERT INTO credential_platform_verifications (credential_id, file_id, verified_by_user_id, status, notes)
+      VALUES (${credentialId}, ${credential.file_id}, ${actingUserId}, ${input.status}, ${input.notes ?? null})
+      RETURNING id, credential_id, file_id, verified_by_user_id, verified_at, status, notes
+    `.execute(trx);
+    await sql`
+      UPDATE documents
+      SET status = ${input.status}, updated_at = now()
+      WHERE id = ${credential.document_id} AND file_id = ${credential.file_id}
     `.execute(trx);
     return result.rows[0];
   });
+}
+
+export async function createPlatformCredentialDocumentDownload(
+  actingUserId: string,
+  credentialId: string,
+  fileId: string
+) {
+  assertUuid(credentialId, "credentialId");
+  assertUuid(fileId, "fileId");
+  const file = await withPlatformContext(actingUserId, async (trx) => {
+    const result = await sql<{ storage_key: string; original_filename: string; content_type: string }>`
+      SELECT sf.storage_key, sf.original_filename, sf.content_type
+      FROM credentials c
+      JOIN documents d ON d.id = c.document_id
+      JOIN document_versions dv ON dv.document_id = d.id AND dv.file_id = d.file_id
+      JOIN stored_files sf ON sf.id = dv.file_id
+      WHERE c.id = ${credentialId} AND sf.id = ${fileId} AND sf.status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    if (!result.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+    return result.rows[0];
+  });
+  const downloadUrl = await createPrivateDownloadUrl(file.storage_key, file.original_filename, file.content_type);
+  return { downloadUrl, expiresInSeconds: 300 };
 }
 
 export async function listPlatformVerifications(actingUserId: string, credentialId: string) {
