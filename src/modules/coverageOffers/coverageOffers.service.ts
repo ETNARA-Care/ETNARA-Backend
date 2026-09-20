@@ -138,12 +138,7 @@ export async function respondCoverageOffer(userId: string, organizationId: strin
       WHERE id = ${offerId} AND response_status = 'pending' RETURNING id, response_status, responded_at
     `.execute(trx);
     const notificationType = input.decision === "interested" ? "OPEN_SHIFT_INTERESTED" : "OPEN_SHIFT_DECLINED";
-    await sql`
-      INSERT INTO notifications (user_id, organization_id, notification_type, related_entity_type, related_entity_id, channel, status, sent_at)
-      SELECT DISTINCT om.user_id, ${organizationId}, ${notificationType}, 'coverage_offer', ${offerId}, 'in_app', 'sent', now()
-      FROM organization_memberships om JOIN user_roles ur ON ur.organization_membership_id = om.id JOIN roles r ON r.id = ur.role_id
-      WHERE om.organization_id = ${organizationId} AND om.status = 'active' AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
-    `.execute(trx);
+    await sql`SELECT app_notify_coverage_offer_managers(${offerId}, ${notificationType})`.execute(trx);
     return updated.rows[0];
   });
 }

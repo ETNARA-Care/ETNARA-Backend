@@ -28,4 +28,12 @@ describe("Phase 7.4 collaborative open-shift coverage", () => {
     expect(assignments).toContain("WITH closed_campaigns AS");
     expect(assignments).toContain("response_status = 'withdrawn'");
   });
+  it("notifies managers without exposing privileged memberships to the worker", () => {
+    const migration = read("migrations/053_coverage_offer_manager_notifications.sql");
+    const service = read("src/modules/coverageOffers/coverageOffers.service.ts");
+    expect(migration).toContain("SECURITY DEFINER");
+    expect(migration).toContain("app_notify_coverage_offer_managers");
+    expect(service).toContain("SELECT app_notify_coverage_offer_managers");
+    expect(service).not.toContain("FROM organization_memberships om JOIN user_roles");
+  });
 });
