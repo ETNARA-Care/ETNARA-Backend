@@ -19,10 +19,11 @@ Branch: phase-7/staged-coverage
   continues to receive only the work window and requested role.
 - Assignment or cancellation withdraws pending and queued offers without
   deleting campaign history. Exhausted campaigns can be retried explicitly.
-- Backend TypeScript build and all 67 tests pass locally.
-- Exact next step: publish only after explicit authorization, validate migration
-  054 on PostgreSQL 16 CI, deploy backend before frontend, then test one timed
-  second-wave progression in production.
+- Backend PR #37 was merged after TypeScript, 67/67 tests, PostgreSQL 16
+  migration validation, invitation verification and diff safety passed.
+- Railway applied migration 054 and the production health endpoint returned
+  HTTP 200 before the frontend was published.
+- Exact next step: validate one timed second-wave progression with real roles.
 
 ## 2026-09-20 — Coverage-offer response hotfix
 
