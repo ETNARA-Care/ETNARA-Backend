@@ -19,8 +19,10 @@ Branch: phase-7/worker-availability
 - Unconfigured availability remains a visible, non-blocking rollout state;
   ETNARA never creates an assignment from a recommendation.
 - Backend TypeScript build and all 56 tests pass.
-- Exact next step: publish the coordinated backend/frontend changes after
-  explicit authorization, deploy backend first and validate the live workflow.
+- Published and merged in backend PR #31. Pull-request and post-merge CI passed;
+  Railway health returned HTTP 200 and the protected availability route is live.
+- Exact next step: validate one saved caregiver schedule and one blocked
+  coverage recommendation through the live role workflow.
 
 ## 2026-09-19 — Phase 7.2 assisted coverage intelligence
 

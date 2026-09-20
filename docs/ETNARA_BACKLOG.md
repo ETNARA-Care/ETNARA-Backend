@@ -10,8 +10,8 @@
 - keep unconfigured availability non-blocking during rollout
 - preserve eligibility gates and explicit human assignment confirmation
 
-Status: Implemented locally; backend build and 56/56 tests pass. Coordinated
-publication requires explicit authorization.
+Status: Published and merged in backend PR #31. Pull-request and post-merge CI
+passed; Railway health and protected-route checks succeeded.
 
 ---
 
