@@ -2,6 +2,20 @@
 
 ## In Progress
 
+### ETN-025 — Phase 7.5 staged coverage escalation
+
+- keep a ranked, auditable queue for every open coverage campaign
+- activate only one wave of three caregivers with a bounded response window
+- advance automatically after timeout or immediately after an all-declined wave
+- stop escalation on interest while preserving mandatory human assignment
+- hide queued offers from caregivers and preserve pre-assignment privacy
+- withdraw pending and queued offers when a shift is assigned or cancelled
+
+Status: Implemented locally on `phase-7/staged-coverage`; backend build and
+67/67 tests pass. Publication requires explicit authorization.
+
+---
+
 ### ETN-023 — Availability save hotfix
 
 - permit `PUT` in the production portal's exact-origin CORS policy
