@@ -87,6 +87,46 @@ export async function getMe(userId: string): Promise<MeResult> {
   });
 }
 
+export interface MyWorkerProfile {
+  workerId: string;
+  membershipId: string;
+  displayName: string | null;
+  internalRole: string;
+}
+
+/** Resolves only the authenticated user's active worker identity in one validated tenant. */
+export async function getMyWorkerProfile(
+  userId: string,
+  organizationId: string
+): Promise<MyWorkerProfile | null> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const result = await sql<{
+      worker_id: string;
+      membership_id: string;
+      display_name: string | null;
+      internal_role: string;
+    }>`
+      SELECT w.id AS worker_id, owm.id AS membership_id,
+             w.display_name, owm.internal_role
+      FROM workers w
+      JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+      WHERE w.user_id = ${userId}
+        AND owm.organization_id = ${organizationId}
+        AND owm.status = 'active'
+      LIMIT 1
+    `.execute(trx);
+    const profile = result.rows[0];
+    return profile
+      ? {
+          workerId: profile.worker_id,
+          membershipId: profile.membership_id,
+          displayName: profile.display_name,
+          internalRole: profile.internal_role,
+        }
+      : null;
+  });
+}
+
 const uuidSchema = z.string().uuid();
 
 /**

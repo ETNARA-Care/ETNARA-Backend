@@ -6,6 +6,16 @@ Project: ETNARA Care
 Repository: ETNARA-Backend
 Branch: phase-7/platform-verification
 
+## 2026-09-20 — Caregiver identity hotfix
+
+- Added an authenticated, tenant-scoped self-profile endpoint that resolves a
+  caregiver only from the session user and active organization.
+- The endpoint returns the real worker display name and organization-specific
+  internal role without weakening workforce RLS or exposing another worker.
+- Backend TypeScript build and all 72 tests pass locally.
+- Exact next step: publish together with the frontend identity correction only
+  after explicit authorization.
+
 ## 2026-09-20 — Phase 7.6.1 platform credential verification
 
 - Added a platform-only queue of real, current credential documents across
