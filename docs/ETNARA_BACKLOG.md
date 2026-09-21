@@ -184,6 +184,14 @@ Status: Implemented and validated locally on
 
 ## Next
 
+### ETN-028 — Caregiver self-identity correction
+- resolve the real worker profile from authenticated user + active organization
+- preserve tenant RLS and return no other caregiver identity
+- local build and 72/72 tests pass
+
+Status: Implemented locally; coordinated publication remains pending explicit
+authorization.
+
 ### ETN-027 — Phase 7.6.1 platform credential verification
 - independent platform-admin authority
 - current-file verification queue and private document access
