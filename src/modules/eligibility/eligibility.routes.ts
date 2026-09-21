@@ -5,6 +5,12 @@ import {
   getComplianceSummary,
   MembershipNotFoundError,
   NoApplicableRequirementSetError,
+  ComplianceCredentialTypeNotFoundError,
+  ComplianceManagementForbiddenError,
+  getComplianceConfiguration,
+  listComplianceAudit,
+  saveCompliancePolicy,
+  saveCompliancePolicySchema,
 } from "./eligibility.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -27,6 +33,14 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof MembershipNotFoundError) {
     res.status(404).json({ error: "MEMBERSHIP_NOT_FOUND" });
+    return true;
+  }
+  if (err instanceof ComplianceManagementForbiddenError) {
+    res.status(403).json({ error: "COMPLIANCE_MANAGEMENT_FORBIDDEN" });
+    return true;
+  }
+  if (err instanceof ComplianceCredentialTypeNotFoundError) {
+    res.status(400).json({ error: "COMPLIANCE_CREDENTIAL_TYPE_NOT_FOUND" });
     return true;
   }
   if (err instanceof NoApplicableRequirementSetError) {
@@ -68,6 +82,54 @@ router.get(
     try {
       const summary = await getComplianceSummary(req.auth!.userId, orgIdParsed.data, String(req.params.membershipId));
       res.status(200).json(summary);
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/compliance/configuration",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const organizationId = uuidParam.safeParse(req.params.organizationId);
+    if (!organizationId.success) return void res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+    try {
+      const configuration = await getComplianceConfiguration(req.auth!.userId, organizationId.data);
+      res.status(200).json(configuration);
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.put(
+  "/organizations/:organizationId/compliance/configuration",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const organizationId = uuidParam.safeParse(req.params.organizationId);
+    const body = saveCompliancePolicySchema.safeParse(req.body);
+    if (!organizationId.success || !body.success) {
+      return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+    }
+    try {
+      const policy = await saveCompliancePolicy(req.auth!.userId, organizationId.data, body.data);
+      res.status(200).json({ policy });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/compliance/audit",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const organizationId = uuidParam.safeParse(req.params.organizationId);
+    if (!organizationId.success) return void res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+    try {
+      const entries = await listComplianceAudit(req.auth!.userId, organizationId.data);
+      res.status(200).json({ entries });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
