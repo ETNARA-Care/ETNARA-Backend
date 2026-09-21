@@ -4,7 +4,7 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/7.6.2-compliance-self-service
+Branch: main
 
 ## 2026-09-21 — Phase 7.6.2 compliance self-service
 
@@ -17,7 +17,7 @@ Branch: phase-7/7.6.2-compliance-self-service
   log, and the compliance history also includes worker activation changes.
 - Migration 056 requires real Admin/Supervisor authority at the RLS layer for
   organization requirement-set writes, in addition to the service guard.
-- Backend build and all 75 tests pass locally.
+- Backend PR #44 was merged after build, 75/75 tests, PostgreSQL migration\n  validation and every CI check passed.
 - Credential-document upload remains intentionally deferred to the final
   technical close and does not block this phase.
 - Exact next step: publish with the paired frontend only after explicit
