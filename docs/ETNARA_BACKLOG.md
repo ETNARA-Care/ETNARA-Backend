@@ -184,6 +184,17 @@ Status: Implemented and validated locally on
 
 ## Next
 
+### ETN-029 — Phase 7.6.2 compliance self-service
+- manager-only credential requirements by caregiver role
+- exact eligibility causes continue to come from the authoritative engine
+- append-only audit history for policy and membership-status changes
+- RLS-enforced Admin/Supervisor write authority
+- local build and 75/75 tests pass
+
+Status: Implemented and validated locally on
+`phase-7/7.6.2-compliance-self-service`; publication pending explicit
+authorization.
+
 ### ETN-028 — Caregiver self-identity correction
 - resolve the real worker profile from authenticated user + active organization
 - preserve tenant RLS and return no other caregiver identity

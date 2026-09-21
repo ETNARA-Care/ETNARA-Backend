@@ -4,7 +4,24 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/platform-verification
+Branch: phase-7/7.6.2-compliance-self-service
+
+## 2026-09-21 — Phase 7.6.2 compliance self-service
+
+- Eligibility now selects the most specific requirement set for the worker's
+  organization and internal role, with organization and platform fallbacks.
+- Organization managers can read and update credential requirements by worker
+  role through tenant-scoped endpoints; no endpoint accepts a manual aptitude
+  value.
+- Every policy change records before/after snapshots in the append-only audit
+  log, and the compliance history also includes worker activation changes.
+- Migration 056 requires real Admin/Supervisor authority at the RLS layer for
+  organization requirement-set writes, in addition to the service guard.
+- Backend build and all 75 tests pass locally.
+- Credential-document upload remains intentionally deferred to the final
+  technical close and does not block this phase.
+- Exact next step: publish with the paired frontend only after explicit
+  authorization, then validate one role-policy change in staging.
 
 ## 2026-09-20 — Caregiver identity hotfix
 
