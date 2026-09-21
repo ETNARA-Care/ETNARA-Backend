@@ -20,8 +20,7 @@ Branch: main
 - Backend PR #44 was merged after build, 75/75 tests, PostgreSQL migration\n  validation and every CI check passed.
 - Credential-document upload remains intentionally deferred to the final
   technical close and does not block this phase.
-- Exact next step: publish with the paired frontend only after explicit
-  authorization, then validate one role-policy change in staging.
+- Railway applied migration 056, remains healthy and serves the protected route.\n- Exact next step: validate one role-policy change in the live Admin portal.
 
 ## 2026-09-20 — Caregiver identity hotfix
 

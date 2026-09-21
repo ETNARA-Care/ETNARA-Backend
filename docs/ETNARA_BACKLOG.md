@@ -191,9 +191,7 @@ Status: Implemented and validated locally on
 - RLS-enforced Admin/Supervisor write authority
 - local build and 75/75 tests pass
 
-Status: Implemented and validated locally on
-`phase-7/7.6.2-compliance-self-service`; publication pending explicit
-authorization.
+Status: Complete — published and merged in PR #44; all CI and PostgreSQL\nmigration checks passed, and Railway serves the protected route.
 
 ### ETN-028 — Caregiver self-identity correction
 - resolve the real worker profile from authenticated user + active organization
