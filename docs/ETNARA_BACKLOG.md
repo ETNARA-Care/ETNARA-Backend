@@ -189,8 +189,8 @@ Status: Implemented and validated locally on
 - preserve tenant RLS and return no other caregiver identity
 - local build and 72/72 tests pass
 
-Status: Implemented locally; coordinated publication remains pending explicit
-authorization.
+Status: Complete — published and merged in PR #42; CI and Railway deployment
+passed.
 
 ### ETN-027 — Phase 7.6.1 platform credential verification
 - independent platform-admin authority
