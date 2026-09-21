@@ -15,6 +15,18 @@ export class NoApplicableRequirementSetError extends Error {
     this.name = "NoApplicableRequirementSetError";
   }
 }
+export class ComplianceManagementForbiddenError extends Error {
+  constructor() {
+    super("COMPLIANCE_MANAGEMENT_FORBIDDEN");
+    this.name = "ComplianceManagementForbiddenError";
+  }
+}
+export class ComplianceCredentialTypeNotFoundError extends Error {
+  constructor() {
+    super("COMPLIANCE_CREDENTIAL_TYPE_NOT_FOUND");
+    this.name = "ComplianceCredentialTypeNotFoundError";
+  }
+}
 
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
@@ -38,20 +50,32 @@ export interface EligibilityResult {
 }
 
 /**
- * Requirement-set selection (documented simplification, matches "no motor
- * avanzado de reglas todavia"): prefer a requirement_set scoped to this
- * exact organization_id; fall back to the platform-global one
- * (organization_id IS NULL) if no org-specific set exists. If NEITHER
- * exists, there is nothing to evaluate against.
+ * Requirement-set selection: prefer the worker-role policy scoped to this
+ * organization, then an organization-wide policy, then the same two levels
+ * from the platform catalog. If none exists, there is nothing to evaluate.
  */
-async function findApplicableRequirementSet(trx: unknown, organizationId: string): Promise<string> {
+async function findApplicableRequirementSet(
+  trx: unknown,
+  organizationId: string,
+  workerRole: string
+): Promise<string> {
   const orgSpecific = await sql<{ id: string }>`
-    SELECT id FROM requirement_sets WHERE organization_id = ${organizationId} ORDER BY created_at LIMIT 1
+    SELECT id
+    FROM requirement_sets
+    WHERE organization_id = ${organizationId}
+      AND (worker_role IS NULL OR lower(worker_role) = lower(${workerRole}))
+    ORDER BY (worker_role IS NOT NULL) DESC, created_at
+    LIMIT 1
   `.execute(trx as never);
   if (orgSpecific.rows[0]) return orgSpecific.rows[0].id;
 
   const global = await sql<{ id: string }>`
-    SELECT id FROM requirement_sets WHERE organization_id IS NULL ORDER BY created_at LIMIT 1
+    SELECT id
+    FROM requirement_sets
+    WHERE organization_id IS NULL
+      AND (worker_role IS NULL OR lower(worker_role) = lower(${workerRole}))
+    ORDER BY (worker_role IS NOT NULL) DESC, created_at
+    LIMIT 1
   `.execute(trx as never);
   if (global.rows[0]) return global.rows[0].id;
 
@@ -73,15 +97,15 @@ export async function evaluateWorkerEligibility(
 ): Promise<EligibilityResult> {
   assertUuid(membershipId, "organizationWorkerMembershipId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    const membershipRow = await sql<{ id: string; worker_id: string; status: string }>`
-      SELECT id, worker_id, status FROM organization_worker_memberships
+    const membershipRow = await sql<{ id: string; worker_id: string; status: string; internal_role: string }>`
+      SELECT id, worker_id, status, internal_role FROM organization_worker_memberships
       WHERE id = ${membershipId} AND organization_id = ${organizationId}
       LIMIT 1
     `.execute(trx);
     const membership = membershipRow.rows[0];
     if (!membership) throw new MembershipNotFoundError();
 
-    const requirementSetId = await findApplicableRequirementSet(trx, organizationId);
+    const requirementSetId = await findApplicableRequirementSet(trx, organizationId, membership.internal_role);
 
     // Membership inactive -> not_eligible immediately, regardless of
     // credentials -- no operational authority survives a revoked
@@ -262,4 +286,230 @@ export async function getComplianceSummary(
       requiresOrganizationReview: r.requiresOrganizationReview,
     })),
   };
+}
+
+const policyRequirementSchema = z.object({
+  credentialTypeCode: z.string().trim().min(1).max(80),
+  isMandatory: z.boolean(),
+  requiresOrganizationReview: z.boolean(),
+});
+
+export const saveCompliancePolicySchema = z.object({
+  workerRole: z.string().trim().min(1).max(80),
+  requirements: z.array(policyRequirementSchema).min(1).max(50),
+}).superRefine((value, ctx) => {
+  const codes = value.requirements.map((item) => item.credentialTypeCode.toUpperCase());
+  if (new Set(codes).size !== codes.length) {
+    ctx.addIssue({ code: "custom", message: "Credential types must be unique" });
+  }
+});
+export type SaveCompliancePolicyInput = z.infer<typeof saveCompliancePolicySchema>;
+
+interface PolicyRequirement {
+  credentialTypeCode: string;
+  credentialTypeName: string;
+  isMandatory: boolean;
+  requiresOrganizationReview: boolean;
+}
+
+export interface CompliancePolicy {
+  workerRole: string;
+  requirementSetId: string;
+  source: "organization" | "platform";
+  requirements: PolicyRequirement[];
+}
+
+export interface ComplianceConfiguration {
+  workerRoles: string[];
+  credentialTypes: Array<{ code: string; name: string }>;
+  policies: CompliancePolicy[];
+}
+
+async function assertComplianceManager(trx: unknown): Promise<void> {
+  const result = await sql<{ allowed: boolean }>`SELECT app_is_org_manager() AS allowed`.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new ComplianceManagementForbiddenError();
+}
+
+async function readPolicy(
+  trx: unknown,
+  organizationId: string,
+  workerRole: string
+): Promise<CompliancePolicy | null> {
+  const set = await sql<{ id: string; source: "organization" | "platform" }>`
+    SELECT id,
+           CASE WHEN organization_id IS NULL THEN 'platform' ELSE 'organization' END AS source
+    FROM requirement_sets
+    WHERE (organization_id = ${organizationId} OR organization_id IS NULL)
+      AND (worker_role IS NULL OR lower(worker_role) = lower(${workerRole}))
+    ORDER BY (organization_id IS NOT NULL) DESC, (worker_role IS NOT NULL) DESC, created_at
+    LIMIT 1
+  `.execute(trx as never);
+  if (!set.rows[0]) return null;
+
+  const requirements = await sql<{
+    credential_type_code: string;
+    credential_type_name: string;
+    is_mandatory: boolean;
+    requires_organization_review: boolean;
+  }>`
+    SELECT ct.code AS credential_type_code, ct.name AS credential_type_name,
+           r.is_mandatory, r.requires_organization_review
+    FROM requirements r
+    JOIN credential_types ct ON ct.id = r.credential_type_id
+    WHERE r.requirement_set_id = ${set.rows[0].id}
+    ORDER BY ct.name
+  `.execute(trx as never);
+
+  return {
+    workerRole,
+    requirementSetId: set.rows[0].id,
+    source: set.rows[0].source,
+    requirements: requirements.rows.map((row) => ({
+      credentialTypeCode: row.credential_type_code,
+      credentialTypeName: row.credential_type_name,
+      isMandatory: row.is_mandatory,
+      requiresOrganizationReview: row.requires_organization_review,
+    })),
+  };
+}
+
+export async function getComplianceConfiguration(
+  userId: string,
+  organizationId: string
+): Promise<ComplianceConfiguration> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertComplianceManager(trx);
+    const roles = await sql<{ worker_role: string }>`
+      SELECT worker_role
+      FROM (
+        SELECT DISTINCT internal_role AS worker_role
+        FROM organization_worker_memberships
+        WHERE organization_id = ${organizationId}
+        UNION
+        SELECT DISTINCT worker_role
+        FROM requirement_sets
+        WHERE organization_id = ${organizationId} AND worker_role IS NOT NULL
+      ) configured_roles
+      WHERE worker_role IS NOT NULL AND btrim(worker_role) <> ''
+      ORDER BY worker_role
+    `.execute(trx);
+    const catalog = await sql<{ code: string; name: string }>`
+      SELECT code, name FROM credential_types ORDER BY name
+    `.execute(trx);
+    const policies: CompliancePolicy[] = [];
+    for (const row of roles.rows) {
+      const policy = await readPolicy(trx, organizationId, row.worker_role);
+      if (policy) policies.push(policy);
+    }
+    return {
+      workerRoles: roles.rows.map((row) => row.worker_role),
+      credentialTypes: catalog.rows,
+      policies,
+    };
+  });
+}
+
+export async function saveCompliancePolicy(
+  userId: string,
+  organizationId: string,
+  input: SaveCompliancePolicyInput
+): Promise<CompliancePolicy> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertComplianceManager(trx);
+    const workerRole = input.workerRole.trim();
+    const previous = await readPolicy(trx, organizationId, workerRole);
+    const codes = input.requirements.map((item) => item.credentialTypeCode.toUpperCase());
+    const catalog = await sql<{ id: string; code: string }>`
+      SELECT id, code FROM credential_types WHERE upper(code) IN (${sql.join(codes.map((code) => sql`${code}`))})
+    `.execute(trx);
+    if (catalog.rows.length !== codes.length) {
+      throw new ComplianceCredentialTypeNotFoundError();
+    }
+    const typeIds = new Map(catalog.rows.map((row) => [row.code.toUpperCase(), row.id]));
+
+    const existing = await sql<{ id: string }>`
+      SELECT id FROM requirement_sets
+      WHERE organization_id = ${organizationId} AND lower(worker_role) = lower(${workerRole})
+      ORDER BY created_at LIMIT 1
+    `.execute(trx);
+    let requirementSetId = existing.rows[0]?.id;
+    if (!requirementSetId) {
+      const inserted = await sql<{ id: string }>`
+        INSERT INTO requirement_sets (organization_id, worker_role, name)
+        VALUES (${organizationId}, ${workerRole}, ${`Requisitos ${workerRole}`})
+        RETURNING id
+      `.execute(trx);
+      requirementSetId = inserted.rows[0].id;
+    }
+
+    await sql`DELETE FROM requirements WHERE requirement_set_id = ${requirementSetId}`.execute(trx);
+    for (const requirement of input.requirements) {
+      await sql`
+        INSERT INTO requirements (
+          requirement_set_id, credential_type_id, is_mandatory, requires_organization_review
+        ) VALUES (
+          ${requirementSetId}, ${typeIds.get(requirement.credentialTypeCode.toUpperCase())!},
+          ${requirement.isMandatory}, ${requirement.requiresOrganizationReview}
+        )
+      `.execute(trx);
+    }
+
+    const saved = await readPolicy(trx, organizationId, workerRole);
+    if (!saved) throw new NoApplicableRequirementSetError();
+    await sql`
+      INSERT INTO audit_log (
+        actor_user_id, organization_id, target_organization_id, action,
+        entity_type, entity_id, previous_value, new_value
+      ) VALUES (
+        ${userId}, ${organizationId}, ${organizationId},
+        'COMPLIANCE_REQUIREMENTS_UPDATED', 'requirement_set', ${requirementSetId},
+        ${JSON.stringify(previous)}::jsonb, ${JSON.stringify(saved)}::jsonb
+      )
+    `.execute(trx);
+    return saved;
+  });
+}
+
+export interface ComplianceAuditEntry {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  entityType: string;
+  occurredAt: string;
+  previousValue: unknown;
+  newValue: unknown;
+}
+
+export async function listComplianceAudit(
+  userId: string,
+  organizationId: string
+): Promise<ComplianceAuditEntry[]> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertComplianceManager(trx);
+    const result = await sql<{
+      id: string;
+      actor_user_id: string | null;
+      action: string;
+      entity_type: string;
+      occurred_at: string;
+      previous_value: unknown;
+      new_value: unknown;
+    }>`
+      SELECT id, actor_user_id, action, entity_type, occurred_at, previous_value, new_value
+      FROM audit_log
+      WHERE organization_id = ${organizationId}
+        AND action IN ('COMPLIANCE_REQUIREMENTS_UPDATED', 'WORKER_MEMBERSHIP_STATUS_CHANGED')
+      ORDER BY occurred_at DESC
+      LIMIT 100
+    `.execute(trx);
+    return result.rows.map((row) => ({
+      id: row.id,
+      actorUserId: row.actor_user_id,
+      action: row.action,
+      entityType: row.entity_type,
+      occurredAt: row.occurred_at,
+      previousValue: row.previous_value,
+      newValue: row.new_value,
+    }));
+  });
 }
