@@ -12,9 +12,9 @@ Branch: phase-7/platform-verification
   caregiver only from the session user and active organization.
 - The endpoint returns the real worker display name and organization-specific
   internal role without weakening workforce RLS or exposing another worker.
-- Backend TypeScript build and all 72 tests pass locally.
-- Exact next step: publish together with the frontend identity correction only
-  after explicit authorization.
+- Backend PR #42 was merged after TypeScript, 72/72 tests and all CI checks
+  passed; Railway serves the new protected endpoint.
+- Exact next step: validate Carlos and Rafael after signing out and back in.
 
 ## 2026-09-20 — Phase 7.6.1 platform credential verification
 
