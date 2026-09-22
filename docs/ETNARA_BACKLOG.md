@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-031 — Phase 7.7 planning runtime hotfix
+
+- cast forecast horizon parameters before PostgreSQL date arithmetic
+- preserve manager-only, organization-scoped and read-only behavior
+- validate the deployed forecast endpoint after Railway finishes
+
+Status: Implemented locally on `fix/phase-7-7-planning-runtime`; TypeScript
+build and 80/80 tests pass. Publication requires explicit authorization.
+
+---
+
 ### ETN-030 — Phase 7.7 predictive workforce planning
 
 - forecast workforce capacity for the next 7, 14 or 30 days
