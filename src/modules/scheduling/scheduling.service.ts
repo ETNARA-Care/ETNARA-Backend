@@ -89,6 +89,7 @@ export const createShiftSchema = z
     roomId: z.string().uuid().optional(),
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
+    requiredRole: z.string().trim().min(1).max(80).optional(),
   })
   .refine((d) => d.careRecipientId || d.roomId, {
     message: "Either careRecipientId (home care) or roomId (residential) is required",
@@ -103,6 +104,7 @@ const updateShiftSchema = z
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
     status: z.enum(["unassigned", "confirmed", "in_progress", "completed"]), // 'cancelled' only via the dedicated cancel action
+    requiredRole: z.string().trim().min(1).max(80),
   })
   .partial()
   .refine((d) => Object.keys(d).length > 0, { message: "At least one field required" });
@@ -116,6 +118,7 @@ interface ShiftRow {
   room_id: string | null;
   scheduled_start: string;
   scheduled_end: string;
+  required_role: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -151,9 +154,9 @@ export async function createShift(
     }
 
     const result = await sql<ShiftRow>`
-      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end)
-      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd})
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, status, created_at, updated_at
+      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role)
+      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"})
+      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
   });
@@ -190,7 +193,7 @@ export async function listShifts(userId: string, organizationId: string, filter:
     }
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end,
+      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
@@ -221,7 +224,7 @@ export async function listMyShifts(userId: string, organizationId: string) {
     if (!workerId) throw new WorkerNotLinkedError();
 
     const result = await sql<ShiftRow>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end,
+      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, a.id AS assignment_id,
              a.response_status AS assignment_response_status
       FROM shifts s
@@ -373,7 +376,7 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, status, created_at, updated_at
+      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       LIMIT 1
@@ -410,13 +413,14 @@ export async function updateShift(
     if (input.scheduledStart !== undefined) fragments.push(sql`scheduled_start = ${input.scheduledStart}`);
     if (input.scheduledEnd !== undefined) fragments.push(sql`scheduled_end = ${input.scheduledEnd}`);
     if (input.status !== undefined) fragments.push(sql`status = ${input.status}`);
+    if (input.requiredRole !== undefined) fragments.push(sql`required_role = ${input.requiredRole}`);
     fragments.push(sql`updated_at = now()`);
 
     const result = await sql<ShiftRow>`
       UPDATE shifts
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, status, created_at, updated_at
+      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     if (!result.rows[0]) throw new ShiftNotFoundError();
     return result.rows[0];
@@ -445,7 +449,7 @@ export async function cancelShift(userId: string, organizationId: string, shiftI
         AND status IN ('unassigned', 'confirmed')
         AND scheduled_start > now()
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start,
-                scheduled_end, status, created_at, updated_at
+                scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     if (result.rows[0]) {
       await sql`

@@ -2,6 +2,20 @@
 
 ## In Progress
 
+### ETN-030 — Phase 7.7 predictive workforce planning
+
+- forecast workforce capacity for the next 7, 14 or 30 days
+- compare real shift demand by role with eligible declared availability
+- explain coverage gaps, uncovered shifts, uncertainty and credential expiry
+- remain read-only and preserve human assignment authority
+- keep the contract manager-only and organization-scoped
+
+Status: Implemented locally on `phase-7/7.7-predictive-workforce`; TypeScript
+build and 79/79 tests pass. PostgreSQL 16 migration validation remains before
+publication.
+
+---
+
 ### ETN-026 — Demo caregiver eligibility correction
 
 - provision valid fictitious credentials only inside `Cuidado en Casa Demo`

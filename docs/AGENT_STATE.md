@@ -4,7 +4,24 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: main
+Branch: phase-7/7.7-predictive-workforce
+
+## 2026-09-21 — Phase 7.7 predictive workforce planning
+
+- Added a manager-only, organization-scoped forecast for 7, 14 or 30 days.
+- Demand comes from real scheduled shifts and their required operational role;
+  migration 057 safely backfills existing shifts from active assignments.
+- Known capacity uses only currently eligible workers, declared weekly
+  availability and future unavailability periods. Unconfigured availability is
+  reported as uncertainty and is never invented as capacity.
+- The forecast explains daily and role-specific coverage gaps, uncovered
+  shifts and upcoming credential expirations without creating or changing an
+  assignment.
+- New shift assignments preserve the required role, and coverage campaigns
+  retain the same role label.
+- Backend TypeScript build and all 79 tests pass locally.
+- Exact next step: validate migration 057 on PostgreSQL 16, review the final
+  diff and publish only after explicit authorization.
 
 ## 2026-09-21 — Phase 7.6.2 compliance self-service
 
@@ -17,10 +34,12 @@ Branch: main
   log, and the compliance history also includes worker activation changes.
 - Migration 056 requires real Admin/Supervisor authority at the RLS layer for
   organization requirement-set writes, in addition to the service guard.
-- Backend PR #44 was merged after build, 75/75 tests, PostgreSQL migration\n  validation and every CI check passed.
+- Backend PR #44 was merged after build, 75/75 tests, PostgreSQL migration
+  validation and every CI check passed.
 - Credential-document upload remains intentionally deferred to the final
   technical close and does not block this phase.
-- Railway applied migration 056, remains healthy and serves the protected route.\n- Exact next step: validate one role-policy change in the live Admin portal.
+- Railway applied migration 056, remains healthy and serves the protected route.
+- Exact next step: validate one role-policy change in the live Admin portal.
 
 ## 2026-09-20 — Caregiver identity hotfix
 

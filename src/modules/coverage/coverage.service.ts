@@ -22,6 +22,7 @@ export const coverageRecommendationSchema = z
     careRecipientId: z.string().uuid(),
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
+    requiredRole: z.string().trim().min(1).max(80).optional(),
   })
   .refine((value) => new Date(value.scheduledStart).getTime() < new Date(value.scheduledEnd).getTime(), {
     message: "scheduledStart must be strictly before scheduledEnd",
@@ -148,12 +149,17 @@ export async function recommendCoverage(
     const isEligible = eligibility.eligibilityStatus === "eligible";
     const matchesDeclaredAvailability = !worker.availability_configured
       || (worker.matches_weekly_availability && !worker.has_unavailability_period);
-    const recommended = isEligible && !worker.has_schedule_conflict && matchesDeclaredAvailability;
+    const roleMatches = !input.requiredRole
+      || input.requiredRole.toLocaleLowerCase("es") === "cuidador/a"
+      || worker.internal_role.toLocaleLowerCase("es") === input.requiredRole.toLocaleLowerCase("es");
+    const recommended = isEligible && !worker.has_schedule_conflict && matchesDeclaredAvailability && roleMatches;
     const reasons = isEligible ? ["Cumple los requisitos obligatorios"] : [];
     const blockers = [...mandatoryFailures];
 
     if (worker.has_schedule_conflict) blockers.push("Tiene otro turno que coincide con este horario");
     else reasons.push("No se encontró conflicto con otro turno");
+    if (!roleMatches) blockers.push(`El turno requiere el rol ${input.requiredRole}`);
+    else if (input.requiredRole) reasons.push(`Su rol coincide con ${input.requiredRole}`);
     if (!worker.availability_configured) {
       reasons.push("Disponibilidad semanal aún no configurada");
     } else if (worker.has_unavailability_period) {
