@@ -14,9 +14,10 @@ Branch: fix/phase-7-7-planning-runtime
   rules and read-only planning behavior.
 - Added a regression that requires every date-arithmetic horizon parameter to
   remain explicitly typed.
-- Backend TypeScript build and all 80 tests pass locally.
-- Exact next step: publish only after explicit authorization, require CI and
-  Railway deployment success, then validate the protected live endpoint.
+- Backend PR #48 was merged after TypeScript, build, all 80 tests, PostgreSQL
+  validation and diff-safety checks passed.
+- Railway remains healthy and serves the forecast route behind authentication.
+- Exact next step: validate one authenticated live forecast from Administration.
 
 ## 2026-09-21 — Phase 7.7 predictive workforce planning
 
