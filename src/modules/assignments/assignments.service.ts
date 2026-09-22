@@ -150,10 +150,11 @@ export async function createAssignment(
       status: string;
       scheduled_start: string;
       scheduled_end: string;
+      required_role: string;
       care_recipient_id: string | null;
       room_id: string | null;
     }>`
-      SELECT id, status, scheduled_start, scheduled_end, care_recipient_id, room_id FROM shifts
+      SELECT id, status, scheduled_start, scheduled_end, required_role, care_recipient_id, room_id FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       LIMIT 1
     `.execute(trx);
@@ -198,7 +199,7 @@ export async function createAssignment(
 
     const result = await sql<AssignmentRow>`
       INSERT INTO assignments (organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift)
-      VALUES (${organizationId}, ${shiftId}, ${input.organizationWorkerMembershipId}, ${shift.care_recipient_id}, ${input.roleInShift ?? null})
+      VALUES (${organizationId}, ${shiftId}, ${input.organizationWorkerMembershipId}, ${shift.care_recipient_id}, ${input.roleInShift ?? shift.required_role})
       RETURNING id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift,
                 response_status, responded_at, response_reason, created_at
     `.execute(trx);

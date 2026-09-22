@@ -20,14 +20,21 @@ export const respondCoverageOfferSchema = z.object({
   reason: z.string().trim().max(240).optional(),
 });
 
-interface ShiftForOffer { id: string; care_recipient_id: string | null; scheduled_start: string; scheduled_end: string; status: string }
+interface ShiftForOffer {
+  id: string;
+  care_recipient_id: string | null;
+  scheduled_start: string;
+  scheduled_end: string;
+  required_role: string;
+  status: string;
+}
 
 async function requireManagerShift(userId: string, organizationId: string, shiftId: string): Promise<ShiftForOffer> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const manager = await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx);
     if (!manager.rows[0]?.ok) throw new CoverageOfferForbiddenError();
     const result = await sql<ShiftForOffer>`
-      SELECT id, care_recipient_id, scheduled_start, scheduled_end, status
+      SELECT id, care_recipient_id, scheduled_start, scheduled_end, required_role, status
       FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
     const shift = result.rows[0];
@@ -40,6 +47,7 @@ export async function openCoverageCampaign(userId: string, organizationId: strin
   const shift = await requireManagerShift(userId, organizationId, shiftId);
   const candidates = (await recommendCoverage(userId, organizationId, {
     careRecipientId: shift.care_recipient_id!, scheduledStart: shift.scheduled_start, scheduledEnd: shift.scheduled_end,
+    requiredRole: shift.required_role,
   })).filter((candidate) => candidate.recommended);
   if (!candidates.length) throw new CoverageOfferNoCandidatesError();
   const expiresAt = input.expiresAt ?? new Date(Math.min(new Date(shift.scheduled_start).getTime(), Date.now() + 24 * 60 * 60_000)).toISOString();
@@ -62,10 +70,10 @@ export async function openCoverageCampaign(userId: string, organizationId: strin
     const campaign = await sql<{ id: string }>`
       INSERT INTO coverage_campaigns (
         organization_id, shift_id, scheduled_start, scheduled_end, expires_at,
-        created_by_user_id, wave_size, response_window_minutes, current_wave, next_wave_at
+        created_by_user_id, wave_size, response_window_minutes, current_wave, next_wave_at, role_label
       ) VALUES (
         ${organizationId}, ${shiftId}, ${shift.scheduled_start}, ${shift.scheduled_end}, ${expiresAt},
-        ${userId}, ${input.waveSize}, ${input.responseWindowMinutes}, 1, ${firstResponseDueAt}
+        ${userId}, ${input.waveSize}, ${input.responseWindowMinutes}, 1, ${firstResponseDueAt}, ${shift.required_role}
       ) RETURNING id
     `.execute(trx);
     for (const [index, candidate] of candidates.entries()) {
