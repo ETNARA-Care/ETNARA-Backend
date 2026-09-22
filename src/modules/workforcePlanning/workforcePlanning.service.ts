@@ -128,7 +128,7 @@ export async function getWorkforceForecast(
       WHERE s.organization_id = ${organizationId}
         AND s.status != 'cancelled'
         AND (s.scheduled_start AT TIME ZONE ${input.timezone})::date >= ${input.startDate}::date
-        AND (s.scheduled_start AT TIME ZONE ${input.timezone})::date < ${input.startDate}::date + ${input.days}
+        AND (s.scheduled_start AT TIME ZONE ${input.timezone})::date < ${input.startDate}::date + ${input.days}::integer
       GROUP BY day, s.required_role
       ORDER BY day, s.required_role
     `.execute(trx);
@@ -152,7 +152,7 @@ export async function getWorkforceForecast(
       WITH forecast_dates AS (
         SELECT generate_series(
           ${input.startDate}::date,
-          ${input.startDate}::date + (${input.days} - 1),
+          ${input.startDate}::date + (${input.days}::integer - 1),
           interval '1 day'
         )::date AS day
       )
@@ -215,7 +215,7 @@ export async function getWorkforceForecast(
       JOIN credential_types ct ON ct.id = latest.credential_type_id
       WHERE owm.organization_id = ${organizationId} AND owm.status = 'active'
         AND latest.expires_at >= ${input.startDate}::date
-        AND latest.expires_at < ${input.startDate}::date + ${input.days}
+        AND latest.expires_at < ${input.startDate}::date + ${input.days}::integer
       ORDER BY latest.expires_at, w.display_name NULLS LAST
     `.execute(trx);
 
