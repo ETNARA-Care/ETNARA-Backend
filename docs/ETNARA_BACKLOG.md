@@ -8,8 +8,8 @@
 - preserve manager-only, organization-scoped and read-only behavior
 - validate the deployed forecast endpoint after Railway finishes
 
-Status: Implemented locally on `fix/phase-7-7-planning-runtime`; TypeScript
-build and 80/80 tests pass. Publication requires explicit authorization.
+Status: Complete — published and merged in backend PR #48; CI passed and
+Railway health plus protected-route checks succeeded.
 
 ---
 
