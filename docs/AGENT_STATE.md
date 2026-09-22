@@ -4,7 +4,25 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: fix/phase-7-7-planning-runtime
+Branch: phase-7/7.8-timesheets-billing
+
+## 2026-09-22 — Phase 7.8 timesheets, billing and payroll preparation
+
+- A completed, accepted shift now produces one idempotent timesheet from its
+  paired check-in and check-out. Workers cannot insert financial records or
+  read rates directly.
+- Organization managers can configure hourly worker-pay and agency-bill rates,
+  review recorded time, approve it or dispute it with an explanation.
+- Approved totals use integer cents and a frozen rate snapshot, so later rate
+  changes do not rewrite history. Approved records cannot be reopened.
+- Rate changes and every timesheet decision are recorded in the append-only
+  audit log; all financial data remains organization-scoped and unavailable to
+  Family.
+- This phase calculates preparation totals only. ETNARA does not move money,
+  execute payroll or issue invoices.
+- Backend TypeScript build and all 85 tests pass locally.
+- Exact next step: validate migration 058 on PostgreSQL 16, review the final
+  diff and publish with the frontend only after explicit authorization.
 
 ## 2026-09-22 — Phase 7.7 planning runtime hotfix
 
