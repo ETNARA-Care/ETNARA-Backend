@@ -40,4 +40,10 @@ describe("Phase 7.7 predictive workforce planning", () => {
     expect(service).toContain("[7, 14, 30].includes(value)");
     expect(service).toContain("pg_timezone_names");
   });
+
+  it("casts every planning-horizon parameter before PostgreSQL date arithmetic", () => {
+    const service = read("src/modules/workforcePlanning/workforcePlanning.service.ts");
+    expect(service.match(/\$\{input\.days\}::integer/g)).toHaveLength(3);
+    expect(service).not.toMatch(/\$\{input\.startDate\}::date \+ \$\{input\.days\}(?!::integer)/);
+  });
 });
