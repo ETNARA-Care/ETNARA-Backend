@@ -4,7 +4,19 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/7.7-predictive-workforce
+Branch: fix/phase-7-7-planning-runtime
+
+## 2026-09-22 — Phase 7.7 planning runtime hotfix
+
+- Fixed the live forecast query by explicitly casting all planning-horizon
+  parameters to PostgreSQL `integer` before date arithmetic.
+- Preserved the existing manager authorization, tenant context, eligibility
+  rules and read-only planning behavior.
+- Added a regression that requires every date-arithmetic horizon parameter to
+  remain explicitly typed.
+- Backend TypeScript build and all 80 tests pass locally.
+- Exact next step: publish only after explicit authorization, require CI and
+  Railway deployment success, then validate the protected live endpoint.
 
 ## 2026-09-21 — Phase 7.7 predictive workforce planning
 
