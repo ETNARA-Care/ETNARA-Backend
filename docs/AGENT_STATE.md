@@ -4,7 +4,21 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-8/8.0-operational-automation
+Branch: phase-9/9.0-operations-agent
+
+## 2026-09-26 — Phase 9.0 assisted Operations Agent
+
+- Added a manager-requested advisory briefing derived only from the real
+  Phase 8.0 operational center.
+- The agent ranks at most five current priorities, explains each reason and
+  recommends the existing human workflow without performing the action.
+- Every run is organization-scoped and immutably audited with its counts and
+  priority alert keys; only managers can read the history.
+- No data is sent to an external model. Family receives no route, and the
+  agent cannot assign/cancel shifts, approve records or make clinical decisions.
+- TypeScript, build, all 92 tests and diff safety pass locally.
+- Exact next step: run the full backend validation including PostgreSQL 16,
+  review the diff and publish only after every check is green.
 
 ## 2026-09-26 — Phase 8.0 agency operations and automation
 
@@ -14,9 +28,8 @@ Branch: phase-8/8.0-operational-automation
   unresolved incidents and hours requiring review.
 - Escalation revalidates the source, is idempotent and auditable, and notifies
   active Supervisors without making the underlying decision automatically.
-- Backend build and all 88 tests pass locally.
-- Exact next step: validate migration 060 on PostgreSQL 16 and publish with the
-  frontend only after explicit authorization.
+- Published and merged in backend PR #52 after 88/88 tests, build, PostgreSQL
+  16 validation and CI passed; Railway serves the protected endpoint.
 
 ## 2026-09-22 — Phase 7.8 timesheets, billing and payroll preparation
 
