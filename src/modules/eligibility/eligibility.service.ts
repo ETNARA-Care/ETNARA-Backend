@@ -513,3 +513,193 @@ export async function listComplianceAudit(
     }));
   });
 }
+
+type ComplianceAgentSeverity = "critical" | "warning";
+
+type ComplianceAgentWorker = {
+  membershipId: string;
+  displayName: string;
+  workerRole: string;
+  nearestExpiry: string | null;
+};
+
+const CRITICAL_COMPLIANCE_REASONS = new Set([
+  "CREDENTIAL_EXPIRED",
+  "CREDENTIAL_REVOKED",
+  "PLATFORM_VERIFICATION_REJECTED",
+]);
+
+const COMPLIANCE_AGENT_GUARDRAILS = [
+  "No aprueba ni rechaza credenciales.",
+  "No cambia la elegibilidad ni el estado laboral.",
+  "No carga documentos ni modifica políticas.",
+  "Toda acción final requiere confirmación humana.",
+];
+
+function complianceAgentRecommendation(blockers: string[], expiring: boolean) {
+  if (blockers.includes("PLATFORM_VERIFICATION_REJECTED")) {
+    return "Abrir el perfil, revisar el rechazo y solicitar una corrección o un documento nuevo.";
+  }
+  if (blockers.includes("CREDENTIAL_EXPIRED") || blockers.includes("CREDENTIAL_REVOKED")) {
+    return "Abrir el perfil y solicitar una credencial vigente antes de asignar trabajo.";
+  }
+  if (blockers.includes("MISSING_CREDENTIAL")) {
+    return "Abrir el perfil y solicitar la credencial obligatoria que falta.";
+  }
+  if (blockers.includes("PLATFORM_VERIFICATION_MISSING")) {
+    return "Revisar el documento y dar seguimiento a la verificación de plataforma.";
+  }
+  if (blockers.includes("ORGANIZATION_REVIEW_MISSING")) {
+    return "Abrir el perfil y realizar la revisión humana requerida por la agencia.";
+  }
+  if (blockers.includes("NO_APPLICABLE_REQUIREMENT_SET")) {
+    return "Configurar los requisitos aplicables para este tipo de cuidador.";
+  }
+  if (blockers.includes("CREDENTIAL_NOT_ACTIVE")) {
+    return "Abrir el perfil y revisar por qué la credencial todavía no está activa.";
+  }
+  if (expiring) {
+    return "Solicitar la renovación antes del vencimiento para evitar una interrupción.";
+  }
+  return "Revisar el perfil y confirmar el próximo paso de cumplimiento.";
+}
+
+export async function generateComplianceAgentBriefing(
+  userId: string,
+  organizationId: string
+) {
+  const workers = await withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertComplianceManager(trx);
+    const result = await sql<{
+      membership_id: string;
+      display_name: string | null;
+      internal_role: string;
+      nearest_expiry: string | null;
+    }>`
+      SELECT owm.id AS membership_id, w.display_name, owm.internal_role,
+             MIN(c.expires_at) FILTER (
+               WHERE c.status = 'active'
+                 AND c.expires_at BETWEEN current_date AND current_date + 30
+             ) AS nearest_expiry
+      FROM organization_worker_memberships owm
+      JOIN workers w ON w.id = owm.worker_id
+      LEFT JOIN credentials c ON c.worker_id = owm.worker_id
+      WHERE owm.organization_id = ${organizationId}
+        AND owm.status = 'active'
+      GROUP BY owm.id, w.display_name, owm.internal_role
+      ORDER BY w.display_name NULLS LAST, owm.id
+    `.execute(trx);
+    return result.rows.map((row): ComplianceAgentWorker => ({
+      membershipId: row.membership_id,
+      displayName: row.display_name || "Cuidador sin nombre",
+      workerRole: row.internal_role,
+      nearestExpiry: row.nearest_expiry,
+    }));
+  });
+
+  const analyzed: Array<{
+    worker: ComplianceAgentWorker;
+    eligible: boolean;
+    blockers: string[];
+    severity: ComplianceAgentSeverity | null;
+  }> = [];
+
+  for (const worker of workers) {
+    try {
+      const summary = await getComplianceSummary(userId, organizationId, worker.membershipId);
+      const blockers = summary.requirements
+        .filter((requirement) => requirement.isMandatory && requirement.status !== "satisfied")
+        .map((requirement) => requirement.status);
+      const critical = blockers.some((reason) => CRITICAL_COMPLIANCE_REASONS.has(reason));
+      analyzed.push({
+        worker,
+        eligible: summary.eligibility === "eligible",
+        blockers,
+        severity: critical ? "critical" : blockers.length > 0 || worker.nearestExpiry ? "warning" : null,
+      });
+    } catch (error) {
+      if (!(error instanceof NoApplicableRequirementSetError)) throw error;
+      analyzed.push({
+        worker,
+        eligible: false,
+        blockers: ["NO_APPLICABLE_REQUIREMENT_SET"],
+        severity: "warning",
+      });
+    }
+  }
+
+  const severityRank: Record<ComplianceAgentSeverity, number> = { critical: 0, warning: 1 };
+  const priorityCandidates = analyzed
+    .filter((item) => item.severity)
+    .sort((left, right) => {
+      const severityDifference = severityRank[left.severity!] - severityRank[right.severity!];
+      if (severityDifference !== 0) return severityDifference;
+      const blockerDifference = right.blockers.length - left.blockers.length;
+      if (blockerDifference !== 0) return blockerDifference;
+      return left.worker.displayName.localeCompare(right.worker.displayName, "es");
+    });
+  const selected = priorityCandidates.slice(0, 5);
+  const eligibleWorkerCount = analyzed.filter((item) => item.eligible).length;
+  const blockedWorkerCount = analyzed.filter((item) => !item.eligible).length;
+  const expiringWorkerCount = analyzed.filter((item) => item.worker.nearestExpiry).length;
+
+  const recorded = await withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertComplianceManager(trx);
+    return sql<{ id: string }>`
+      SELECT app_record_compliance_agent_run(
+        ${organizationId},
+        ${workers.length},
+        ${eligibleWorkerCount},
+        ${blockedWorkerCount},
+        ${expiringWorkerCount},
+        CAST(${JSON.stringify(selected.map((item) => item.worker.membershipId))} AS jsonb)
+      ) id
+    `.execute(trx);
+  });
+
+  const headline = blockedWorkerCount > 0
+    ? `${blockedWorkerCount} cuidador${blockedWorkerCount === 1 ? "" : "es"} no ${blockedWorkerCount === 1 ? "está apto" : "están aptos"} para trabajar.`
+    : expiringWorkerCount > 0
+      ? `${expiringWorkerCount} cuidador${expiringWorkerCount === 1 ? "" : "es"} requiere${expiringWorkerCount === 1 ? "" : "n"} renovación próxima.`
+      : "El personal activo está al día con los requisitos actuales.";
+
+  return {
+    runId: recorded.rows[0].id,
+    generatedAt: new Date().toISOString(),
+    mode: "advisory" as const,
+    headline,
+    narrative: workers.length > 0
+      ? `Analicé ${workers.length} cuidador${workers.length === 1 ? "" : "es"} activo${workers.length === 1 ? "" : "s"} usando elegibilidad, verificaciones y vencimientos reales. No ejecuté cambios.`
+      : "No hay cuidadores activos que analizar en esta organización.",
+    summary: {
+      activeWorkers: workers.length,
+      eligibleWorkers: eligibleWorkerCount,
+      blockedWorkers: blockedWorkerCount,
+      expiringWorkers: expiringWorkerCount,
+    },
+    priorities: selected.map((item, index) => ({
+      rank: index + 1,
+      membershipId: item.worker.membershipId,
+      workerName: item.worker.displayName,
+      workerRole: item.worker.workerRole,
+      severity: item.severity!,
+      title: item.blockers.length > 0
+        ? "Requisito obligatorio pendiente"
+        : "Credencial próxima a vencer",
+      reason: item.blockers.length > 0
+        ? `${item.blockers.length} bloqueo${item.blockers.length === 1 ? "" : "s"} de cumplimiento requiere${item.blockers.length === 1 ? "" : "n"} atención.`
+        : `Una credencial vence el ${item.worker.nearestExpiry}.`,
+      blockerCodes: item.blockers,
+      nearestExpiry: item.worker.nearestExpiry,
+      recommendedAction: complianceAgentRecommendation(
+        item.blockers,
+        Boolean(item.worker.nearestExpiry)
+      ),
+      actionPath: item.blockers.includes("NO_APPLICABLE_REQUIREMENT_SET")
+        ? "/agency/compliance"
+        : `/agency/workers/${item.worker.membershipId}`,
+      requiresHumanConfirmation: true,
+    })),
+    guardrails: COMPLIANCE_AGENT_GUARDRAILS,
+  };
+}
