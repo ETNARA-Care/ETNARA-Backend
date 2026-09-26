@@ -4,7 +4,19 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-7/7.8-timesheets-billing
+Branch: phase-8/8.0-operational-automation
+
+## 2026-09-26 — Phase 8.0 agency operations and automation
+
+- Added a manager-only center derived from real shifts, verification events,
+  credentials, incidents and timesheets.
+- Alerts cover uncovered shifts, missed check-ins, expiring credentials,
+  unresolved incidents and hours requiring review.
+- Escalation revalidates the source, is idempotent and auditable, and notifies
+  active Supervisors without making the underlying decision automatically.
+- Backend build and all 88 tests pass locally.
+- Exact next step: validate migration 060 on PostgreSQL 16 and publish with the
+  frontend only after explicit authorization.
 
 ## 2026-09-22 — Phase 7.8 timesheets, billing and payroll preparation
 

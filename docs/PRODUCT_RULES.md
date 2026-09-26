@@ -136,6 +136,13 @@ Potential triggers include:
 
 Notifications must always respect organization and care-recipient authorization.
 
+## Operational Automation
+
+- Operational alerts are manager-only and derive from authoritative records.
+- Escalation must revalidate its source, be idempotent and remain auditable.
+- Automation may prioritize and notify, but never assign workers, resolve
+  incidents, approve hours or change eligibility automatically.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.

@@ -24,6 +24,7 @@ import coverageOffersRoutes from "./modules/coverageOffers/coverageOffers.routes
 import workforcePlanningRoutes from "./modules/workforcePlanning/workforcePlanning.routes.js";
 import timesheetsRoutes from "./modules/timesheets/timesheets.routes.js";
 import payPeriodsRoutes from "./modules/timesheets/payPeriods.routes.js";
+import operationsRoutes from "./modules/operations/operations.routes.js";
 
 export function createApp(): Express {
   const app = express();
@@ -87,6 +88,7 @@ export function createApp(): Express {
   app.use(workforcePlanningRoutes);
   app.use(timesheetsRoutes);
   app.use(payPeriodsRoutes);
+  app.use(operationsRoutes);
 
   // Safety-net error handler: never leak stack traces, SQL, or internal
   // details to the client.
