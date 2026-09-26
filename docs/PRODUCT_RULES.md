@@ -165,6 +165,17 @@ Notifications must always respect organization and care-recipient authorization.
 - Each run requires manager authority and creates an immutable audit record.
 - Family has no route or response contract for the compliance agent.
 
+## Assisted Coverage Agent
+
+- The agent may analyze real uncovered shifts, staged campaign state and fresh
+  coverage recommendations for one organization.
+- It may prioritize, explain and point managers to the existing shift workflow.
+- It must not send offers, contact workers, create assignments, cancel shifts,
+  change eligibility or mutate a coverage campaign.
+- Each run requires manager authority and creates an immutable audit record.
+- Every final coverage action requires human confirmation, and Family has no
+  route or response contract for the coverage agent.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.
