@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-034 — Phase 9.1 assisted Compliance Agent
+
+- analyze active caregivers from fresh eligibility and credential expirations
+- prioritize rejected, revoked, expired, missing and pending requirements
+- recommend existing human workflows without modifying compliance state
+- audit each manager-requested run with organization isolation
+- keep Family and external model providers outside the contract
+
+Status: Implemented locally on `phase-9/9.1-compliance-agent`; TypeScript,
+build, all 96 tests and diff safety pass. PostgreSQL 16 validation remains.
+
+---
+
 ### ETN-033 — Phase 9.0 assisted Operations Agent
 
 - generate an explainable manager-requested briefing from current alerts
@@ -10,8 +23,8 @@
 - require human confirmation and prohibit autonomous operational decisions
 - keep Family and external model providers outside the contract
 
-Status: Implemented locally on `phase-9/9.0-operations-agent`; TypeScript,
-build, all 92 tests and diff safety pass. PostgreSQL 16 validation remains.
+Status: Complete — published and merged in backend PR #53; CI, PostgreSQL 16
+validation and Railway protected-route checks passed.
 
 ---
 
