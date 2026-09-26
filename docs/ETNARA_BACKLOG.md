@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-033 — Phase 9.0 assisted Operations Agent
+
+- generate an explainable manager-requested briefing from current alerts
+- rank no more than five real priorities with existing-workflow destinations
+- audit every run without storing invented narrative or clinical conclusions
+- require human confirmation and prohibit autonomous operational decisions
+- keep Family and external model providers outside the contract
+
+Status: Implemented locally on `phase-9/9.0-operations-agent`; TypeScript,
+build, all 92 tests and diff safety pass. PostgreSQL 16 validation remains.
+
+---
+
 ### ETN-032 — Phase 8.0 agency operations and automation
 
 - derive five manager-only alert categories from real records
@@ -9,8 +22,8 @@
 - escalate active alerts idempotently to Supervisors with audit history
 - preserve human decisions and prevent Family access
 
-Status: Implemented locally on `phase-8/8.0-operational-automation`; backend
-build and 88/88 tests pass. PostgreSQL 16 validation remains before publication.
+Status: Complete — published and merged in backend PR #52; CI, PostgreSQL 16
+validation and Railway protected-route checks passed.
 
 ---
 
