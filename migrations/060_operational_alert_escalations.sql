@@ -57,6 +57,7 @@ BEGIN
   WHERE om.organization_id=p_organization_id AND om.status='active' AND r.code='SUPERVISOR'
   ON CONFLICT DO NOTHING;
   RETURN v_id;
-END $$;
+END;
+$$;
 REVOKE ALL ON FUNCTION app_escalate_operational_alert(uuid,text,text,text,uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_escalate_operational_alert(uuid,text,text,text,uuid) TO app_runtime;
