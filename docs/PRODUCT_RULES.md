@@ -155,6 +155,16 @@ Notifications must always respect organization and care-recipient authorization.
   human decision.
 - Family has no route or response contract for the agent.
 
+## Assisted Compliance Agent
+
+- The agent may analyze fresh eligibility, credential verification state and
+  upcoming expirations for active caregivers in one organization.
+- It may prioritize, explain and recommend an existing human workflow.
+- It must not approve/reject credentials, change eligibility, activate or
+  deactivate workers, upload documents or modify compliance policies.
+- Each run requires manager authority and creates an immutable audit record.
+- Family has no route or response contract for the compliance agent.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.
