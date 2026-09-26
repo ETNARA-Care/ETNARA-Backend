@@ -2,6 +2,18 @@
 
 ## In Progress
 
+### ETN-032 — Phase 8.0 agency operations and automation
+
+- derive five manager-only alert categories from real records
+- provide a daily priority summary and direct action destinations
+- escalate active alerts idempotently to Supervisors with audit history
+- preserve human decisions and prevent Family access
+
+Status: Implemented locally on `phase-8/8.0-operational-automation`; backend
+build and 88/88 tests pass. PostgreSQL 16 validation remains before publication.
+
+---
+
 ### ETN-031 — Phase 7.7 planning runtime hotfix
 
 - cast forecast horizon parameters before PostgreSQL date arithmetic
