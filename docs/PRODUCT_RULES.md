@@ -100,6 +100,17 @@ Administration:
 Family:
 - may see only the family-safe status/summary intended for the product
 
+## Timesheets and Financial Preparation
+
+- A timesheet must come from one accepted shift with a paired check-in and
+  check-out; creation must be idempotent.
+- Pay and bill rates and totals are manager-only, organization-scoped data.
+- Approved time snapshots the applicable rates and becomes immutable.
+- Monetary values are stored and calculated in integer cents.
+- ETNARA may prepare payroll and billing totals, but does not move money,
+  execute payroll or issue invoices in this phase.
+- Family must never receive rates, pay totals or bill totals.
+
 ## Observations and Incidents
 
 Caregiver:

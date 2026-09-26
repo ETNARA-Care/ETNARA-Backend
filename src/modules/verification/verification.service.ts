@@ -3,6 +3,7 @@ import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
 import { evaluateWorkerEligibility } from "../eligibility/eligibility.service.js";
+import { recordTimesheetFromCheckout } from "../timesheets/timesheets.service.js";
 
 export class WorkerNotLinkedError extends Error {
   constructor() {
@@ -331,6 +332,15 @@ export async function checkOut(
       RETURNING *
     `.execute(trx);
 
+    await recordTimesheetFromCheckout(trx, {
+      actorUserId: userId,
+      organizationId,
+      shiftId,
+      membershipId: membership.id,
+      checkInAt: active.occurred_at,
+      checkOutAt: result.rows[0].occurred_at,
+    });
+
     const stillActive = await sql<{ id: string }>`
       SELECT ve1.id FROM verification_events ve1
       WHERE ve1.shift_id = ${shiftId} AND ve1.event_type = 'check_in'
@@ -452,6 +462,10 @@ export async function supervisorOverrideCheckEvent(
 
     const methodId = await resolveVerificationMethodId(trx, "SUPERVISOR_OVERRIDE");
 
+    const activeCheckIn = input.eventType === "check_out"
+      ? await findActiveCheckIn(trx, shiftId, input.organizationWorkerMembershipId)
+      : null;
+
     const eventResult = await sql<VerificationEventRow>`
       INSERT INTO verification_events (
         organization_id, shift_id, organization_worker_membership_id, verification_method_id,
@@ -467,6 +481,17 @@ export async function supervisorOverrideCheckEvent(
       INSERT INTO verification_overrides (verification_event_id, organization_id, authorized_by_user_id, reason)
       VALUES (${eventResult.rows[0].id}, ${organizationId}, ${supervisorUserId}, ${input.reason})
     `.execute(trx);
+
+    if (input.eventType === "check_out" && activeCheckIn) {
+      await recordTimesheetFromCheckout(trx, {
+        actorUserId: supervisorUserId,
+        organizationId,
+        shiftId,
+        membershipId: input.organizationWorkerMembershipId,
+        checkInAt: activeCheckIn.occurred_at,
+        checkOutAt: eventResult.rows[0].occurred_at,
+      });
+    }
 
     return eventResult.rows[0];
   });
