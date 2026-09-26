@@ -143,6 +143,18 @@ Notifications must always respect organization and care-recipient authorization.
 - Automation may prioritize and notify, but never assign workers, resolve
   incidents, approve hours or change eligibility automatically.
 
+## Assisted Operations Agent
+
+- The agent uses only current, organization-scoped operational records.
+- It may summarize, rank, explain and recommend an existing workflow.
+- It must not assign or cancel shifts, approve credentials, resolve incidents,
+  approve hours or make clinical decisions.
+- Every generated briefing requires manager authority and creates an immutable
+  audit record.
+- Recommendations must remain explainable and every final action requires a
+  human decision.
+- Family has no route or response contract for the agent.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.
