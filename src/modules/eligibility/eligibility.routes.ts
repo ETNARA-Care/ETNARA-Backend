@@ -8,6 +8,7 @@ import {
   ComplianceCredentialTypeNotFoundError,
   ComplianceManagementForbiddenError,
   getComplianceConfiguration,
+  generateComplianceAgentBriefing,
   listComplianceAudit,
   saveCompliancePolicy,
   saveCompliancePolicySchema,
@@ -130,6 +131,27 @@ router.get(
     try {
       const entries = await listComplianceAudit(req.auth!.userId, organizationId.data);
       res.status(200).json({ entries });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/compliance/agent/briefing",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const organizationId = uuidParam.safeParse(req.params.organizationId);
+    if (!organizationId.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const briefing = await generateComplianceAgentBriefing(
+        req.auth!.userId,
+        organizationId.data
+      );
+      res.status(201).json(briefing);
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

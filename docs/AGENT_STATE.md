@@ -4,7 +4,22 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-9/9.0-operations-agent
+Branch: phase-9/9.1-compliance-agent
+
+## 2026-09-26 — Phase 9.1 assisted Compliance Agent
+
+- Added a manager-requested compliance briefing using fresh eligibility,
+  platform/organization verification state and real 30-day expirations.
+- The agent ranks at most five active caregivers, explains blockers and opens
+  the existing profile or policy workflow without changing any record.
+- Each run records organization-scoped counts and priority membership IDs in
+  immutable manager-only history.
+- Family receives no route. No external model receives data, and the agent
+  cannot approve/reject credentials, change eligibility, activate workers,
+  upload documents or modify policy.
+- TypeScript, build, all 96 tests and diff safety pass locally.
+- Exact next step: run full validation including PostgreSQL 16, review the diff
+  and publish only after every check is green.
 
 ## 2026-09-26 — Phase 9.0 assisted Operations Agent
 
@@ -16,9 +31,8 @@ Branch: phase-9/9.0-operations-agent
   priority alert keys; only managers can read the history.
 - No data is sent to an external model. Family receives no route, and the
   agent cannot assign/cancel shifts, approve records or make clinical decisions.
-- TypeScript, build, all 92 tests and diff safety pass locally.
-- Exact next step: run the full backend validation including PostgreSQL 16,
-  review the diff and publish only after every check is green.
+- Published and merged in backend PR #53 after 92/92 tests, build, PostgreSQL
+  16 validation and CI passed; Railway serves the protected agent route.
 
 ## 2026-09-26 — Phase 8.0 agency operations and automation
 
