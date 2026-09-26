@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-035 — Phase 9.2 assisted Coverage Agent
+
+- analyze real uncovered shifts, latest campaigns and current eligible options
+- rank no more than five priorities by urgency and response state
+- recommend the existing offer or assignment workflow without mutating it
+- audit each manager-requested run with organization isolation
+- keep Family, autonomous assignment and external model providers outside the contract
+
+Status: Implemented locally on `phase-9/9.2-coverage-agent`; TypeScript, build,
+all 100 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
+
+---
+
 ### ETN-034 — Phase 9.1 assisted Compliance Agent
 
 - analyze active caregivers from fresh eligibility and credential expirations
@@ -10,8 +23,8 @@
 - audit each manager-requested run with organization isolation
 - keep Family and external model providers outside the contract
 
-Status: Implemented locally on `phase-9/9.1-compliance-agent`; TypeScript,
-build, all 96 tests and diff safety pass. PostgreSQL 16 validation remains.
+Status: Complete — published and merged in backend PR #54; CI, PostgreSQL 16
+validation and Railway protected-route checks passed.
 
 ---
 

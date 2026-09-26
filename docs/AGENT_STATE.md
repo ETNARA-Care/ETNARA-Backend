@@ -4,7 +4,21 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-9/9.1-compliance-agent
+Branch: phase-9/9.2-coverage-agent
+
+## 2026-09-26 — Phase 9.2 assisted Coverage Agent
+
+- Added a manager-requested coverage briefing for real uncovered shifts in the
+  next seven days.
+- The agent reuses fresh coverage recommendations, reads the latest staged
+  campaign and ranks at most five shifts by urgency and current response state.
+- Recommendations open the existing shift workflow; no offer, assignment,
+  cancellation, eligibility change or campaign mutation occurs automatically.
+- Each run records organization-scoped counts and priority shift IDs in
+  immutable manager-only history. Family receives no route or contract.
+- TypeScript, build, all 100 backend tests and diff safety pass locally.
+- Exact next step: run full validation including PostgreSQL 16, review the
+  diff and publish backend before frontend only after every check is green.
 
 ## 2026-09-26 — Phase 9.1 assisted Compliance Agent
 
@@ -17,9 +31,8 @@ Branch: phase-9/9.1-compliance-agent
 - Family receives no route. No external model receives data, and the agent
   cannot approve/reject credentials, change eligibility, activate workers,
   upload documents or modify policy.
-- TypeScript, build, all 96 tests and diff safety pass locally.
-- Exact next step: run full validation including PostgreSQL 16, review the diff
-  and publish only after every check is green.
+- Published and merged in backend PR #54 after 96/96 tests, build, PostgreSQL
+  16 validation and CI passed; Railway serves the protected agent route.
 
 ## 2026-09-26 — Phase 9.0 assisted Operations Agent
 
