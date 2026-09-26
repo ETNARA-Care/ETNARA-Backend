@@ -31,10 +31,10 @@ BEGIN
      OR v_user IS NULL OR NOT app_is_org_manager() THEN RAISE EXCEPTION 'operational escalation forbidden'; END IF;
   IF length(trim(p_alert_key)) NOT BETWEEN 1 AND 200
      OR p_alert_key <> p_category || ':' || p_related_entity_id::text
-     OR p_related_entity_type <> CASE p_category
+     OR p_related_entity_type <> (CASE p_category
        WHEN 'uncovered_shift' THEN 'shift' WHEN 'missed_check_in' THEN 'shift'
        WHEN 'expiring_credential' THEN 'credential' WHEN 'open_incident' THEN 'incident'
-       WHEN 'pending_timesheet' THEN 'timesheet' ELSE '' END
+       WHEN 'pending_timesheet' THEN 'timesheet' ELSE '' END)
   THEN RAISE EXCEPTION 'invalid alert identity'; END IF;
 
   SELECT CASE p_category
