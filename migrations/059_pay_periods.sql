@@ -28,7 +28,11 @@ CREATE TABLE pay_period_timesheets (
 );
 ALTER TABLE pay_periods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pay_period_timesheets ENABLE ROW LEVEL SECURITY;
-CREATE POLICY pay_periods_org_manager ON pay_periods USING (organization_id = app_current_organization_id() AND app_is_org_manager()) WITH CHECK (organization_id = app_current_organization_id() AND app_is_org_manager());
-CREATE POLICY pay_period_timesheets_org_manager ON pay_period_timesheets USING (organization_id = app_current_organization_id() AND app_is_org_manager()) WITH CHECK (organization_id = app_current_organization_id() AND app_is_org_manager());
-GRANT SELECT,INSERT,UPDATE ON pay_periods TO etnara_app;
-GRANT SELECT,INSERT ON pay_period_timesheets TO etnara_app;
+CREATE POLICY pay_periods_org_manager ON pay_periods
+USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager())
+WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager());
+CREATE POLICY pay_period_timesheets_org_manager ON pay_period_timesheets
+USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager())
+WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager());
+GRANT SELECT,INSERT,UPDATE ON pay_periods TO app_runtime;
+GRANT SELECT,INSERT ON pay_period_timesheets TO app_runtime;
