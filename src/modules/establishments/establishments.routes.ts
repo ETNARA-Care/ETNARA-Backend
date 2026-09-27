@@ -15,7 +15,19 @@ import {
 const router = Router();
 const uuid = z.string().uuid();
 
-function handleError(error: unknown, res: Response) {
+type DatabaseLikeError = Error & { code?: unknown };
+
+function logUnexpectedEstablishmentError(operation: string, error: unknown) {
+  const candidate = error instanceof Error ? (error as DatabaseLikeError) : undefined;
+  console.error("Unexpected establishment operation failure", {
+    operation,
+    name: candidate?.name ?? "UnknownError",
+    message: candidate?.message ?? "Unknown error",
+    code: typeof candidate?.code === "string" ? candidate.code : undefined,
+  });
+}
+
+function handleError(error: unknown, res: Response, operation: string) {
   if (error instanceof EstablishmentManagementForbiddenError || error instanceof MembershipNotActiveError) {
     res.status(403).json({ error: error.message });
   } else if (error instanceof EstablishmentNotFoundError) {
@@ -23,6 +35,7 @@ function handleError(error: unknown, res: Response) {
   } else if (error instanceof InvalidTenantContextError) {
     res.status(400).json({ error: "INVALID_ID" });
   } else {
+    logUnexpectedEstablishmentError(operation, error);
     res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 }
@@ -33,7 +46,7 @@ router.get("/organizations/:organizationId/establishments", requireAuth, async (
   try {
     res.json({ establishments: await listEstablishments(req.auth!.userId, organization.data) });
   } catch (error) {
-    handleError(error, res);
+    handleError(error, res, "list_establishments");
   }
 });
 
@@ -44,7 +57,7 @@ router.post("/organizations/:organizationId/establishments", requireAuth, async 
   try {
     res.status(201).json({ establishment: await createEstablishment(req.auth!.userId, organization.data, input.data) });
   } catch (error) {
-    handleError(error, res);
+    handleError(error, res, "create_establishment");
   }
 });
 
@@ -58,7 +71,7 @@ router.patch("/organizations/:organizationId/establishments/:establishmentId", r
   try {
     res.json({ establishment: await updateEstablishment(req.auth!.userId, organization.data, establishment.data, input.data) });
   } catch (error) {
-    handleError(error, res);
+    handleError(error, res, "update_establishment");
   }
 });
 
