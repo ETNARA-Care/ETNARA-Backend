@@ -61,11 +61,15 @@ export function getEstablishmentWorkspace(userId: string, organizationId: string
         om.status
       FROM organization_memberships om
       JOIN users u ON u.id=om.user_id
-      JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
-      JOIN roles r ON r.id=ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+      LEFT JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
+      LEFT JOIN roles r ON r.id=ur.role_id
       LEFT JOIN workers w ON w.user_id=om.user_id
       LEFT JOIN organization_worker_memberships owm ON owm.worker_id=w.id AND owm.organization_id=om.organization_id AND owm.status='active'
       WHERE om.organization_id=${organizationId} AND om.status='active'
+        AND (
+          r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+          OR UPPER(COALESCE(owm.internal_role, '')) IN ('SUPERVISOR', 'ADMIN', 'ADMINISTRATOR')
+        )
       GROUP BY om.id, u.email, om.status
       ORDER BY display_name
     `.execute(trx);
@@ -110,12 +114,26 @@ export function assignAdminToEstablishment(userId: string, organizationId: strin
     const candidate = await sql<{ membership_id: string }>`
       SELECT om.id AS membership_id
       FROM organization_memberships om
-      JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
-      JOIN roles r ON r.id=ur.role_id
       WHERE om.id=${membershipId}
         AND om.organization_id=${organizationId}
         AND om.status='active'
-        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+        AND (
+          EXISTS (
+            SELECT 1 FROM user_roles ur
+            JOIN roles r ON r.id=ur.role_id
+            WHERE ur.organization_membership_id=om.id
+              AND ur.organization_id=om.organization_id
+              AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+          )
+          OR EXISTS (
+            SELECT 1 FROM workers w
+            JOIN organization_worker_memberships owm ON owm.worker_id=w.id
+            WHERE w.user_id=om.user_id
+              AND owm.organization_id=om.organization_id
+              AND owm.status='active'
+              AND UPPER(COALESCE(owm.internal_role, '')) IN ('SUPERVISOR', 'ADMIN', 'ADMINISTRATOR')
+          )
+        )
       LIMIT 1
     `.execute(trx);
     if (!candidate.rows[0]) throw new EstablishmentNotFoundError();
