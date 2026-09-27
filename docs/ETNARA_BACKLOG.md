@@ -2,6 +2,17 @@
 
 ## In Progress
 
+### ETN-038 — Phase 10.0 multi-agency establishments
+- reuse organizations as the legal tenant and locations as establishments
+- require one explicit active organization for every operation
+- manager-only establishment create/update/archive/reactivate
+- preserve history with audit records and no physical delete route
+- harden location RLS with explicit read and manager-write policies
+- do not encode unvalidated regulatory requirements
+
+Status: Implemented locally on `phase-10/10.0-multi-agency-compliance`;
+validation and coordinated publication are pending.
+
 ### ETN-037 — Phase 9.4 B2B Agent Center stability close
 
 - preserve the four existing manager-authorized agent contracts
@@ -9,7 +20,7 @@
 - add dedicated Phase 7.9 regression coverage for pay-period integrity
 - introduce no new agent mutation, Family route or regulatory rule
 
-Status: Implemented locally on `phase-9/9.4-agent-center`; TypeScript, build,
+Status: Complete — published and merged in PR #57; TypeScript, build,
 all 106 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
 
 ---
