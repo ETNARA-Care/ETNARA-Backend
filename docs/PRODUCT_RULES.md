@@ -176,6 +176,17 @@ Notifications must always respect organization and care-recipient authorization.
 - Every final coverage action requires human confirmation, and Family has no
   route or response contract for the coverage agent.
 
+## Assisted Care Quality Agent
+
+- The agent may analyze completed shifts, immutable visit verification,
+  configured required care events, observations and incident follow-up.
+- It may identify objective gaps, prioritize them and recommend an existing
+  human workflow; it must not infer that care did or did not occur.
+- It must not create or edit notes, mark observations reviewed, resolve
+  incidents, alter verification history or make clinical conclusions.
+- Each run requires manager authority and creates an immutable audit record.
+- Family has no route or response contract for the care quality agent.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.

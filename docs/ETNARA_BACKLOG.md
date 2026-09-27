@@ -2,6 +2,19 @@
 
 ## In Progress
 
+### ETN-036 — Phase 9.3 assisted Care Quality Agent
+
+- inspect completed shifts for verification and required-documentation gaps
+- prioritize open observations and incidents without documented follow-up
+- recommend existing human workflows without modifying care records
+- audit each manager-requested run with organization isolation
+- prohibit clinical conclusions, Family exposure and autonomous record changes
+
+Status: Implemented locally on `phase-9/9.3-care-quality-agent`; TypeScript,
+build, all 104 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
+
+---
+
 ### ETN-035 — Phase 9.2 assisted Coverage Agent
 
 - analyze real uncovered shifts, latest campaigns and current eligible options
@@ -10,8 +23,8 @@
 - audit each manager-requested run with organization isolation
 - keep Family, autonomous assignment and external model providers outside the contract
 
-Status: Implemented locally on `phase-9/9.2-coverage-agent`; TypeScript, build,
-all 100 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
+Status: Complete — published and merged in backend PR #55; CI, PostgreSQL 16
+validation and Railway protected-route checks passed.
 
 ---
 
