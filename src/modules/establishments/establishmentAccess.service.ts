@@ -40,26 +40,34 @@ export function getEstablishmentWorkspace(userId: string, organizationId: string
     `.execute(trx);
     const administrators = await sql`
       SELECT eaa.organization_membership_id AS membership_id, u.email,
-        COALESCE(string_agg(DISTINCT r.name, ', ' ORDER BY r.name), 'Administrador') AS role, om.status
+        COALESCE(MAX(w.display_name), u.email, 'Administrador') AS display_name,
+        COALESCE(MAX(INITCAP(REPLACE(owm.internal_role, '_', ' '))), string_agg(DISTINCT r.name, ', ' ORDER BY r.name), 'Administrador') AS role,
+        om.status
       FROM establishment_admin_assignments eaa
       JOIN organization_memberships om ON om.id=eaa.organization_membership_id AND om.organization_id=eaa.organization_id
       JOIN users u ON u.id=om.user_id
+      LEFT JOIN workers w ON w.user_id=om.user_id
+      LEFT JOIN organization_worker_memberships owm ON owm.worker_id=w.id AND owm.organization_id=om.organization_id AND owm.status='active'
       LEFT JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
       LEFT JOIN roles r ON r.id=ur.role_id
       WHERE eaa.organization_id=${organizationId} AND eaa.location_id=${establishmentId} AND eaa.archived_at IS NULL
       GROUP BY eaa.organization_membership_id, u.email, om.status
-      ORDER BY u.email
+      ORDER BY display_name
     `.execute(trx);
     const administratorCandidates = await sql`
       SELECT om.id AS membership_id, u.email,
-        string_agg(DISTINCT r.name, ', ' ORDER BY r.name) AS role, om.status
+        COALESCE(MAX(w.display_name), u.email, 'Usuario') AS display_name,
+        COALESCE(MAX(INITCAP(REPLACE(owm.internal_role, '_', ' '))), string_agg(DISTINCT r.name, ', ' ORDER BY r.name)) AS role,
+        om.status
       FROM organization_memberships om
       JOIN users u ON u.id=om.user_id
       JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
       JOIN roles r ON r.id=ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+      LEFT JOIN workers w ON w.user_id=om.user_id
+      LEFT JOIN organization_worker_memberships owm ON owm.worker_id=w.id AND owm.organization_id=om.organization_id AND owm.status='active'
       WHERE om.organization_id=${organizationId} AND om.status='active'
       GROUP BY om.id, u.email, om.status
-      ORDER BY u.email
+      ORDER BY display_name
     `.execute(trx);
     return { establishment: establishment.rows[0], personnel: personnel.rows, residents: residents.rows, administrators: administrators.rows, administratorCandidates: administratorCandidates.rows };
   });
