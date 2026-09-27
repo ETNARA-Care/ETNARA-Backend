@@ -1,0 +1,97 @@
+import { sql } from "kysely";
+import { z } from "zod";
+import { withTenantContext } from "../../context/tenantContext.js";
+import { EstablishmentManagementForbiddenError, EstablishmentNotFoundError } from "./establishments.service.js";
+
+export const assignmentSchema = z.object({ membershipId: z.string().uuid() });
+export const recipientAssignmentSchema = z.object({ recipientId: z.string().uuid() });
+
+async function assertEstablishmentAccess(trx: any, organizationId: string, establishmentId: string) {
+  const location = await sql<{ allowed: boolean }>`
+    SELECT EXISTS (
+      SELECT 1 FROM locations
+      WHERE id = ${establishmentId} AND organization_id = ${organizationId} AND archived_at IS NULL
+    ) AND app_is_establishment_admin(${establishmentId}::uuid) AS allowed
+  `.execute(trx);
+  if (!location.rows[0]?.allowed) {
+    const exists = await sql<{ present: boolean }>`SELECT EXISTS(SELECT 1 FROM locations WHERE id=${establishmentId} AND organization_id=${organizationId}) AS present`.execute(trx);
+    if (!exists.rows[0]?.present) throw new EstablishmentNotFoundError();
+    throw new EstablishmentManagementForbiddenError();
+  }
+}
+
+export function getEstablishmentWorkspace(userId: string, organizationId: string, establishmentId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertEstablishmentAccess(trx, organizationId, establishmentId);
+    const establishment = await sql`SELECT id, name, address FROM locations WHERE id=${establishmentId} AND organization_id=${organizationId}`.execute(trx);
+    const personnel = await sql`
+      SELECT owm.id AS membership_id, w.id AS worker_id, w.display_name, owm.status
+      FROM establishment_worker_assignments ewa
+      JOIN organization_worker_memberships owm ON owm.id=ewa.organization_worker_membership_id AND owm.organization_id=ewa.organization_id
+      JOIN workers w ON w.id=owm.worker_id
+      WHERE ewa.organization_id=${organizationId} AND ewa.location_id=${establishmentId} AND ewa.archived_at IS NULL
+      ORDER BY w.display_name
+    `.execute(trx);
+    const residents = await sql`
+      SELECT id, first_name, last_name, preferred_name, status, room_id
+      FROM care_recipients
+      WHERE organization_id=${organizationId} AND location_id=${establishmentId} AND status='active'
+      ORDER BY last_name, first_name
+    `.execute(trx);
+    const administrators = await sql`
+      SELECT eaa.organization_membership_id AS membership_id, u.email, om.role, om.status
+      FROM establishment_admin_assignments eaa
+      JOIN organization_memberships om ON om.id=eaa.organization_membership_id AND om.organization_id=eaa.organization_id
+      JOIN users u ON u.id=om.user_id
+      WHERE eaa.organization_id=${organizationId} AND eaa.location_id=${establishmentId} AND eaa.archived_at IS NULL
+      ORDER BY u.email
+    `.execute(trx);
+    return { establishment: establishment.rows[0], personnel: personnel.rows, residents: residents.rows, administrators: administrators.rows };
+  });
+}
+
+export function assignWorkerToEstablishment(userId: string, organizationId: string, establishmentId: string, membershipId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertEstablishmentAccess(trx, organizationId, establishmentId);
+    const result = await sql`
+      INSERT INTO establishment_worker_assignments (organization_id, location_id, organization_worker_membership_id, created_by_user_id)
+      SELECT ${organizationId}, ${establishmentId}, owm.id, ${userId}
+      FROM organization_worker_memberships owm
+      WHERE owm.id=${membershipId} AND owm.organization_id=${organizationId} AND owm.status='active'
+      ON CONFLICT (organization_worker_membership_id, location_id) DO UPDATE SET archived_at=NULL
+      RETURNING id, organization_id, location_id, organization_worker_membership_id
+    `.execute(trx);
+    if (!result.rows[0]) throw new EstablishmentNotFoundError();
+    return result.rows[0];
+  });
+}
+
+export function assignRecipientToEstablishment(userId: string, organizationId: string, establishmentId: string, recipientId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertEstablishmentAccess(trx, organizationId, establishmentId);
+    const result = await sql`
+      UPDATE care_recipients SET location_id=${establishmentId}, updated_at=now()
+      WHERE id=${recipientId} AND organization_id=${organizationId} AND status='active'
+      RETURNING id, organization_id, location_id, first_name, last_name
+    `.execute(trx);
+    if (!result.rows[0]) throw new EstablishmentNotFoundError();
+    return result.rows[0];
+  });
+}
+
+export function assignAdminToEstablishment(userId: string, organizationId: string, establishmentId: string, membershipId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const manager = await sql<{ allowed: boolean }>`SELECT app_is_org_manager() AS allowed`.execute(trx);
+    if (!manager.rows[0]?.allowed) throw new EstablishmentManagementForbiddenError();
+    const result = await sql`
+      INSERT INTO establishment_admin_assignments (organization_id, location_id, organization_membership_id, created_by_user_id)
+      SELECT ${organizationId}, ${establishmentId}, om.id, ${userId}
+      FROM organization_memberships om JOIN locations l ON l.id=${establishmentId} AND l.organization_id=om.organization_id
+      WHERE om.id=${membershipId} AND om.organization_id=${organizationId} AND om.status='active'
+      ON CONFLICT (organization_membership_id, location_id) DO UPDATE SET archived_at=NULL
+      RETURNING id, organization_id, location_id, organization_membership_id
+    `.execute(trx);
+    if (!result.rows[0]) throw new EstablishmentNotFoundError();
+    return result.rows[0];
+  });
+}
