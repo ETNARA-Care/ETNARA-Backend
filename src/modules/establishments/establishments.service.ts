@@ -82,7 +82,10 @@ export function createEstablishment(
       ) VALUES (
         ${userId}, ${organizationId}, ${organizationId}, 'ESTABLISHMENT_CREATED',
         'location', ${establishment.id},
-        jsonb_build_object('name', ${establishment.name}, 'address', ${establishment.address})
+        jsonb_build_object(
+          'name', ${establishment.name}::text,
+          'address', ${establishment.address}::text
+        )
       )
     `.execute(trx);
     return establishment;
