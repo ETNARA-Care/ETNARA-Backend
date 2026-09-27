@@ -187,6 +187,19 @@ Notifications must always respect organization and care-recipient authorization.
 - Each run requires manager authority and creates an immutable audit record.
 - Family has no route or response contract for the care quality agent.
 
+## B2B Agent Center
+
+- The center composes the existing Operations, Compliance, Coverage and Care
+  Quality briefings; it must not create a duplicate aggregate decision engine.
+- Every underlying request retains manager authorization, organization scope,
+  immutable audit history and human-confirmation guardrails.
+- Partial frontend failure must not change or invalidate another agent's
+  completed audit record.
+- Family receives no organization-wide agent route or response contract.
+- No regulatory requirement becomes automatic merely by appearing in a
+  catalog or product map; authoritative current requirements must be validated
+  before they are encoded as rules.
+
 ## Data Integrity
 
 - Never duplicate relationships unnecessarily.

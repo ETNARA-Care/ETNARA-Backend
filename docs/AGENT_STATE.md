@@ -4,7 +4,21 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-9/9.3-care-quality-agent
+Branch: phase-9/9.4-agent-center
+
+## 2026-09-26 — Phase 9.4 B2B Agent Center stability close
+
+- Preserved Operations, Compliance, Coverage and Care Quality as independent
+  manager-only contracts with their own immutable audit records.
+- The coordinated Agent Center is intentionally a frontend composition and
+  introduces no duplicate backend decision engine or aggregate data contract.
+- Family remains outside every organization-wide briefing and no regulatory
+  requirement was added or inferred.
+- Added dedicated Phase 7.9 regression coverage for manager authority,
+  organization isolation, immutable pay-period snapshots and exception gates.
+- TypeScript, build, all 106 tests and diff safety pass locally.
+- Exact next step: publish the stability close before the frontend and merge
+  only after CI and PostgreSQL 16 validation pass.
 
 ## 2026-09-26 — Phase 9.3 assisted Care Quality Agent
 
@@ -17,9 +31,9 @@ Branch: phase-9/9.3-care-quality-agent
   manager-only history. Family receives no route or contract.
 - No external model receives data, and the agent cannot create/edit notes,
   review observations, resolve incidents or make clinical conclusions.
-- TypeScript, build, all 104 backend tests and diff safety pass locally.
-- Exact next step: run full validation including PostgreSQL 16, review the diff
-  and publish backend before frontend only after every check is green.
+- Published and merged in backend PR #56 after TypeScript, all 104 tests,
+  build, PostgreSQL 16 validation and CI passed; Railway serves the protected
+  quality-agent route.
 
 ## 2026-09-26 — Phase 9.2 assisted Coverage Agent
 
