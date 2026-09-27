@@ -98,17 +98,30 @@ export function assignAdminToEstablishment(userId: string, organizationId: strin
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const manager = await sql<{ allowed: boolean }>`SELECT app_is_org_manager() AS allowed`.execute(trx);
     if (!manager.rows[0]?.allowed) throw new EstablishmentManagementForbiddenError();
+
+    const candidate = await sql<{ membership_id: string }>`
+      SELECT om.id AS membership_id
+      FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
+      JOIN roles r ON r.id=ur.role_id
+      WHERE om.id=${membershipId}
+        AND om.organization_id=${organizationId}
+        AND om.status='active'
+        AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+      LIMIT 1
+    `.execute(trx);
+    if (!candidate.rows[0]) throw new EstablishmentNotFoundError();
+
+    const location = await sql<{ id: string }>`
+      SELECT id FROM locations
+      WHERE id=${establishmentId} AND organization_id=${organizationId} AND archived_at IS NULL
+      LIMIT 1
+    `.execute(trx);
+    if (!location.rows[0]) throw new EstablishmentNotFoundError();
+
     const result = await sql`
       INSERT INTO establishment_admin_assignments (organization_id, location_id, organization_membership_id, created_by_user_id)
-      SELECT ${organizationId}, ${establishmentId}, om.id, ${userId}
-      FROM organization_memberships om
-      JOIN locations l ON l.id=${establishmentId} AND l.organization_id=om.organization_id
-      WHERE om.id=${membershipId} AND om.organization_id=${organizationId} AND om.status='active'
-        AND EXISTS (
-          SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
-          WHERE ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
-            AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
-        )
+      VALUES (${organizationId}, ${establishmentId}, ${candidate.rows[0].membership_id}, ${userId})
       ON CONFLICT (organization_membership_id, location_id) DO UPDATE SET archived_at=NULL
       RETURNING id, organization_id, location_id, organization_membership_id
     `.execute(trx);
