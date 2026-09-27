@@ -4,7 +4,22 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-9/9.4-agent-center
+Branch: phase-10/10.0-multi-agency-compliance
+
+## 2026-09-27 — Phase 10.0 multi-agency establishments
+
+- Reuses the existing organization tenant and locations hierarchy; no parallel
+  agency or establishment model was created.
+- A user may belong to multiple organizations, but every request operates
+  against exactly one selected organization and always filters by its ID.
+- Organization managers can list, create, edit, archive and reactivate their
+  establishments. Physical deletion is unavailable and changes are audited.
+- PostgreSQL RLS independently enforces tenant membership for reads and
+  manager authority plus tenant identity for writes.
+- No Puerto Rico regulatory requirement or automatic compliance rule was
+  introduced in this phase.
+- Exact next step: complete local validation, publish the coordinated PRs,
+  merge only after CI passes, and verify Railway before the frontend deploy.
 
 ## 2026-09-26 — Phase 9.4 B2B Agent Center stability close
 
@@ -16,9 +31,8 @@ Branch: phase-9/9.4-agent-center
   requirement was added or inferred.
 - Added dedicated Phase 7.9 regression coverage for manager authority,
   organization isolation, immutable pay-period snapshots and exception gates.
-- TypeScript, build, all 106 tests and diff safety pass locally.
-- Exact next step: publish the stability close before the frontend and merge
-  only after CI and PostgreSQL 16 validation pass.
+- Published and merged in backend PR #57 after TypeScript, all 106 tests,
+  build, CI and PostgreSQL 16 validation passed.
 
 ## 2026-09-26 — Phase 9.3 assisted Care Quality Agent
 

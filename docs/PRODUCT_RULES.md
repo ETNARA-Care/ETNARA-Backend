@@ -208,6 +208,22 @@ Notifications must always respect organization and care-recipient authorization.
 - Prefer idempotent operations.
 - Never delete valid production/staging data to resolve a code problem.
 
+## Multi-agency tenancy and establishments
+
+- Each legally independent agency or care home is one organization tenant and
+  retains its own data scope and subscription boundary.
+- The same authorized person may belong to more than one organization, but
+  must select one active organization; ETNARA never combines their operational
+  records into one view.
+- Establishments are locations owned by exactly one organization. They reuse
+  the existing locations hierarchy rather than duplicating it.
+- Establishment writes require organization-manager authority and an exact
+  organization match at both the service and PostgreSQL RLS layers.
+- Establishments are archived/reactivated, not physically deleted, and every
+  mutation produces an organization-scoped audit record.
+- Regulatory document requirements must be validated against current Puerto
+  Rico authority before they become automatic Compliance rules.
+
 ## Security Principle
 
 Correct behavior is:
