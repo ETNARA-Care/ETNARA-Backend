@@ -4,7 +4,22 @@
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
-Branch: phase-9/9.2-coverage-agent
+Branch: phase-9/9.3-care-quality-agent
+
+## 2026-09-26 — Phase 9.3 assisted Care Quality Agent
+
+- Added a manager-requested quality briefing derived from completed shifts,
+  verification events, configured required care events, open observations and
+  incidents without documented follow-up.
+- The agent ranks at most five objective documentation gaps and opens the
+  existing human workflow without modifying any care record.
+- Each run records organization-scoped counts and priority keys in immutable
+  manager-only history. Family receives no route or contract.
+- No external model receives data, and the agent cannot create/edit notes,
+  review observations, resolve incidents or make clinical conclusions.
+- TypeScript, build, all 104 backend tests and diff safety pass locally.
+- Exact next step: run full validation including PostgreSQL 16, review the diff
+  and publish backend before frontend only after every check is green.
 
 ## 2026-09-26 — Phase 9.2 assisted Coverage Agent
 
@@ -16,9 +31,8 @@ Branch: phase-9/9.2-coverage-agent
   cancellation, eligibility change or campaign mutation occurs automatically.
 - Each run records organization-scoped counts and priority shift IDs in
   immutable manager-only history. Family receives no route or contract.
-- TypeScript, build, all 100 backend tests and diff safety pass locally.
-- Exact next step: run full validation including PostgreSQL 16, review the
-  diff and publish backend before frontend only after every check is green.
+- Published and merged in backend PR #55 after 100/100 tests, build, PostgreSQL
+  16 validation and CI passed; Railway serves the protected agent route.
 
 ## 2026-09-26 — Phase 9.1 assisted Compliance Agent
 
