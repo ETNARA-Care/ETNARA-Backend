@@ -39,11 +39,18 @@ export function getEstablishmentWorkspace(userId: string, organizationId: string
       ORDER BY last_name, first_name
     `.execute(trx);
     const administrators = await sql`
-      SELECT eaa.organization_membership_id AS membership_id, u.email, om.role, om.status
+      SELECT
+        eaa.organization_membership_id AS membership_id,
+        u.email,
+        COALESCE(string_agg(DISTINCT r.name, ', ' ORDER BY r.name), 'Administrador') AS role,
+        om.status
       FROM establishment_admin_assignments eaa
       JOIN organization_memberships om ON om.id=eaa.organization_membership_id AND om.organization_id=eaa.organization_id
       JOIN users u ON u.id=om.user_id
+      LEFT JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
+      LEFT JOIN roles r ON r.id=ur.role_id
       WHERE eaa.organization_id=${organizationId} AND eaa.location_id=${establishmentId} AND eaa.archived_at IS NULL
+      GROUP BY eaa.organization_membership_id, u.email, om.status
       ORDER BY u.email
     `.execute(trx);
     return { establishment: establishment.rows[0], personnel: personnel.rows, residents: residents.rows, administrators: administrators.rows };
