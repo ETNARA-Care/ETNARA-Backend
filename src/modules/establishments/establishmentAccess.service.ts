@@ -39,11 +39,8 @@ export function getEstablishmentWorkspace(userId: string, organizationId: string
       ORDER BY last_name, first_name
     `.execute(trx);
     const administrators = await sql`
-      SELECT
-        eaa.organization_membership_id AS membership_id,
-        u.email,
-        COALESCE(string_agg(DISTINCT r.name, ', ' ORDER BY r.name), 'Administrador') AS role,
-        om.status
+      SELECT eaa.organization_membership_id AS membership_id, u.email,
+        COALESCE(string_agg(DISTINCT r.name, ', ' ORDER BY r.name), 'Administrador') AS role, om.status
       FROM establishment_admin_assignments eaa
       JOIN organization_memberships om ON om.id=eaa.organization_membership_id AND om.organization_id=eaa.organization_id
       JOIN users u ON u.id=om.user_id
@@ -53,7 +50,18 @@ export function getEstablishmentWorkspace(userId: string, organizationId: string
       GROUP BY eaa.organization_membership_id, u.email, om.status
       ORDER BY u.email
     `.execute(trx);
-    return { establishment: establishment.rows[0], personnel: personnel.rows, residents: residents.rows, administrators: administrators.rows };
+    const administratorCandidates = await sql`
+      SELECT om.id AS membership_id, u.email,
+        string_agg(DISTINCT r.name, ', ' ORDER BY r.name) AS role, om.status
+      FROM organization_memberships om
+      JOIN users u ON u.id=om.user_id
+      JOIN user_roles ur ON ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
+      JOIN roles r ON r.id=ur.role_id AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+      WHERE om.organization_id=${organizationId} AND om.status='active'
+      GROUP BY om.id, u.email, om.status
+      ORDER BY u.email
+    `.execute(trx);
+    return { establishment: establishment.rows[0], personnel: personnel.rows, residents: residents.rows, administrators: administrators.rows, administratorCandidates: administratorCandidates.rows };
   });
 }
 
@@ -93,8 +101,14 @@ export function assignAdminToEstablishment(userId: string, organizationId: strin
     const result = await sql`
       INSERT INTO establishment_admin_assignments (organization_id, location_id, organization_membership_id, created_by_user_id)
       SELECT ${organizationId}, ${establishmentId}, om.id, ${userId}
-      FROM organization_memberships om JOIN locations l ON l.id=${establishmentId} AND l.organization_id=om.organization_id
+      FROM organization_memberships om
+      JOIN locations l ON l.id=${establishmentId} AND l.organization_id=om.organization_id
       WHERE om.id=${membershipId} AND om.organization_id=${organizationId} AND om.status='active'
+        AND EXISTS (
+          SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+          WHERE ur.organization_membership_id=om.id AND ur.organization_id=om.organization_id
+            AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
+        )
       ON CONFLICT (organization_membership_id, location_id) DO UPDATE SET archived_at=NULL
       RETURNING id, organization_id, location_id, organization_membership_id
     `.execute(trx);
