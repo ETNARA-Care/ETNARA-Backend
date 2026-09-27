@@ -28,80 +28,15 @@ import operationsRoutes from "./modules/operations/operations.routes.js";
 import coverageAgentRoutes from "./modules/coverageAgent/coverageAgent.routes.js";
 import careQualityAgentRoutes from "./modules/careQualityAgent/careQualityAgent.routes.js";
 import establishmentsRoutes from "./modules/establishments/establishments.routes.js";
+import residentDocumentsRoutes from "./modules/residentDocuments/residentDocuments.routes.js";
 
 export function createApp(): Express {
   const app = express();
   app.use(express.json());
-
-  // CORS: explicit allowlist only -- never "*". The frontend authenticates
-  // via a Bearer token in the Authorization header (never cookies), so
-  // credentials:true / Access-Control-Allow-Credentials is deliberately
-  // NOT set -- there is no cookie-based session to protect or leak here,
-  // and omitting it keeps the surface smaller than it needs to be.
-  // Keep the public ETNARA frontend in the explicit allowlist even when a
-  // deployment still has an older ALLOWED_ORIGIN value configured. This is
-  // an exact origin (not a wildcard), so the API remains closed to unknown
-  // sites while the production GitHub Pages app can always reach it.
-  const allowedOrigins = new Set([
-    "https://etnara-care.github.io",
-    ...env.ALLOWED_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean),
-  ]);
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.has(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    }
-    if (req.method === "OPTIONS") {
-      res.status(204).end();
-      return;
-    }
-    next();
-  });
-
-  // Health check: intentionally reveals nothing beyond liveness -- no DB
-  // version, no env values, no internal state.
-  app.get("/health", (_req: Request, res: Response) => {
-    res.status(200).json({ status: "ok" });
-  });
-
-  app.use(authRoutes);
-  app.use(organizationContextRoutes);
-  app.use(careRecipientsRoutes);
-  app.use(familyRoutes);
-  app.use(workforceRoutes);
-  app.use(credentialingRoutes);
-  app.use(eligibilityRoutes);
-  app.use(schedulingRoutes);
-  app.use(assignmentsRoutes);
-  app.use(verificationRoutes);
-  app.use(careEventsRoutes);
-  app.use(observationsRoutes);
-  app.use(incidentsRoutes);
-  app.use(familyTimelineRoutes);
-  app.use(messagingRoutes);
-  app.use(notificationsRoutes);
-  app.use(accessInvitationsRoutes);
-  app.use(carePlansRoutes);
-  app.use(coverageRoutes);
-  app.use(availabilityRoutes);
-  app.use(coverageOffersRoutes);
-  app.use(workforcePlanningRoutes);
-  app.use(timesheetsRoutes);
-  app.use(payPeriodsRoutes);
-  app.use(operationsRoutes);
-  app.use(coverageAgentRoutes);
-  app.use(careQualityAgentRoutes);
-  app.use(establishmentsRoutes);
-
-  // Safety-net error handler: never leak stack traces, SQL, or internal
-  // details to the client.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    res.status(500).json({ error: "INTERNAL_ERROR" });
-  });
-
+  const allowedOrigins = new Set(["https://etnara-care.github.io",...env.ALLOWED_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean)]);
+  app.use((req: Request, res: Response, next: NextFunction) => {const origin=req.headers.origin;if(origin&&allowedOrigins.has(origin)){res.setHeader("Access-Control-Allow-Origin",origin);res.setHeader("Vary","Origin");res.setHeader("Access-Control-Allow-Methods","GET,POST,PUT,PATCH,DELETE,OPTIONS");res.setHeader("Access-Control-Allow-Headers","Content-Type, Authorization");}if(req.method==="OPTIONS"){res.status(204).end();return;}next();});
+  app.get("/health", (_req: Request, res: Response) => {res.status(200).json({ status: "ok" });});
+  app.use(authRoutes);app.use(organizationContextRoutes);app.use(careRecipientsRoutes);app.use(familyRoutes);app.use(workforceRoutes);app.use(credentialingRoutes);app.use(eligibilityRoutes);app.use(schedulingRoutes);app.use(assignmentsRoutes);app.use(verificationRoutes);app.use(careEventsRoutes);app.use(observationsRoutes);app.use(incidentsRoutes);app.use(familyTimelineRoutes);app.use(messagingRoutes);app.use(notificationsRoutes);app.use(accessInvitationsRoutes);app.use(carePlansRoutes);app.use(coverageRoutes);app.use(availabilityRoutes);app.use(coverageOffersRoutes);app.use(workforcePlanningRoutes);app.use(timesheetsRoutes);app.use(payPeriodsRoutes);app.use(operationsRoutes);app.use(coverageAgentRoutes);app.use(careQualityAgentRoutes);app.use(establishmentsRoutes);app.use(residentDocumentsRoutes);
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {res.status(500).json({ error: "INTERNAL_ERROR" });});
   return app;
 }
