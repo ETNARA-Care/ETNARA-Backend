@@ -2,6 +2,18 @@
 
 ## In Progress
 
+### ETN-037 — Phase 9.4 B2B Agent Center stability close
+
+- preserve the four existing manager-authorized agent contracts
+- document the frontend-only coordination boundary and independent audits
+- add dedicated Phase 7.9 regression coverage for pay-period integrity
+- introduce no new agent mutation, Family route or regulatory rule
+
+Status: Implemented locally on `phase-9/9.4-agent-center`; TypeScript, build,
+all 106 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
+
+---
+
 ### ETN-036 — Phase 9.3 assisted Care Quality Agent
 
 - inspect completed shifts for verification and required-documentation gaps
@@ -10,8 +22,8 @@
 - audit each manager-requested run with organization isolation
 - prohibit clinical conclusions, Family exposure and autonomous record changes
 
-Status: Implemented locally on `phase-9/9.3-care-quality-agent`; TypeScript,
-build, all 104 tests and diff safety pass. PostgreSQL 16 validation remains in CI.
+Status: Complete — published and merged in backend PR #56; CI, PostgreSQL 16
+validation and Railway protected-route checks passed.
 
 ---
 
