@@ -3,7 +3,6 @@ import { z } from "zod";
 import {
   createAssignment,
   listAssignments,
-  removeAssignment,
   respondToMyAssignment,
   getAssignmentResponseFailureStage,
   createAssignmentSchema,
@@ -17,6 +16,10 @@ import {
   AssignmentNotFoundError,
   AssignmentAlreadyRespondedError,
 } from "./assignments.service.js";
+import {
+  removeAssignmentAudited,
+  AssignmentRemovalReasonRequiredError,
+} from "./auditableRemoval.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
   OrganizationAccessDeniedError,
@@ -54,8 +57,6 @@ function handleError(err: unknown, res: Response): boolean {
     return true;
   }
   if (err instanceof ShiftNotFoundError || err instanceof MembershipNotInOrgError || err instanceof AssignmentNotFoundError) {
-    // Same 404 for all three -- no enumeration signal about which
-    // cross-tenant ID was actually the problem.
     res.status(404).json({ error: "NOT_FOUND" });
     return true;
   }
@@ -77,6 +78,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof AssignmentAlreadyRespondedError) {
     res.status(409).json({ error: "ASSIGNMENT_ALREADY_RESPONDED" });
+    return true;
+  }
+  if (err instanceof AssignmentRemovalReasonRequiredError) {
+    res.status(400).json({ error: "ASSIGNMENT_REMOVAL_REASON_REQUIRED" });
     return true;
   }
   return false;
@@ -171,7 +176,7 @@ router.patch(
       return;
     }
     try {
-      await removeAssignment(
+      await removeAssignmentAudited(
         req.auth!.userId,
         orgIdParsed.data,
         String(req.params.shiftId),
