@@ -30,17 +30,18 @@ CREATE POLICY assignment_removal_audit_manager_read
 ON assignment_removal_audit
 FOR SELECT
 USING (
-  organization_id = app_current_organization_id()
-  AND app_is_org_manager(organization_id)
+  organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+  AND (app_is_org_manager() OR app_is_superadmin())
 );
 
 CREATE POLICY assignment_removal_audit_manager_insert
 ON assignment_removal_audit
 FOR INSERT
 WITH CHECK (
-  organization_id = app_current_organization_id()
-  AND app_is_org_manager(organization_id)
-  AND removed_by_user_id = app_current_user_id()
+  organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+  AND removed_by_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+  AND (app_is_org_manager() OR app_is_superadmin())
 );
 
 -- Deliberately no UPDATE or DELETE policy: removal history is append-only.
+GRANT SELECT, INSERT ON assignment_removal_audit TO app_runtime;
