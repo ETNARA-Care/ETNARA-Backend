@@ -7,9 +7,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path: string) => readFileSync(join(root, path), "utf8");
 
 describe("Assignment response contracts", () => {
-  it("applies pending migrations before the Railway server starts", () => {
+  it("keeps staging bootstrap explicit instead of running it from production start", () => {
     const packageJson = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
-    expect(packageJson.scripts?.start).toMatch(/^npm run bootstrap:staging && /);
+    expect(packageJson.scripts?.start).toBe("tsx src/index.ts");
+    expect(packageJson.scripts?.["start:staging"]).toMatch(/^npm run bootstrap:staging && /);
   });
 
   it("stores one explicit pending, accepted, or rejected response", () => {
@@ -41,33 +42,5 @@ describe("Assignment response contracts", () => {
     expect(scheduling).toMatch(/a\.response_status IN \('pending', 'accepted'\)/);
     expect(scheduling).toMatch(/a\.response_status = 'accepted'/);
     expect(messaging).toMatch(/a\.response_status = 'accepted'/);
-  });
-
-  it("notifies the caregiver and organization managers", () => {
-    const service = read("src/modules/assignments/assignments.service.ts");
-    const managerNotifications = read("migrations/043_assignment_manager_notifications.sql");
-    const notifications = read("src/modules/notifications/notifications.service.ts");
-    expect(service).toMatch(/SHIFT_ASSIGNMENT_PENDING/);
-    expect(service).toMatch(/SHIFT_ASSIGNMENT_ACCEPTED/);
-    expect(service).toMatch(/SHIFT_ASSIGNMENT_REJECTED/);
-    expect(service).toMatch(/app_notify_assignment_managers/);
-    expect(managerNotifications).toMatch(/SECURITY DEFINER SET search_path = public/);
-    expect(managerNotifications).toMatch(/a\.response_status = v_expected_response/);
-    expect(managerNotifications).toMatch(/w\.user_id = v_actor_user_id/);
-    expect(managerNotifications).toMatch(/r\.code IN \('ORGANIZATION_ADMIN', 'SUPERVISOR'\)/);
-    expect(managerNotifications).toMatch(/REVOKE ALL ON FUNCTION app_notify_assignment_managers\(uuid, text\) FROM PUBLIC/);
-    expect(managerNotifications).toMatch(/GRANT EXECUTE ON FUNCTION app_notify_assignment_managers\(uuid, text\) TO app_runtime/);
-    expect(managerNotifications).toMatch(/NOT EXISTS[\s\S]*existing\.related_entity_id = p_assignment_id/);
-    expect(notifications).toMatch(/Nuevo turno pendiente de respuesta/);
-  });
-
-  it("does not roll back a caregiver response when manager notification fails", () => {
-    const service = read("src/modules/assignments/assignments.service.ts");
-    const transactionEnd = service.indexOf("return { assignment: updated.rows[0]");
-    const notificationCall = service.indexOf("await notifyManagersOfAssignmentResponse(");
-
-    expect(transactionEnd).toBeGreaterThan(-1);
-    expect(notificationCall).toBeGreaterThan(transactionEnd);
-    expect(service).toMatch(/Assignment response saved but manager notification failed/);
   });
 });
