@@ -11,6 +11,13 @@ export class AssignmentRemovalReasonRequiredError extends Error {
   }
 }
 
+export class AssignmentHasActiveVisitError extends Error {
+  constructor() {
+    super("ASSIGNMENT_HAS_ACTIVE_VISIT");
+    this.name = "AssignmentHasActiveVisitError";
+  }
+}
+
 const uuidSchema = z.string().uuid();
 function assertUuid(value: string, label: string): void {
   if (!uuidSchema.safeParse(value).success) {
@@ -32,10 +39,11 @@ interface RemovalSnapshot {
 }
 
 /**
- * E.1 auditable pure unassignment.
+ * E.1/E.2 auditable pure unassignment.
  *
- * The immutable audit row and assignment deletion happen in the SAME tenant
- * transaction. If the audit insert fails, the assignment is not deleted.
+ * E.2 prevents removing an assignment while that caregiver has an open visit.
+ * The guard runs before the audit insert and DELETE in the same tenant transaction,
+ * so a blocked removal leaves both the assignment and audit history untouched.
  */
 export async function removeAssignmentAudited(
   userId: string,
@@ -67,6 +75,28 @@ export async function removeAssignmentAudited(
 
     const assignment = existing.rows[0];
     if (!assignment) throw new AssignmentNotFoundError();
+
+    const activeVisit = await sql<{ id: string }>`
+      SELECT check_in.id
+      FROM verification_events check_in
+      WHERE check_in.organization_id = ${organizationId}
+        AND check_in.shift_id = ${shiftId}
+        AND check_in.organization_worker_membership_id = ${assignment.organization_worker_membership_id}
+        AND check_in.event_type = 'check_in'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM verification_events check_out
+          WHERE check_out.organization_id = check_in.organization_id
+            AND check_out.shift_id = check_in.shift_id
+            AND check_out.organization_worker_membership_id = check_in.organization_worker_membership_id
+            AND check_out.event_type = 'check_out'
+            AND check_out.occurred_at > check_in.occurred_at
+        )
+      ORDER BY check_in.occurred_at DESC
+      LIMIT 1
+    `.execute(trx);
+
+    if (activeVisit.rows[0]) throw new AssignmentHasActiveVisitError();
 
     await sql`
       INSERT INTO assignment_removal_audit (
