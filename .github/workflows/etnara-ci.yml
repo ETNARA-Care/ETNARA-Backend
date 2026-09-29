@@ -57,6 +57,11 @@ jobs:
           npm run bootstrap:staging
           npm run bootstrap:staging
 
+      - name: PostgreSQL tenant isolation verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+        run: npx tsx scripts/verifyTenantIsolation.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
