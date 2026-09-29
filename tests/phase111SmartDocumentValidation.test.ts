@@ -15,7 +15,6 @@ describe("Phase 11.1 smart initial document validation", () => {
       fileId: "00000000-0000-0000-0000-000000000002",
       documentVersion: 1,
     });
-
     expect(result.assessment).toBe("uncertain");
     expect(result.detectedDocumentType).toBeNull();
     expect(result.summary).toContain("Requiere revisión humana");
@@ -33,7 +32,6 @@ describe("Phase 11.1 smart initial document validation", () => {
       fileId: "00000000-0000-0000-0000-000000000002",
       documentVersion: 2,
     });
-
     expect(result.assessment).toBe("inconsistent");
     expect(result.flags).toContain("FILE_EXTENSION_CONTENT_TYPE_MISMATCH");
     expect(result.flags).toContain("FILE_TOO_SMALL_FOR_RELIABLE_ANALYSIS");
@@ -48,6 +46,14 @@ describe("Phase 11.1 smart initial document validation", () => {
     expect(migration).toContain("app_is_org_manager()");
     expect(migration).not.toContain("UPDATE ON document_analysis_results");
     expect(migration).not.toContain("DELETE ON document_analysis_results");
+  });
+
+  it("integrates advisory analysis with completed uploads without changing verification", () => {
+    const service = read("src/modules/credentialing/credentialing.service.ts");
+    expect(service).toContain("analyzeInitialCredentialDocument");
+    expect(service).toContain("INSERT INTO document_analysis_results");
+    expect(service).toContain("credential_document_analyzed");
+    expect(service).toContain("analysis:");
   });
 
   it("documents the human decision boundary", () => {
