@@ -19,6 +19,7 @@ import {
 import {
   removeAssignmentAudited,
   AssignmentRemovalReasonRequiredError,
+  AssignmentHasActiveVisitError,
 } from "./auditableRemoval.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -36,9 +37,6 @@ function logUnexpectedAssignmentError(operation: string, err: unknown): void {
     typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
       ? err.code
       : undefined;
-
-  // Keep production diagnostics bounded. Never include request bodies, user IDs,
-  // organization IDs, shift IDs, SQL text, or clinical information.
   console.error("Unexpected assignment operation failure", {
     operation,
     name: error.name,
@@ -49,145 +47,75 @@ function logUnexpectedAssignmentError(operation: string, err: unknown): void {
 
 function handleError(err: unknown, res: Response): boolean {
   if (err instanceof MembershipNotActiveError || err instanceof OrganizationAccessDeniedError) {
-    res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
-    return true;
+    res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" }); return true;
   }
   if (err instanceof InvalidTenantContextError || err instanceof InvalidOrganizationIdError) {
-    res.status(400).json({ error: "INVALID_ID" });
-    return true;
+    res.status(400).json({ error: "INVALID_ID" }); return true;
   }
   if (err instanceof ShiftNotFoundError || err instanceof MembershipNotInOrgError || err instanceof AssignmentNotFoundError) {
-    res.status(404).json({ error: "NOT_FOUND" });
-    return true;
+    res.status(404).json({ error: "NOT_FOUND" }); return true;
   }
-  if (err instanceof ShiftCancelledError) {
-    res.status(409).json({ error: "SHIFT_CANCELLED" });
-    return true;
-  }
-  if (err instanceof WorkerNotEligibleError) {
-    res.status(409).json({ error: err.message });
-    return true;
-  }
-  if (err instanceof DuplicateAssignmentError) {
-    res.status(409).json({ error: "ASSIGNMENT_ALREADY_EXISTS" });
-    return true;
-  }
-  if (err instanceof ScheduleConflictError) {
-    res.status(409).json({ error: "SCHEDULE_CONFLICT" });
-    return true;
-  }
-  if (err instanceof AssignmentAlreadyRespondedError) {
-    res.status(409).json({ error: "ASSIGNMENT_ALREADY_RESPONDED" });
-    return true;
-  }
-  if (err instanceof AssignmentRemovalReasonRequiredError) {
-    res.status(400).json({ error: "ASSIGNMENT_REMOVAL_REASON_REQUIRED" });
-    return true;
-  }
+  if (err instanceof ShiftCancelledError) { res.status(409).json({ error: "SHIFT_CANCELLED" }); return true; }
+  if (err instanceof WorkerNotEligibleError) { res.status(409).json({ error: err.message }); return true; }
+  if (err instanceof DuplicateAssignmentError) { res.status(409).json({ error: "ASSIGNMENT_ALREADY_EXISTS" }); return true; }
+  if (err instanceof ScheduleConflictError) { res.status(409).json({ error: "SCHEDULE_CONFLICT" }); return true; }
+  if (err instanceof AssignmentAlreadyRespondedError) { res.status(409).json({ error: "ASSIGNMENT_ALREADY_RESPONDED" }); return true; }
+  if (err instanceof AssignmentRemovalReasonRequiredError) { res.status(400).json({ error: "ASSIGNMENT_REMOVAL_REASON_REQUIRED" }); return true; }
+  if (err instanceof AssignmentHasActiveVisitError) { res.status(409).json({ error: "ASSIGNMENT_HAS_ACTIVE_VISIT" }); return true; }
   return false;
 }
 
-router.post(
-  "/organizations/:organizationId/me/shifts/:shiftId/respond",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
-    if (!orgIdParsed.success) {
-      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
-      return;
-    }
-    const bodyParsed = respondAssignmentSchema.safeParse(req.body);
-    if (!bodyParsed.success) {
-      res.status(400).json({ error: "INVALID_PAYLOAD" });
-      return;
-    }
-    try {
-      const assignment = await respondToMyAssignment(
-        req.auth!.userId,
-        orgIdParsed.data,
-        String(req.params.shiftId),
-        bodyParsed.data
-      );
-      res.status(200).json({ assignment });
-    } catch (err) {
-      if (!handleError(err, res)) {
-        logUnexpectedAssignmentError("respondToMyAssignment", err);
-        const stage = getAssignmentResponseFailureStage(err);
-        if (stage) res.setHeader("X-ETNARA-Diagnostic-Stage", stage);
-        res.status(500).json({ error: "INTERNAL_ERROR" });
-      }
+router.post("/organizations/:organizationId/me/shifts/:shiftId/respond", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+  if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  const bodyParsed = respondAssignmentSchema.safeParse(req.body);
+  if (!bodyParsed.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try {
+    const assignment = await respondToMyAssignment(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
+    res.status(200).json({ assignment });
+  } catch (err) {
+    if (!handleError(err, res)) {
+      logUnexpectedAssignmentError("respondToMyAssignment", err);
+      const stage = getAssignmentResponseFailureStage(err);
+      if (stage) res.setHeader("X-ETNARA-Diagnostic-Stage", stage);
+      res.status(500).json({ error: "INTERNAL_ERROR" });
     }
   }
-);
+});
 
-router.post(
-  "/organizations/:organizationId/shifts/:shiftId/assignments",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
-    if (!orgIdParsed.success) {
-      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
-      return;
-    }
-    const bodyParsed = createAssignmentSchema.safeParse(req.body);
-    if (!bodyParsed.success) {
-      res.status(400).json({ error: "INVALID_PAYLOAD" });
-      return;
-    }
-    try {
-      const assignment = await createAssignment(
-        req.auth!.userId,
-        orgIdParsed.data,
-        String(req.params.shiftId),
-        bodyParsed.data
-      );
-      res.status(201).json({ assignment });
-    } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
+router.post("/organizations/:organizationId/shifts/:shiftId/assignments", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+  if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  const bodyParsed = createAssignmentSchema.safeParse(req.body);
+  if (!bodyParsed.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try {
+    const assignment = await createAssignment(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
+    res.status(201).json({ assignment });
+  } catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
 
-router.get(
-  "/organizations/:organizationId/shifts/:shiftId/assignments",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
-    if (!orgIdParsed.success) {
-      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
-      return;
-    }
-    try {
-      const assignments = await listAssignments(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
-      res.status(200).json({ assignments });
-    } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
+router.get("/organizations/:organizationId/shifts/:shiftId/assignments", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+  if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try {
+    const assignments = await listAssignments(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
+    res.status(200).json({ assignments });
+  } catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
 
-router.patch(
-  "/organizations/:organizationId/shifts/:shiftId/assignments/:assignmentId",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
-    if (!orgIdParsed.success) {
-      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
-      return;
-    }
-    try {
-      await removeAssignmentAudited(
-        req.auth!.userId,
-        orgIdParsed.data,
-        String(req.params.shiftId),
-        String(req.params.assignmentId),
-        typeof req.body?.reason === "string" ? req.body.reason : undefined
-      );
-      res.status(200).json({ ok: true });
-    } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
+router.patch("/organizations/:organizationId/shifts/:shiftId/assignments/:assignmentId", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+  if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try {
+    await removeAssignmentAudited(
+      req.auth!.userId,
+      orgIdParsed.data,
+      String(req.params.shiftId),
+      String(req.params.assignmentId),
+      typeof req.body?.reason === "string" ? req.body.reason : undefined
+    );
+    res.status(200).json({ ok: true });
+  } catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
 
 export default router;
