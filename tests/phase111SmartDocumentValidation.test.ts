@@ -7,13 +7,10 @@ const read = (path: string) => readFileSync(path, "utf8");
 describe("Phase 11.1 smart initial document validation", () => {
   it("never presents metadata-only analysis as verified", () => {
     const result = analyzeInitialCredentialDocument({
-      selectedCredentialTypeCode: "CPR",
-      originalFilename: "credential.jpg",
-      contentType: "image/jpeg",
-      sizeBytes: 2048,
+      selectedCredentialTypeCode: "CPR", originalFilename: "credential.jpg",
+      contentType: "image/jpeg", sizeBytes: 2048,
       documentId: "00000000-0000-0000-0000-000000000001",
-      fileId: "00000000-0000-0000-0000-000000000002",
-      documentVersion: 1,
+      fileId: "00000000-0000-0000-0000-000000000002", documentVersion: 1,
     });
     expect(result.assessment).toBe("uncertain");
     expect(result.detectedDocumentType).toBeNull();
@@ -24,13 +21,10 @@ describe("Phase 11.1 smart initial document validation", () => {
 
   it("flags objective file metadata inconsistencies", () => {
     const result = analyzeInitialCredentialDocument({
-      selectedCredentialTypeCode: "CPR",
-      originalFilename: "not-a-document.txt",
-      contentType: "image/jpeg",
-      sizeBytes: 32,
+      selectedCredentialTypeCode: "CPR", originalFilename: "not-a-document.txt",
+      contentType: "image/jpeg", sizeBytes: 32,
       documentId: "00000000-0000-0000-0000-000000000001",
-      fileId: "00000000-0000-0000-0000-000000000002",
-      documentVersion: 2,
+      fileId: "00000000-0000-0000-0000-000000000002", documentVersion: 2,
     });
     expect(result.assessment).toBe("inconsistent");
     expect(result.flags).toContain("FILE_EXTENSION_CONTENT_TYPE_MISMATCH");
@@ -48,12 +42,13 @@ describe("Phase 11.1 smart initial document validation", () => {
     expect(migration).not.toContain("DELETE ON document_analysis_results");
   });
 
-  it("integrates advisory analysis with completed uploads without changing verification", () => {
-    const service = read("src/modules/credentialing/credentialing.service.ts");
+  it("persists advisory analysis and an audit event without changing verification", () => {
+    const service = read("src/modules/credentialing/documentAnalysis.service.ts");
     expect(service).toContain("analyzeInitialCredentialDocument");
     expect(service).toContain("INSERT INTO document_analysis_results");
     expect(service).toContain("credential_document_analyzed");
-    expect(service).toContain("analysis:");
+    expect(service).not.toContain("UPDATE credentials SET status");
+    expect(service).not.toContain("UPDATE organization_credential_reviews");
   });
 
   it("documents the human decision boundary", () => {
