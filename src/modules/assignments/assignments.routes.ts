@@ -19,6 +19,7 @@ import {
 import {
   removeAssignmentAudited,
   AssignmentRemovalReasonRequiredError,
+  AssignmentHasActiveVisitError,
 } from "./auditableRemoval.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -82,6 +83,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof AssignmentRemovalReasonRequiredError) {
     res.status(400).json({ error: "ASSIGNMENT_REMOVAL_REASON_REQUIRED" });
+    return true;
+  }
+  if (err instanceof AssignmentHasActiveVisitError) {
+    res.status(409).json({ error: "ASSIGNMENT_HAS_ACTIVE_VISIT" });
     return true;
   }
   return false;
