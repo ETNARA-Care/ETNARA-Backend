@@ -13,8 +13,11 @@ export async function createPlatformOrganization(userId:string,input:CreatePlatf
 
 export async function inviteOrganizationAdmin(userId:string,organizationId:string,emailInput:string){return withPlatformContext(userId,async trx=>{
  const org=await sql<{id:string;name:string}>`SELECT id,name FROM organizations WHERE id=${organizationId} AND archived_at IS NULL LIMIT 1`.execute(trx);if(!org.rows[0])throw new Error("ORGANIZATION_NOT_FOUND");
- const email=emailInput.trim().toLowerCase();await sql`UPDATE access_invitations SET status='expired',updated_at=now() WHERE organization_id=${organizationId} AND invitation_type='organization_admin' AND status='pending' AND expires_at<=now()`.execute(trx);
- const pending=await sql<{id:string}>`SELECT id FROM access_invitations WHERE organization_id=${organizationId} AND invitation_type='organization_admin' AND lower(email)=${email} AND status='pending' LIMIT 1`.execute(trx);if(pending.rows[0])throw new Error("INVITATION_ALREADY_PENDING");
+ const email=emailInput.trim().toLowerCase();
+ // Treat a repeated invitation as a secure resend. The old raw token cannot be
+ // recovered (only its hash is stored), so revoke any still-pending invitation
+ // for this same organization/email and issue a fresh single-use token.
+ await sql`UPDATE access_invitations SET status=CASE WHEN expires_at<=now() THEN 'expired'::access_invitation_status_enum ELSE 'revoked'::access_invitation_status_enum END,revoked_at=CASE WHEN expires_at>now() THEN now() ELSE revoked_at END,updated_at=now() WHERE organization_id=${organizationId} AND invitation_type='organization_admin' AND lower(email)=${email} AND status='pending'`.execute(trx);
  const rawToken=randomBytes(32).toString("hex"),tokenHash=hashToken(rawToken),expiresAt=new Date(Date.now()+7*86400000).toISOString();
  const inserted=await sql<{id:string;email:string;expires_at:string}>`INSERT INTO access_invitations(organization_id,invited_by_user_id,invitation_type,email,token_hash,expires_at) VALUES(${organizationId},${userId},'organization_admin',${email},${tokenHash},${expiresAt}) RETURNING id,email,expires_at`.execute(trx);
  return {invitation:{...inserted.rows[0],organization_id:organizationId,organization_name:org.rows[0].name},rawToken};
