@@ -2,4 +2,11 @@
 -- PostgreSQL requires a newly-added enum value to be committed before it can
 -- be referenced by constraints, indexes or functions. The dependent schema
 -- changes therefore live in migration 052.
+--
+-- Idempotency: ADD VALUE IF NOT EXISTS makes re-running this file safe. If the
+-- runner's output is not captured (or the pre-deploy step does not exit
+-- non-zero), a failure here is invisible and the app starts without the enum
+-- value, surfacing later as: invalid input value for enum
+-- access_invitation_type_enum: "organization_admin". Check the pre-deploy logs
+-- and schema_migrations for this filename when that error appears.
 ALTER TYPE access_invitation_type_enum ADD VALUE IF NOT EXISTS 'organization_admin';
