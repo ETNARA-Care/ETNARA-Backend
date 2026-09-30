@@ -23,12 +23,32 @@ async function main(): Promise<void> {
   if (!adminUrl) throw new Error("MIGRATIONS_DATABASE_URL is required for applyMigrationsOnly.");
 
   const client = new Client({ connectionString: adminUrl });
-  await client.connect();
+  client.on("error", (err) => {
+    console.error("applyMigrationsOnly: error de conexion a la base:", err);
+    process.exit(1);
+  });
 
-  console.log("Aplicando migraciones pendientes (idempotente, no borra ni resetea nada)...");
-  await applyPendingMigrations(client, MIGRATIONS_DIR);
+  try {
+    console.log("Conectando a la base de datos para aplicar migraciones...");
+    await client.connect();
+    console.log("Conexion establecida.");
+  } catch (err) {
+    console.error("applyMigrationsOnly: no se pudo conectar a la base:", err);
+    throw err;
+  }
 
-  await client.end();
+  try {
+    console.log("Aplicando migraciones pendientes (idempotente, no borra ni resetea nada)...");
+    await applyPendingMigrations(client, MIGRATIONS_DIR);
+  } catch (err) {
+    console.error("applyMigrationsOnly: applyPendingMigrations fallo:", err);
+    throw err;
+  } finally {
+    await client.end().catch((endErr) => {
+      console.error("applyMigrationsOnly: error al cerrar la conexion:", endErr);
+    });
+  }
+
   console.log("Listo. Conexion cerrada.");
 }
 

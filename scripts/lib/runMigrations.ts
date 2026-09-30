@@ -103,7 +103,9 @@ export function listMigrationFiles(migrationsDir: string): string[] {
  */
 export async function applyPendingMigrations(client: MigrationClient, migrationsDir: string): Promise<void> {
   const files = listMigrationFiles(migrationsDir);
+  console.log(`Adquiriendo advisory lock de migraciones (${MIGRATION_LOCK_ID})...`);
   await client.query(`SELECT pg_advisory_lock(${MIGRATION_LOCK_ID})`);
+  console.log("Advisory lock adquirido.");
   try {
     const historyTableWasCreated = await ensureSchemaMigrationsTable(client);
     await baselineLegacyDatabase(client, files, historyTableWasCreated);
@@ -126,11 +128,25 @@ export async function applyPendingMigrations(client: MigrationClient, migrations
         await client.query("COMMIT");
         console.log(`  OK: ${file}`);
       } catch (err) {
-        await client.query("ROLLBACK");
-        throw new Error(`Migracion ${file} fallo y fue revertida: ${(err as Error).message}`, { cause: err });
+        const message = (err as Error).message;
+        console.error(`  FAIL: ${file}`);
+        console.error(`  Error: ${message}`);
+        console.error(`  SQL que fallo (${file}):\n${migrationSql}`);
+        try {
+          await client.query("ROLLBACK");
+          console.error(`  ROLLBACK aplicado para ${file}.`);
+        } catch (rollbackErr) {
+          console.error(`  ROLLBACK tambien fallo para ${file}: ${(rollbackErr as Error).message}`);
+        }
+        throw new Error(`Migracion ${file} fallo y fue revertida: ${message}`, { cause: err });
       }
     }
   } finally {
-    await client.query(`SELECT pg_advisory_unlock(${MIGRATION_LOCK_ID})`);
+    try {
+      await client.query(`SELECT pg_advisory_unlock(${MIGRATION_LOCK_ID})`);
+      console.log("Advisory lock liberado.");
+    } catch (unlockErr) {
+      console.error(`No se pudo liberar el advisory lock: ${(unlockErr as Error).message}`);
+    }
   }
 }
