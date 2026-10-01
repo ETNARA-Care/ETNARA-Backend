@@ -84,6 +84,14 @@ router.get(
       const summary = await getComplianceSummary(req.auth!.userId, orgIdParsed.data, String(req.params.membershipId));
       res.status(200).json(summary);
     } catch (err) {
+      // A newly-created tenant can legitimately have workers before its
+      // compliance policy has been configured.  That is an empty state, not
+      // a missing route/resource: keep the Compliance UI usable so an admin
+      // can configure the policy instead of rendering a generic server error.
+      if (err instanceof NoApplicableRequirementSetError) {
+        res.status(200).json({ eligibility: "unconfigured", requirements: [] });
+        return;
+      }
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
   }
