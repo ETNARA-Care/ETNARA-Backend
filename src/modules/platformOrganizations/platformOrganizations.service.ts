@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { sql } from "kysely";
 import { z } from "zod";
+import { db } from "../../config/db.js";
 import { withPlatformContext } from "../../context/tenantContext.js";
+import { hashPassword } from "../../security/password.js";
 import { hashToken } from "../../security/sessionToken.js";
 import { loadEmailConfig, sendOrganizationAdminInvitationEmail } from "../email/email.service.js";
 
@@ -15,9 +17,15 @@ export const inviteOrganizationAdminSchema = z.object({
   email: z.string().trim().email().max(254),
 });
 
-export type CreatePlatformOrganizationInput = z.infer<
-  typeof createPlatformOrganizationSchema
->;
+export const organizationAdminInvitationTokenSchema = z.object({
+  token: z.string().regex(/^[a-f0-9]{64}$/i),
+});
+
+export const activateOrganizationAdminInvitationSchema = organizationAdminInvitationTokenSchema.extend({
+  password: z.string().min(12).max(128),
+});
+
+export type CreatePlatformOrganizationInput = z.infer<typeof createPlatformOrganizationSchema>;
 
 export interface InviteOrganizationAdminResult {
   invitation: {
@@ -35,6 +43,29 @@ export interface InviteOrganizationAdminResult {
   };
 }
 
+export class OrganizationAdminInvitationError extends Error {
+  constructor(public readonly code: string) {
+    super(code);
+    this.name = "OrganizationAdminInvitationError";
+  }
+}
+
+function translateInvitationError(error: unknown): never {
+  const message = error instanceof Error ? error.message : "";
+  const known = [
+    "INVITATION_NOT_AVAILABLE",
+    "INVITATION_EXPIRED",
+    "ACCOUNT_ALREADY_EXISTS",
+    "INVITATION_IDENTITY_MISMATCH",
+    "ACCOUNT_DISABLED",
+    "INVALID_ACTIVATION",
+    "ROLE_NOT_CONFIGURED",
+  ];
+  const code = known.find((candidate) => message.includes(candidate));
+  if (code) throw new OrganizationAdminInvitationError(code);
+  throw error;
+}
+
 export async function listPlatformOrganizations(userId: string) {
   return withPlatformContext(
     userId,
@@ -46,17 +77,12 @@ export async function listPlatformOrganizations(userId: string) {
           organization_type: string;
           status: string;
           created_at: Date;
-        }>`SELECT id, name, organization_type, status, created_at FROM organizations WHERE archived_at IS NULL ORDER BY created_at DESC`.execute(
-          trx
-        )
+        }>`SELECT id, name, organization_type, status, created_at FROM organizations WHERE archived_at IS NULL ORDER BY created_at DESC`.execute(trx)
       ).rows
   );
 }
 
-export async function createPlatformOrganization(
-  userId: string,
-  input: CreatePlatformOrganizationInput
-) {
+export async function createPlatformOrganization(userId: string, input: CreatePlatformOrganizationInput) {
   return withPlatformContext(userId, async (trx) => {
     const created = await sql<{
       id: string;
@@ -64,13 +90,9 @@ export async function createPlatformOrganization(
       organization_type: string;
       status: string;
       created_at: Date;
-    }>`INSERT INTO organizations (name, organization_type, status) VALUES (${input.name}, ${input.organizationType}::organization_type_enum, ${input.status}::organization_status_enum) RETURNING id, name, organization_type, status, created_at`.execute(
-      trx
-    );
+    }>`INSERT INTO organizations (name, organization_type, status) VALUES (${input.name}, ${input.organizationType}::organization_type_enum, ${input.status}::organization_status_enum) RETURNING id, name, organization_type, status, created_at`.execute(trx);
     const organization = created.rows[0];
-    await sql`INSERT INTO organization_settings (organization_id) VALUES (${organization.id})`.execute(
-      trx
-    );
+    await sql`INSERT INTO organization_settings (organization_id) VALUES (${organization.id})`.execute(trx);
     return organization;
   });
 }
@@ -81,68 +103,68 @@ export async function inviteOrganizationAdmin(
   emailInput: string
 ): Promise<InviteOrganizationAdminResult> {
   return withPlatformContext(userId, async (trx) => {
-    const org = await sql<{ id: string; name: string }>`SELECT id, name FROM organizations WHERE id = ${organizationId} AND archived_at IS NULL LIMIT 1`.execute(
-      trx
-    );
+    const org = await sql<{ id: string; name: string }>`SELECT id, name FROM organizations WHERE id = ${organizationId} AND archived_at IS NULL LIMIT 1`.execute(trx);
     if (!org.rows[0]) throw new Error("ORGANIZATION_NOT_FOUND");
 
     const email = emailInput.trim().toLowerCase();
-
-    await sql`UPDATE access_invitations SET status = CASE WHEN expires_at <= now() THEN 'expired'::access_invitation_status_enum ELSE 'revoked'::access_invitation_status_enum END, revoked_at = CASE WHEN expires_at > now() THEN now() ELSE revoked_at END, updated_at = now() WHERE organization_id = ${organizationId} AND invitation_type = 'organization_admin' AND lower(email) = ${email} AND status = 'pending'`.execute(
-      trx
-    );
+    await sql`UPDATE access_invitations SET status = CASE WHEN expires_at <= now() THEN 'expired'::access_invitation_status_enum ELSE 'revoked'::access_invitation_status_enum END, revoked_at = CASE WHEN expires_at > now() THEN now() ELSE revoked_at END, updated_at = now() WHERE organization_id = ${organizationId} AND invitation_type = 'organization_admin' AND lower(email) = ${email} AND status = 'pending'`.execute(trx);
 
     const rawToken = randomBytes(32).toString("hex");
     const tokenHash = hashToken(rawToken);
     const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    const inserted = await sql<{ id: string; email: string; expires_at: string }>`INSERT INTO access_invitations(organization_id, invited_by_user_id, invitation_type, email, token_hash, expires_at) VALUES(${organizationId}, ${userId}, 'organization_admin', ${email}, ${tokenHash}, ${expiresAt}) RETURNING id, email, expires_at`.execute(trx);
 
-    const inserted = await sql<{
-      id: string;
-      email: string;
-      expires_at: string;
-    }>`INSERT INTO access_invitations(organization_id, invited_by_user_id, invitation_type, email, token_hash, expires_at) VALUES(${organizationId}, ${userId}, 'organization_admin', ${email}, ${tokenHash}, ${expiresAt}) RETURNING id, email, expires_at`.execute(
-      trx
-    );
-
-    const inviterResult = await sql<{ email: string | null }>`SELECT email FROM users WHERE id = ${userId} LIMIT 1`.execute(
-      trx
-    );
+    const inviterResult = await sql<{ email: string | null }>`SELECT email FROM users WHERE id = ${userId} LIMIT 1`.execute(trx);
     const inviterEmail = inviterResult.rows[0]?.email || "admin@etnara.care";
-
-    const invitation = {
-      ...inserted.rows[0],
-      organization_id: organizationId,
-      organization_name: org.rows[0].name,
-    };
+    const invitation = { ...inserted.rows[0], organization_id: organizationId, organization_name: org.rows[0].name };
 
     const emailConfig = loadEmailConfig();
     const emailDelivery = await sendOrganizationAdminInvitationEmail(
-      {
-        recipientEmail: email,
-        organizationName: org.rows[0].name,
-        activationToken: rawToken,
-        invitedByEmail: inviterEmail,
-      },
+      { recipientEmail: email, organizationName: org.rows[0].name, activationToken: rawToken, invitedByEmail: inviterEmail },
       emailConfig
     );
 
     if (emailDelivery.status === "sent") {
-      console.info(
-        "Organization admin invitation email sent",
-        { organizationId, messageId: emailDelivery.messageId }
-      );
+      console.info("Organization admin invitation email sent", { organizationId, messageId: emailDelivery.messageId });
     } else {
-      console.warn(
-        "Organization admin invitation email delivery failed",
-        { organizationId, error: emailDelivery.error }
-      );
+      console.warn("Organization admin invitation email delivery failed", { organizationId, error: emailDelivery.error });
     }
 
-    return {
-      invitation,
-      rawToken,
-      emailDelivery,
-    };
+    return { invitation, rawToken, emailDelivery };
   });
 }
 
+export async function inspectOrganizationAdminInvitation(rawToken: string) {
+  try {
+    const result = await sql<{
+      invitation_type: string;
+      email_masked: string;
+      organization_name: string;
+      target_name: string;
+      account_exists: boolean;
+      expires_at: string;
+    }>`SELECT * FROM app_inspect_access_invitation(${hashToken(rawToken)})`.execute(db);
+    const invitation = result.rows[0];
+    if (!invitation || invitation.invitation_type !== "organization_admin") {
+      throw new OrganizationAdminInvitationError("INVITATION_NOT_AVAILABLE");
+    }
+    return invitation;
+  } catch (error) {
+    if (error instanceof OrganizationAdminInvitationError) throw error;
+    return translateInvitationError(error);
+  }
+}
+
+export async function activateOrganizationAdminInvitation(rawToken: string, password: string) {
+  const inspection = await inspectOrganizationAdminInvitation(rawToken);
+  if (inspection.account_exists) {
+    throw new OrganizationAdminInvitationError("ACCOUNT_ALREADY_EXISTS");
+  }
+  const passwordHash = await hashPassword(password);
+  try {
+    const result = await sql<{ user_id: string; organization_id: string; invitation_type: string }>`SELECT * FROM app_activate_organization_admin_invitation(${hashToken(rawToken)}, ${passwordHash}, NULL)`.execute(db);
+    return result.rows[0];
+  } catch (error) {
+    return translateInvitationError(error);
+  }
+}
