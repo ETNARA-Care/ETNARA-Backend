@@ -14,8 +14,8 @@ async function main(){
   if(!authority.rows.length)throw new Error(`Active platform authority not found for ${PLATFORM_ADMIN_EMAIL}`);
 
   // Platform administrators are global identities, not tenant members.
-  // Keep historical rows for auditability but make every organization membership inactive.
-  await client.query(`UPDATE organization_memberships SET status='inactive' WHERE user_id=$1 AND status='active'`,[userId]);
+  // Preserve membership history for auditability while revoking tenant access.
+  await client.query(`UPDATE organization_memberships SET status='revoked', revoked_at=COALESCE(revoked_at, now()), updated_at=now() WHERE user_id=$1 AND status='active'`,[userId]);
 
   const active=await client.query(`SELECT 1 FROM organization_memberships WHERE user_id=$1 AND status='active' LIMIT 1`,[userId]);
   if(active.rows.length)throw new Error("Platform admin still has an active organization membership");
