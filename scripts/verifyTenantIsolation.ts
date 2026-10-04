@@ -14,12 +14,11 @@ async function expectHidden(name: string, sql: string, params: unknown[]) {
 async function main() {
   await client.connect();
   try {
-    const orgAResult = await q(`SELECT id FROM organizations ORDER BY created_at, id LIMIT 1`);
-    if (!orgAResult.rowCount) throw new Error("E.4 requires seeded organization A");
-    const orgA = orgAResult.rows[0].id as string;
-    const membership = await q(`SELECT user_id FROM organization_memberships WHERE organization_id=$1 AND status='active' LIMIT 1`, [orgA]);
-    if (!membership.rowCount) throw new Error("E.4 requires an active user in organization A");
-    const userA = membership.rows[0].user_id as string;
+    // Build BOTH tenants inside this disposable verification database. E.4
+    // must never depend on production/demo bootstrap data.
+    const orgA = (await q(`INSERT INTO organizations (name, organization_type, status) VALUES ('E4 Isolation Org A','HOME_CARE_AGENCY','active') RETURNING id`)).rows[0].id as string;
+    const userA = (await q(`INSERT INTO users (email, status) VALUES ('e4-isolation-a@example.invalid','active') RETURNING id`)).rows[0].id as string;
+    await q(`INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active')`, [userA, orgA]);
 
     // Build an isolated Organization B fixture specifically for E.4. This is
     // intentionally not part of seedDemo/bootstrap and exists only in CI's
