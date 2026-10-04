@@ -183,7 +183,19 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
   const user = await findUserByIdentifier(email);
 
   // Deliberately return the same response for unknown/inactive accounts.
-  if (!user || user.status !== "active" || !user.email) return;
+  // Log only a coarse diagnostic reason; never log the email, user id, or token.
+  if (!user) {
+    console.warn("Password reset skipped", { reason: "ACCOUNT_NOT_FOUND" });
+    return;
+  }
+  if (user.status !== "active") {
+    console.warn("Password reset skipped", { reason: "ACCOUNT_INACTIVE" });
+    return;
+  }
+  if (!user.email) {
+    console.warn("Password reset skipped", { reason: "ACCOUNT_WITHOUT_EMAIL" });
+    return;
+  }
 
   const { rawToken, tokenHash } = generateSessionToken();
   const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000);
@@ -200,11 +212,14 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
     `.execute(trx);
   });
 
+  console.info("Password reset token created");
   const delivery = await sendPasswordResetEmail(user.email, rawToken, loadEmailConfig());
   if (delivery.status !== "sent") {
     // Never expose provider details or the raw token to the caller.
     console.error("Password reset email delivery failed", { error: delivery.error });
+    return;
   }
+  console.info("Password reset email accepted by provider");
 }
 
 export async function confirmPasswordReset(rawToken: string, newPassword: string): Promise<void> {
