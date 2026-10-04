@@ -222,3 +222,14 @@ export async function withNewMembershipContext<T>(
     return work(trx);
   });
 }
+
+/** Resolve and claim one password-reset credential before identity is known. */
+export async function withPasswordResetLookupContext<T>(
+  tokenHash: string,
+  work: (trx: Transaction<Database>) => Promise<T>
+): Promise<T> {
+  return db.transaction().execute(async (trx) => {
+    await sql`SELECT set_config('app.lookup_password_reset_hash', ${tokenHash}, true)`.execute(trx);
+    return work(trx);
+  });
+}
