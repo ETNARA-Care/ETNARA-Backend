@@ -814,12 +814,8 @@ export async function createOrUpdateOrganizationReview(
     if (!credCheck.rows[0]) throw new CredentialNotFoundError();
     if (!credCheck.rows[0].document_id) throw new CredentialDocumentRequiredError();
 
-    await sql`
-      UPDATE documents
-      SET status = ${input.reviewStatus === "approved" ? "verified" : input.reviewStatus === "rejected" ? "rejected" : "presented"},
-          updated_at = now()
-      WHERE id = (SELECT document_id FROM credentials WHERE id = ${credentialId})
-    `.execute(trx);
+    // Organization review is tenant-local. It must never mutate the shared/global
+    // document status; only ETNARA Platform verification owns that state.
 
     await sql`
       INSERT INTO organization_document_version_reviews (
