@@ -9,15 +9,28 @@ async function main() {
   await client.connect();
   await client.query("BEGIN");
   try {
-    const seed = await client.query<{ organization_id: string; invited_by_user_id: string }>(`
-      SELECT om.organization_id, om.user_id AS invited_by_user_id
-      FROM organization_memberships om
-      JOIN user_roles ur ON ur.organization_membership_id = om.id
-      JOIN roles r ON r.id = ur.role_id
-      WHERE om.status = 'active' AND r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')
-      LIMIT 1
+    // Create the manager fixture inside this transaction. CI verification
+    // must never depend on seedDemo or on any pre-existing organization.
+    const org = await client.query<{ id: string }>(`
+      INSERT INTO organizations (name, organization_type, status)
+      VALUES ('CI Invitation Verification Org', 'HOME_CARE_AGENCY', 'active')
+      RETURNING id
     `);
-    if (!seed.rows[0]) throw new Error("No manager seed is available for the activation verification.");
+    const manager = await client.query<{ id: string }>(`
+      INSERT INTO users (email, status)
+      VALUES ('ci-invitation-manager@example.invalid', 'active')
+      RETURNING id
+    `);
+    const membership = await client.query<{ id: string }>(`
+      INSERT INTO organization_memberships (user_id, organization_id, status)
+      VALUES ($1, $2, 'active')
+      RETURNING id
+    `, [manager.rows[0].id, org.rows[0].id]);
+    await client.query(`
+      INSERT INTO user_roles (organization_membership_id, organization_id, role_id)
+      SELECT $1, $2, id FROM roles WHERE code = 'ORGANIZATION_ADMIN'
+    `, [membership.rows[0].id, org.rows[0].id]);
+    const seed = { rows: [{ organization_id: org.rows[0].id, invited_by_user_id: manager.rows[0].id }] };
 
     const worker = await client.query<{ membership_id: string; worker_id: string }>(`
       WITH new_worker AS (
