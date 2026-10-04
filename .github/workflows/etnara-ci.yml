@@ -51,9 +51,11 @@ jobs:
         run: |
           runtime_password="$(openssl rand -hex 24)"
           demo_password="$(openssl rand -hex 24)"
+          platform_admin_password="$(openssl rand -hex 24)"
           export MIGRATIONS_DATABASE_URL="postgres://postgres@localhost:5432/etnara_ci"
           export APP_RUNTIME_PASSWORD="$runtime_password"
           export DEMO_PASSWORD="$demo_password"
+          export PLATFORM_ADMIN_PASSWORD="$platform_admin_password"
           npm run bootstrap:staging
           npm run bootstrap:staging
 
