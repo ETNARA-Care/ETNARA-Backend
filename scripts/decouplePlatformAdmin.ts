@@ -7,10 +7,11 @@ const platformAdminPassword=process.env.PLATFORM_ADMIN_PASSWORD;
 const databaseUrl=process.env.MIGRATIONS_DATABASE_URL??process.env.DATABASE_URL;
 if(!databaseUrl)throw new Error("Administrative database connection is required");
 if(!platformAdminPassword)throw new Error("PLATFORM_ADMIN_PASSWORD is required for platform admin provisioning");
-if(platformAdminPassword.length<12)throw new Error("PLATFORM_ADMIN_PASSWORD must be at least 12 characters");
+const PLATFORM_ADMIN_PASSWORD:string=platformAdminPassword;
+if(PLATFORM_ADMIN_PASSWORD.length<12)throw new Error("PLATFORM_ADMIN_PASSWORD must be at least 12 characters");
 
 async function main(){
- const passwordHash=await hashPassword(platformAdminPassword);
+ const passwordHash=await hashPassword(PLATFORM_ADMIN_PASSWORD);
  const client=new Client({connectionString:databaseUrl});await client.connect();
  try{
   await client.query("BEGIN");
