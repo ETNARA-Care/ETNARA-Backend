@@ -133,3 +133,30 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => map[c] || c);
 }
 
+
+export async function sendPasswordResetEmail(
+  recipientEmail: string,
+  resetToken: string,
+  config: EmailConfig
+): Promise<EmailDeliveryResult> {
+  if (!config.apiKey) return { status: "failed", error: "EMAIL_NOT_CONFIGURED" };
+  const resetLink = `${config.activationBaseUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+  const html = `<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><h1>${escapeHtml(config.senderName)}</h1><p>Recibimos una solicitud para establecer o cambiar tu contraseña.</p><p><a href="${escapeHtml(resetLink)}">Establecer contraseña</a></p><p>Este enlace expira en 30 minutos y solo puede utilizarse una vez.</p><p>Si no solicitaste este cambio, ignora este correo.</p></div></body></html>`;
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: `${config.senderName} <${config.senderEmail}>`,
+        to: recipientEmail,
+        subject: `Establece tu contraseña de ${config.senderName}`,
+        html,
+      }),
+    });
+    if (!response.ok) return { status: "failed", error: `HTTP ${response.status}` };
+    const result = await response.json() as { id?: string };
+    return result.id ? { status: "sent", messageId: result.id } : { status: "failed", error: "INVALID_RESPONSE" };
+  } catch (error) {
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
