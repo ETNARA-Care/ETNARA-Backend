@@ -21,7 +21,7 @@ async function main(){
     INSERT INTO users (email, status, password_hash)
     VALUES ($1, 'active', $2)
     ON CONFLICT (lower(email)) WHERE email IS NOT NULL
-    DO UPDATE SET status='active', password_hash=EXCLUDED.password_hash, updated_at=now()
+    DO UPDATE SET status='active', password_hash=COALESCE(users.password_hash, EXCLUDED.password_hash), updated_at=now()
     RETURNING id
   `,[PLATFORM_ADMIN_EMAIL,passwordHash]);
   const platformUserId=platformUser.rows[0]?.id;
