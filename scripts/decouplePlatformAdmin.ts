@@ -3,14 +3,14 @@ import { hashPassword } from "../src/security/password.js";
 
 const PLATFORM_ADMIN_EMAIL=(process.env.PLATFORM_ADMIN_EMAIL??"etnaracare@gmail.com").trim().toLowerCase();
 const LEGACY_PLATFORM_ADMIN_EMAIL=(process.env.LEGACY_PLATFORM_ADMIN_EMAIL??"admin@demo.etnara.care").trim().toLowerCase();
-const PLATFORM_ADMIN_PASSWORD=process.env.PLATFORM_ADMIN_PASSWORD;
+const platformAdminPassword=process.env.PLATFORM_ADMIN_PASSWORD;
 const databaseUrl=process.env.MIGRATIONS_DATABASE_URL??process.env.DATABASE_URL;
 if(!databaseUrl)throw new Error("Administrative database connection is required");
-if(!PLATFORM_ADMIN_PASSWORD)throw new Error("PLATFORM_ADMIN_PASSWORD is required for platform admin provisioning");
-if(PLATFORM_ADMIN_PASSWORD.length<12)throw new Error("PLATFORM_ADMIN_PASSWORD must be at least 12 characters");
+if(!platformAdminPassword)throw new Error("PLATFORM_ADMIN_PASSWORD is required for platform admin provisioning");
+if(platformAdminPassword.length<12)throw new Error("PLATFORM_ADMIN_PASSWORD must be at least 12 characters");
 
 async function main(){
- const passwordHash=await hashPassword(PLATFORM_ADMIN_PASSWORD);
+ const passwordHash=await hashPassword(platformAdminPassword);
  const client=new Client({connectionString:databaseUrl});await client.connect();
  try{
   await client.query("BEGIN");
