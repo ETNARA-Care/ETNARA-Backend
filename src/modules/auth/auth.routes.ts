@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
-import { login, logout, InvalidCredentialsError } from "./auth.service.js";
+import { login, logout, requestPasswordReset, confirmPasswordReset, InvalidCredentialsError, InvalidPasswordResetTokenError } from "./auth.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 
 const router = Router();
@@ -40,3 +40,37 @@ router.post("/auth/logout", requireAuth, async (req: AuthenticatedRequest, res: 
 });
 
 export default router;
+
+const passwordResetRequestSchema = z.object({
+  email: z.string().trim().email().max(254),
+});
+const passwordResetConfirmSchema = z.object({
+  token: z.string().length(64),
+  password: z.string().min(12).max(128),
+});
+
+router.post("/auth/password-reset/request", async (req: Request, res: Response) => {
+  const parsed = passwordResetRequestSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  try {
+    await requestPasswordReset(parsed.data.email);
+    res.status(200).json({ ok: true });
+  } catch {
+    // Do not reveal account existence or email-provider state.
+    res.status(200).json({ ok: true });
+  }
+});
+
+router.post("/auth/password-reset/confirm", async (req: Request, res: Response) => {
+  const parsed = passwordResetConfirmSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  try {
+    await confirmPasswordReset(parsed.data.token, parsed.data.password);
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    if (error instanceof InvalidPasswordResetTokenError) {
+      return void res.status(400).json({ error: "INVALID_OR_EXPIRED_RESET_TOKEN" });
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
