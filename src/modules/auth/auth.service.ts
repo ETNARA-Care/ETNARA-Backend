@@ -3,10 +3,12 @@ import {
   withLoginLookupContext,
   withTokenLookupContext,
   withUserContext,
+  withPasswordResetLookupContext,
 } from "../../context/tenantContext.js";
 import { hashPassword, verifyPassword } from "../../security/password.js";
 import { generateSessionToken, hashToken } from "../../security/sessionToken.js";
 import { env } from "../../config/env.js";
+import { loadEmailConfig, sendPasswordResetEmail } from "../email/email.service.js";
 
 export class InvalidCredentialsError extends Error {
   constructor() {
@@ -166,3 +168,80 @@ export async function logout(sessionId: string, userId: string): Promise<void> {
 // Re-exported for fixtures/tests that need to create demo users with a
 // real hashed password rather than plaintext.
 export { hashPassword };
+
+export class InvalidPasswordResetTokenError extends Error {
+  constructor() {
+    super("INVALID_OR_EXPIRED_RESET_TOKEN");
+    this.name = "InvalidPasswordResetTokenError";
+  }
+}
+
+const PASSWORD_RESET_TTL_MINUTES = 30;
+
+export async function requestPasswordReset(emailRaw: string): Promise<void> {
+  const email = emailRaw.trim().toLowerCase();
+  const user = await findUserByIdentifier(email);
+
+  // Deliberately return the same response for unknown/inactive accounts.
+  if (!user || user.status !== "active" || !user.email) return;
+
+  const { rawToken, tokenHash } = generateSessionToken();
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MINUTES * 60 * 1000);
+
+  await withUserContext(user.id, async (trx) => {
+    await sql`
+      UPDATE password_reset_tokens
+      SET used_at = now()
+      WHERE user_id = ${user.id} AND used_at IS NULL
+    `.execute(trx);
+    await sql`
+      INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+      VALUES (${user.id}, ${tokenHash}, ${expiresAt.toISOString()})
+    `.execute(trx);
+  });
+
+  const delivery = await sendPasswordResetEmail(user.email, rawToken, loadEmailConfig());
+  if (delivery.status !== "sent") {
+    // Never expose provider details or the raw token to the caller.
+    console.error("Password reset email delivery failed", { error: delivery.error });
+  }
+}
+
+export async function confirmPasswordReset(rawToken: string, newPassword: string): Promise<void> {
+  const tokenHash = hashToken(rawToken);
+  const passwordHash = await hashPassword(newPassword);
+
+  await withPasswordResetLookupContext(tokenHash, async (trx) => {
+    const claimed = await sql<{ user_id: string }>`
+      UPDATE password_reset_tokens
+      SET used_at = now()
+      WHERE token_hash = ${tokenHash}
+        AND used_at IS NULL
+        AND expires_at > now()
+      RETURNING user_id
+    `.execute(trx);
+
+    const userId = claimed.rows[0]?.user_id;
+    if (!userId) throw new InvalidPasswordResetTokenError();
+
+    await sql`SELECT set_config('app.current_user_id', ${userId}, true)`.execute(trx);
+    await sql`SELECT set_config('app.current_org_id', '', true)`.execute(trx);
+    await sql`SELECT set_config('app.is_superadmin', 'false', true)`.execute(trx);
+
+    const updated = await sql`
+      UPDATE users SET password_hash = ${passwordHash}
+      WHERE id = ${userId} AND status = 'active'
+    `.execute(trx);
+    if (Number(updated.numAffectedRows ?? 0) !== 1) throw new InvalidPasswordResetTokenError();
+
+    await sql`
+      UPDATE sessions SET revoked_at = now()
+      WHERE user_id = ${userId} AND revoked_at IS NULL
+    `.execute(trx);
+
+    await sql`
+      UPDATE password_reset_tokens SET used_at = now()
+      WHERE user_id = ${userId} AND used_at IS NULL
+    `.execute(trx);
+  });
+}
