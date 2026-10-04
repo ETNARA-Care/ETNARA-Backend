@@ -1,23 +1,29 @@
 import { Client } from "pg";
+import { hashPassword } from "../src/security/password.js";
 
 const PLATFORM_ADMIN_EMAIL=(process.env.PLATFORM_ADMIN_EMAIL??"etnaracare@gmail.com").trim().toLowerCase();
 const LEGACY_PLATFORM_ADMIN_EMAIL=(process.env.LEGACY_PLATFORM_ADMIN_EMAIL??"admin@demo.etnara.care").trim().toLowerCase();
+const platformAdminPassword=process.env.PLATFORM_ADMIN_PASSWORD;
 const databaseUrl=process.env.MIGRATIONS_DATABASE_URL??process.env.DATABASE_URL;
 if(!databaseUrl)throw new Error("Administrative database connection is required");
+if(!platformAdminPassword)throw new Error("PLATFORM_ADMIN_PASSWORD is required for platform admin provisioning");
+const PLATFORM_ADMIN_PASSWORD:string=platformAdminPassword;
+if(PLATFORM_ADMIN_PASSWORD.length<12)throw new Error("PLATFORM_ADMIN_PASSWORD must be at least 12 characters");
 
 async function main(){
+ const passwordHash=await hashPassword(PLATFORM_ADMIN_PASSWORD);
  const client=new Client({connectionString:databaseUrl});await client.connect();
  try{
   await client.query("BEGIN");
 
   // The dedicated ETNARA Platform identity is global and intentionally has no tenant membership.
   const platformUser=await client.query<{id:string}>(`
-    INSERT INTO users (email, status)
-    VALUES ($1, 'active')
+    INSERT INTO users (email, status, password_hash)
+    VALUES ($1, 'active', $2)
     ON CONFLICT (lower(email)) WHERE email IS NOT NULL
-    DO UPDATE SET status='active', updated_at=now()
+    DO UPDATE SET status='active', password_hash=EXCLUDED.password_hash, updated_at=now()
     RETURNING id
-  `,[PLATFORM_ADMIN_EMAIL]);
+  `,[PLATFORM_ADMIN_EMAIL,passwordHash]);
   const platformUserId=platformUser.rows[0]?.id;
   if(!platformUserId)throw new Error(`Unable to provision platform admin user: ${PLATFORM_ADMIN_EMAIL}`);
 
