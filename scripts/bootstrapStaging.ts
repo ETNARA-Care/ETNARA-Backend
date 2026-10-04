@@ -1,7 +1,10 @@
 /**
- * Bootstrap de staging: aplica migraciones pendientes, rota la contraseña
- * de app_runtime, siembra datos demo y finalmente separa la identidad
- * administrativa de ETNARA Plataforma de las organizaciones demo.
+ * Bootstrap seguro de despliegue: aplica migraciones pendientes, rota la
+ * contraseña de app_runtime y separa la identidad administrativa de ETNARA
+ * Plataforma. Los datos demo NO forman parte del bootstrap automático.
+ *
+ * Para sembrar datos demo se debe ejecutar scripts/seedDemo.ts explícitamente
+ * en un entorno de demostración autorizado.
  */
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,14 +31,10 @@ async function main() {
 
   await client.end();
 
-  console.log("Sembrando datos demo usando la conexion administrativa...");
   const { execSync } = await import("node:child_process");
   const childEnv = { ...process.env, DATABASE_URL: adminUrl };
-  execSync("npx tsx scripts/seedDemo.ts", {
-    cwd: join(__dirname, ".."),
-    env: childEnv,
-    stdio: "inherit",
-  });
+
+  console.log("Seed demo omitido: nunca se ejecuta como parte del bootstrap automatico.");
 
   console.log("Separando ETNARA Plataforma de las membresias de organizaciones...");
   execSync("npx tsx scripts/decouplePlatformAdmin.ts", {
