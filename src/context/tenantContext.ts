@@ -82,6 +82,21 @@ export async function withTenantContext<T>(
       );
     }
 
+    // Organization lifecycle is a separate access condition from membership.
+    // Existing active memberships must not grant access to suspended or archived tenants.
+    const organization = await sql<{ id: string }>`
+      SELECT id FROM organizations
+      WHERE id = ${ctx.organizationId}
+        AND status = 'active'
+        AND archived_at IS NULL
+      LIMIT 1
+    `.execute(trx);
+    if (organization.rows.length === 0) {
+      throw new MembershipNotActiveError(
+        `Organization ${ctx.organizationId} is not active`
+      );
+    }
+
     return work(trx);
   });
 }
