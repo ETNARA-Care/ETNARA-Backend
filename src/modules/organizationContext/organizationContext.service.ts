@@ -60,6 +60,7 @@ export async function getMe(userId: string): Promise<MeResult> {
       LEFT JOIN user_roles ur ON ur.organization_membership_id = om.id
       LEFT JOIN roles r ON r.id = ur.role_id
       WHERE om.user_id = ${userId} AND om.status = 'active'
+        AND o.status IN ('active', 'trial') AND o.archived_at IS NULL
         AND (
           r.code IS NULL
           OR r.code NOT IN ('WORKER', 'FAMILY')

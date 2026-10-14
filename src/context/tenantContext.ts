@@ -72,13 +72,28 @@ export async function withTenantContext<T>(
       SELECT id FROM organization_memberships
       WHERE user_id = ${ctx.userId}
         AND organization_id = ${ctx.organizationId}
-        AND status = 'active'
+        AND status IN ('active', 'trial')
       LIMIT 1
     `.execute(trx);
 
     if (membership.rows.length === 0) {
       throw new MembershipNotActiveError(
         `User ${ctx.userId} has no active membership in organization ${ctx.organizationId}`
+      );
+    }
+
+    // Organization lifecycle is a separate access condition from membership.
+    // Existing active memberships must not grant access to suspended or archived tenants.
+    const organization = await sql<{ id: string }>`
+      SELECT id FROM organizations
+      WHERE id = ${ctx.organizationId}
+        AND status = 'active'
+        AND archived_at IS NULL
+      LIMIT 1
+    `.execute(trx);
+    if (organization.rows.length === 0) {
+      throw new MembershipNotActiveError(
+        `Organization ${ctx.organizationId} is not active`
       );
     }
 
