@@ -87,7 +87,7 @@ export async function withTenantContext<T>(
     const organization = await sql<{ id: string }>`
       SELECT id FROM organizations
       WHERE id = ${ctx.organizationId}
-        AND status = 'active'
+        AND status IN ('active', 'trial')
         AND archived_at IS NULL
       LIMIT 1
     `.execute(trx);
