@@ -4,6 +4,7 @@ import { withPlatformContext } from "../../context/tenantContext.js";
 import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
 import { TOWER_AGENTS } from "./agentCatalog.js";
 import { buildTowerStatusBoard } from "./statusBoard.js";
+import { collectTowerLiveHealth } from "./liveHealthCollector.js";
 
 const router = Router();
 /** Platform-only, read-only bootstrap. Live provider collection is not enabled yet. */
@@ -12,11 +13,12 @@ router.get("/platform/tower/overview", requireAuth, async (req: AuthenticatedReq
     // Recheck platform authority in the database; never trust a frontend role or header.
     await withPlatformContext(req.auth!.userId, async () => true);
     res.setHeader("Cache-Control", "no-store");
+    const observations = await collectTowerLiveHealth(req.auth!.userId, new Date().toISOString());
     res.json({
-      version: "11.4",
+      version: "11.5",
       mode: "read-only",
-      liveMonitoringEnabled: false,
-      board: buildTowerStatusBoard([], new Date().toISOString()),
+      liveMonitoringEnabled: true,
+      board: buildTowerStatusBoard(observations, new Date().toISOString()),
       agents: TOWER_AGENTS.map(agent => ({
         id: agent.id,
         name: agent.name,
