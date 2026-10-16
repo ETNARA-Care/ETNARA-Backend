@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { buildReadOnlyRepairPlan } from "./repairPlanPilot.js";
 import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
 import { createCorporateTaskForPlatformAdmin } from "./corporateTaskPostgresCreate.js";
@@ -58,6 +59,29 @@ router.get("/platform/tower/pilot/health/:agentId", requireAuth, async (req: Aut
       executionMode: "bounded-read-only", autonomousExecutionEnabled: false,
       board: buildTowerStatusBoard(observations, checkedAt),
     });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Human-invoked LEO planning only. Never writes, opens PRs, or calls a model. */
+router.post("/platform/tower/pilot/repair-plan", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+        Object.keys(body).some(key => !["agentId", "signal"].includes(key)) ||
+        typeof body.agentId !== "string" || typeof body.signal !== "string") {
+      res.status(400).json({ error: "INVALID_REPAIR_SIGNAL" });
+      return;
+    }
+    const plan = buildReadOnlyRepairPlan(body.agentId, body.signal);
+    if (!plan) { res.status(400).json({ error: "REPAIR_PLAN_NOT_ALLOWED" }); return; }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ plan, mode: "planning-only", executionEnabled: false });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
