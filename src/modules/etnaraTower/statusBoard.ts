@@ -14,7 +14,9 @@ export function buildTowerStatusBoard(
   observations: readonly TowerHealthObservation[],
   generatedAt: string,
 ): TowerStatusBoard {
-  // CI and other environments must never override production service health.\n  const production = observations.filter(item => item.environment === "production");\n  const services = SERVICES.map(service => {
+  // CI and other environments must never override production service health.
+  const production = observations.filter(item => item.environment === "production");
+  const services = SERVICES.map(service => {
     const latest = production.filter(item => item.service === service)
       .sort((a, b) => b.checkedAt.localeCompare(a.checkedAt))[0];
     return { service, health: latest?.health ?? "unknown", summary: latest?.summary ?? "No observations available", checkedAt: latest?.checkedAt ?? generatedAt };
