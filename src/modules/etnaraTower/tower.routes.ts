@@ -84,7 +84,7 @@ router.post("/platform/tower/tasks", requireAuth, async (req: AuthenticatedReque
 });
 router.post("/platform/tower/tasks/:taskId/review", requireAuth, async (req: AuthenticatedRequest, res) => {
   try {
-    const result = await reviewCorporateTask(req.auth!.userId, req.params.taskId, req.body);
+    const result = await reviewCorporateTask(req.auth!.userId, String(req.params.taskId), req.body);
     res.setHeader("Cache-Control", "no-store");
     if (result === "invalid") { res.status(400).json({ error: "INVALID_REVIEW" }); return; }
     if (result === "not_found") { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
