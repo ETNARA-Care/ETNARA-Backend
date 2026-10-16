@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { createCorporateTaskForPlatformAdmin } from "./corporateTaskPostgresCreate.js";
 import { listCorporateTasksForPlatformAdmin } from "./corporateTaskPostgresRead.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { withPlatformContext } from "../../context/tenantContext.js";
@@ -61,6 +62,20 @@ router.get("/platform/tower/tasks", requireAuth, async (req: AuthenticatedReques
     }
     if (error instanceof RangeError) {
       res.status(400).json({ error: "INVALID_TASK_FILTER" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+router.post("/platform/tower/tasks", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const task = await createCorporateTaskForPlatformAdmin(req.auth!.userId, req.body);
+    if (!task) { res.status(400).json({ error: "INVALID_TASK_REQUEST" }); return; }
+    res.setHeader("Cache-Control", "no-store");
+    res.status(201).json({ task, executionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
       return;
     }
     res.status(500).json({ error: "INTERNAL_ERROR" });
