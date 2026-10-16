@@ -7,7 +7,7 @@ describe("ETNARA Tower GitHub read-only collector", () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ workflow_runs: [{ status: "completed", conclusion: "success" }] }) }));
     const observation = await collectGithubActionsObservation({ token: "test-token", fetcher, checkedAt, signal });
     expect(observation.health).toBe("healthy");
-    expect(fetcher.mock.calls[0]?.[0]).toContain("/ETNARA-Backend/actions/runs?");
+    expect(fetcher).toHaveBeenCalledWith(expect.stringContaining("/ETNARA-Backend/actions/runs?"), expect.objectContaining({ method: "GET" }));
     expect(JSON.stringify(observation)).not.toContain("test-token");
   });
   it("returns unknown for failed API requests", async () => {
