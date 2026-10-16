@@ -57,11 +57,11 @@ GRANT SELECT, INSERT ON tower_corporate_task_audit TO app_runtime;
 -- Database-level immutability: audit history cannot be rewritten or deleted,
 -- even if a future role accidentally receives UPDATE/DELETE grants.
 CREATE FUNCTION tower_corporate_audit_immutable() RETURNS trigger
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $body$
 BEGIN
   RAISE EXCEPTION 'Corporate task audit history is immutable';
 END;
-$;
+$body$;
 CREATE TRIGGER tower_corporate_audit_no_update_delete
 BEFORE UPDATE OR DELETE ON tower_corporate_task_audit
 FOR EACH ROW EXECUTE FUNCTION tower_corporate_audit_immutable();
