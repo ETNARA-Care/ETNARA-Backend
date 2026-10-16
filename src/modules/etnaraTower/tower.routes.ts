@@ -41,6 +41,31 @@ router.get("/platform/tower/overview", requireAuth, async (req: AuthenticatedReq
     res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
+/** First agent pilot: explicit, allowlisted, platform-admin-only read-only health check. */
+router.get("/platform/tower/pilot/health/:agentId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const agentId = String(req.params.agentId);
+  if (agentId !== "technology-4" && agentId !== "technology-3") {
+    res.status(400).json({ error: "PILOT_AGENT_NOT_ENABLED" });
+    return;
+  }
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    const checkedAt = new Date().toISOString();
+    const observations = await collectTowerLiveHealth(req.auth!.userId, checkedAt);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      agentId, checkedAt, capability: "read-only-health-check",
+      executionMode: "bounded-read-only", autonomousExecutionEnabled: false,
+      board: buildTowerStatusBoard(observations, checkedAt),
+    });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
 /** Authenticated, platform-only persisted task inbox. Read-only until write approval flows are implemented. */
 router.get("/platform/tower/tasks", requireAuth, async (req: AuthenticatedRequest, res) => {
   const rawLimit = req.query.limit;
