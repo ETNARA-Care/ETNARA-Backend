@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TOWER_AGENTS, TOWER_AGENT_IDS, mayExecuteTowerAction, towerActionRequiresApproval } from "../src/modules/etnaraTower/agentCatalog";
+import { TOWER_AGENTS, TOWER_AGENT_IDS, mayExecuteTowerAction, towerActionRequiresApproval } from "../src/modules/etnaraTower/agentCatalog.js";
 
 describe("ETNARA Tower phase 11.2 agent policy", () => {
   it("defines exactly five unique agents", () => {
