@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
 import { createCorporateTaskForPlatformAdmin } from "./corporateTaskPostgresCreate.js";
 import { listCorporateTasksForPlatformAdmin } from "./corporateTaskPostgresRead.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
@@ -73,6 +74,22 @@ router.post("/platform/tower/tasks", requireAuth, async (req: AuthenticatedReque
     if (!task) { res.status(400).json({ error: "INVALID_TASK_REQUEST" }); return; }
     res.setHeader("Cache-Control", "no-store");
     res.status(201).json({ task, executionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+router.post("/platform/tower/tasks/:taskId/review", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await reviewCorporateTask(req.auth!.userId, req.params.taskId, req.body);
+    res.setHeader("Cache-Control", "no-store");
+    if (result === "invalid") { res.status(400).json({ error: "INVALID_REVIEW" }); return; }
+    if (result === "not_found") { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
+    if (result === "conflict") { res.status(409).json({ error: "TASK_STATUS_CONFLICT" }); return; }
+    res.json({ status: "updated", executionEnabled: false });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
