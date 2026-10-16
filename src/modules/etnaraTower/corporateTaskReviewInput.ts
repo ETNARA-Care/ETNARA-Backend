@@ -5,6 +5,7 @@ export function parseTaskReview(value: unknown): { expectedStatus: CorporateTask
   const data = value as Record<string, unknown>;
   if (Object.keys(data).some(k => !['expectedStatus', 'nextStatus', 'reason'].includes(k))) return null;
   if (typeof data.expectedStatus !== 'string' || typeof data.nextStatus !== 'string') return null;
+  if (!['draft', 'submitted', 'in_review', 'approved', 'rejected', 'completed'].includes(data.expectedStatus)) return null;
   if (!['submitted', 'in_review', 'approved', 'rejected'].includes(data.nextStatus)) return null;
   if (data.reason !== undefined && (typeof data.reason !== 'string' || data.reason.length > 1000)) return null;
   const expectedStatus = data.expectedStatus as CorporateTaskStatus;
