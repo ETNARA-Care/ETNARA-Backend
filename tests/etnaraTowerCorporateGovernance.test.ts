@@ -5,6 +5,7 @@ import { TOWER_CORPORATE_AGENTS, TOWER_CORPORATE_DEPARTMENTS } from "../src/modu
 describe("ETNARA Tower corporate governance", () => {
   it("defines 26 distinct roles in eight departments", () => {
     expect(TOWER_CORPORATE_AGENTS).toHaveLength(26);
+    expect(new Set(TOWER_CORPORATE_AGENTS.map(agent => agent.displayName)).size).toBe(26);
     expect(TOWER_CORPORATE_DEPARTMENTS).toHaveLength(8);
     expect(new Set(TOWER_CORPORATE_AGENTS.map(agent => agent.id)).size).toBe(26);
     expect(TOWER_CORPORATE_AGENTS.every(agent => TOWER_CORPORATE_DEPARTMENTS.some(dept => dept.id === agent.department))).toBe(true);
