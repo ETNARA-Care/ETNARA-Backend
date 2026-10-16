@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { validateRepairPrIntent } from "./repairPrPreflight.js";
 import { buildReadOnlyRepairPlan } from "./repairPlanPilot.js";
 import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
@@ -82,6 +83,25 @@ router.post("/platform/tower/pilot/repair-plan", requireAuth, async (req: Authen
     if (!plan) { res.status(400).json({ error: "REPAIR_PLAN_NOT_ALLOWED" }); return; }
     res.setHeader("Cache-Control", "no-store");
     res.json({ plan, mode: "planning-only", executionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Human-requested preflight only; does not access GitHub or create a PR. */
+router.post("/platform/tower/pilot/repair-pr-preflight", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    const intent = validateRepairPrIntent(req.body);
+    if (!intent) {
+      res.status(400).json({ error: "INVALID_REPAIR_PR_INTENT" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ intent, mode: "dry-run", githubWriteEnabled: false, approvalRequired: true });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
