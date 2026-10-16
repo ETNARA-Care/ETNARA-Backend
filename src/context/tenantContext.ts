@@ -78,7 +78,7 @@ export async function withTenantContext<T>(
       SELECT id FROM organization_memberships
       WHERE user_id = ${ctx.userId}
         AND organization_id = ${ctx.organizationId}
-        AND status IN ('active', 'trial')
+        AND status = 'active'
       LIMIT 1
     `.execute(trx);
 
