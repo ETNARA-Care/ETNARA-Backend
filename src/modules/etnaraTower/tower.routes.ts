@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
 import { createCorporateTaskForPlatformAdmin } from "./corporateTaskPostgresCreate.js";
 import { listCorporateTasksForPlatformAdmin } from "./corporateTaskPostgresRead.js";
@@ -90,6 +91,20 @@ router.post("/platform/tower/tasks/:taskId/review", requireAuth, async (req: Aut
     if (result === "not_found") { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
     if (result === "conflict") { res.status(409).json({ error: "TASK_STATUS_CONFLICT" }); return; }
     res.json({ status: "updated", executionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+router.get("/platform/tower/tasks/:taskId/audit", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const events = await listTaskAuditForAdmin(req.auth!.userId, String(req.params.taskId));
+    res.setHeader("Cache-Control", "no-store");
+    if (events === null) { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
+    res.json({ events });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
