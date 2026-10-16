@@ -3,6 +3,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { withPlatformContext } from "../../context/tenantContext.js";
 import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
 import { TOWER_AGENTS } from "./agentCatalog.js";
+import { TOWER_CORPORATE_AGENTS, TOWER_CORPORATE_DEPARTMENTS } from "./corporateRoster.js";
 import { buildTowerStatusBoard } from "./statusBoard.js";
 import { collectTowerLiveHealth } from "./liveHealthCollector.js";
 
@@ -15,10 +16,12 @@ router.get("/platform/tower/overview", requireAuth, async (req: AuthenticatedReq
     res.setHeader("Cache-Control", "no-store");
     const observations = await collectTowerLiveHealth(req.auth!.userId, new Date().toISOString());
     res.json({
-      version: "11.5",
+      version: "11.6",
       mode: "read-only",
       liveMonitoringEnabled: true,
       board: buildTowerStatusBoard(observations, new Date().toISOString()),
+      departments: TOWER_CORPORATE_DEPARTMENTS,
+      corporateAgents: TOWER_CORPORATE_AGENTS,
       agents: TOWER_AGENTS.map(agent => ({
         id: agent.id,
         name: agent.name,
