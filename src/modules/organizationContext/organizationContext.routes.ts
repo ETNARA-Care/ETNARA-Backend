@@ -67,6 +67,13 @@ router.post(
         res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
         return;
       }
+      // Log only non-sensitive error metadata to diagnose organization-selection failures.
+      // Never log identifiers, credentials, SQL text or database error details.
+      const failure = err && typeof err === "object" ? err as { name?: unknown; code?: unknown } : {};
+      console.error("ACTIVE_ORGANIZATION_SELECTION_FAILED", {
+        name: typeof failure.name === "string" ? failure.name : "UnknownError",
+        code: typeof failure.code === "string" ? failure.code : "UNKNOWN",
+      });
       res.status(500).json({ error: "INTERNAL_ERROR" });
     }
   }
