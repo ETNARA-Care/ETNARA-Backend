@@ -56,9 +56,14 @@ export async function withTenantContext<T>(
   assertValidUuid(ctx.userId, "userId");
   assertValidUuid(ctx.organizationId, "organizationId");
 
-  return db.transaction().execute(async (trx) => {
+  let stage = "begin";
+  try {
+    return await db.transaction().execute(async (trx) => {
+    stage = "set-user-context";
     await sql`SELECT set_config('app.current_user_id', ${ctx.userId}, true)`.execute(trx);
+    stage = "set-organization-context";
     await sql`SELECT set_config('app.current_org_id', ${ctx.organizationId}, true)`.execute(trx);
+    stage = "set-privilege-context";
     await sql`SELECT set_config('app.is_superadmin', 'false', true)`.execute(trx);
 
     // Explicit, human-readable authorization check BEFORE any product
@@ -68,6 +73,7 @@ export async function withTenantContext<T>(
     // clear, catchable error instead of a silent empty result, and
     // guarantees `work()` never executes at all for an invalid org
     // selection.
+    stage = "membership-lookup";
     const membership = await sql<{ id: string }>`
       SELECT id FROM organization_memberships
       WHERE user_id = ${ctx.userId}
@@ -84,6 +90,7 @@ export async function withTenantContext<T>(
 
     // Organization lifecycle is a separate access condition from membership.
     // Existing active memberships must not grant access to suspended or archived tenants.
+    stage = "organization-lookup";
     const organization = await sql<{ id: string }>`
       SELECT id FROM organizations
       WHERE id = ${ctx.organizationId}
@@ -97,8 +104,16 @@ export async function withTenantContext<T>(
       );
     }
 
+    stage = "tenant-work";
     return work(trx);
-  });
+    });
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "UNKNOWN";
+    if (code === "22P02") {
+      console.error("TENANT_CONTEXT_INVALID_TEXT_REPRESENTATION", { stage, code });
+    }
+    throw err;
+  }
 }
 
 export async function isActivePlatformAdmin(userId: string): Promise<boolean> {
