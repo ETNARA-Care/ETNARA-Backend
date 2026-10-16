@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { listCorporateTasksForPlatformAdmin } from "./corporateTaskPostgresRead.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { withPlatformContext } from "../../context/tenantContext.js";
 import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
@@ -32,6 +33,34 @@ router.get("/platform/tower/overview", requireAuth, async (req: AuthenticatedReq
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Authenticated, platform-only persisted task inbox. Read-only until write approval flows are implemented. */
+router.get("/platform/tower/tasks", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const rawLimit = req.query.limit;
+  const rawAgentId = req.query.agentId;
+  if ((rawLimit !== undefined && (typeof rawLimit !== "string" || !/^[1-9][0-9]*$/.test(rawLimit))) ||
+      (rawAgentId !== undefined && typeof rawAgentId !== "string")) {
+    res.status(400).json({ error: "INVALID_TASK_FILTER" });
+    return;
+  }
+  const limit = rawLimit === undefined ? 25 : Number(rawLimit);
+  try {
+    const tasks = await listCorporateTasksForPlatformAdmin(req.auth!.userId, {
+      limit, agentId: rawAgentId as string | undefined,
+    });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ mode: "read-only", tasks });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    if (error instanceof RangeError) {
+      res.status(400).json({ error: "INVALID_TASK_FILTER" });
       return;
     }
     res.status(500).json({ error: "INTERNAL_ERROR" });
