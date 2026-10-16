@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isTowerCorporateTaskTerminal } from "../src/modules/etnaraTower/corporateTaskContracts.js";
 import { CORPORATE_TASK_EXECUTION_ENABLED, mayTransitionCorporateTask, validateCorporateTaskRequest } from "../src/modules/etnaraTower/corporateTaskPolicy.js";
 import { TOWER_CORPORATE_AGENTS, TOWER_CORPORATE_DEPARTMENTS } from "../src/modules/etnaraTower/corporateRoster.js";
 
@@ -13,6 +14,11 @@ describe("ETNARA Tower corporate governance", () => {
   it("rejects invalid tasks and unknown agents", () => {
     expect(validateCorporateTaskRequest({agentId:"unknown",title:"Valid task",instructions:"Prepare a plan",priority:"normal"})).toBe(false);
     expect(validateCorporateTaskRequest({agentId:"secretariat-1",title:"Prepare agenda",instructions:"Draft next meeting agenda",priority:"normal"})).toBe(true);
+  });
+  it("distinguishes terminal task states", () => {
+    expect(isTowerCorporateTaskTerminal("completed")).toBe(true);
+    expect(isTowerCorporateTaskTerminal("rejected")).toBe(true);
+    expect(isTowerCorporateTaskTerminal("approved")).toBe(false);
   });
   it("requires admin approval and does not enable execution", () => {
     expect(mayTransitionCorporateTask({from:"in_review",to:"approved",approvedByPlatformAdmin:false})).toBe(false);
