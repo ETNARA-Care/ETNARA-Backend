@@ -35,31 +35,33 @@ ALTER TABLE tower_corporate_task_audit FORCE ROW LEVEL SECURITY;
 CREATE POLICY tower_tasks_platform_admin ON tower_corporate_tasks
   FOR ALL TO app_runtime
   USING (
-    current_setting('app.is_superadmin', true) = 'true'
-    AND EXISTS (SELECT 1 FROM platform_admins pa
-      WHERE pa.user_id::text = current_setting('app.current_user_id', true)
-        AND pa.revoked_at IS NULL)
+    app_is_superadmin()
   )
   WITH CHECK (
-    current_setting('app.is_superadmin', true) = 'true'
-    AND EXISTS (SELECT 1 FROM platform_admins pa
-      WHERE pa.user_id::text = current_setting('app.current_user_id', true)
-        AND pa.revoked_at IS NULL)
+    app_is_superadmin()
   );
 CREATE POLICY tower_task_audit_platform_admin ON tower_corporate_task_audit
   FOR ALL TO app_runtime
   USING (
-    current_setting('app.is_superadmin', true) = 'true'
-    AND EXISTS (SELECT 1 FROM platform_admins pa
-      WHERE pa.user_id::text = current_setting('app.current_user_id', true)
-        AND pa.revoked_at IS NULL)
+    app_is_superadmin()
   )
   WITH CHECK (
-    current_setting('app.is_superadmin', true) = 'true'
-    AND EXISTS (SELECT 1 FROM platform_admins pa
-      WHERE pa.user_id::text = current_setting('app.current_user_id', true)
-        AND pa.revoked_at IS NULL)
+    app_is_superadmin()
   );
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON tower_corporate_tasks TO app_runtime;
+REVOKE ALL ON tower_corporate_task_audit FROM PUBLIC;
+REVOKE UPDATE, DELETE, TRUNCATE ON tower_corporate_task_audit FROM app_runtime;
 GRANT SELECT, INSERT ON tower_corporate_task_audit TO app_runtime;
+
+-- Database-level immutability: audit history cannot be rewritten or deleted,
+-- even if a future role accidentally receives UPDATE/DELETE grants.
+CREATE FUNCTION tower_corporate_audit_immutable() RETURNS trigger
+LANGUAGE plpgsql AS $
+BEGIN
+  RAISE EXCEPTION 'Corporate task audit history is immutable';
+END;
+$;
+CREATE TRIGGER tower_corporate_audit_no_update_delete
+BEFORE UPDATE OR DELETE ON tower_corporate_task_audit
+FOR EACH ROW EXECUTE FUNCTION tower_corporate_audit_immutable();
