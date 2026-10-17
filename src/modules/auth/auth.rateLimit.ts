@@ -14,17 +14,24 @@ function recent(key: string, now: number): number[] {
 
 export function cleanupExpired(now = Date.now()): void {
   for (const key of buckets.keys()) recent(key, now);
-  if (buckets.size > MAX_KEYS) {
-    const oldest = [...buckets.entries()].sort((a, b) =>
-      (a[1][a[1].length - 1] ?? 0) - (b[1][b[1].length - 1] ?? 0));
-    for (const [key] of oldest.slice(0, buckets.size - MAX_KEYS)) buckets.delete(key);
+  evictOverflow();
+}
+
+// Map keeps insertion order, so the first keys are the oldest. O(1) per eviction (no sort).
+function evictOverflow(): void {
+  while (buckets.size > MAX_KEYS) {
+    const oldest = buckets.keys().next().value;
+    if (oldest === undefined) break;
+    buckets.delete(oldest);
   }
 }
 setInterval(() => cleanupExpired(), 5 * 60 * 1000).unref();
 
 function add(key: string, now: number): void {
-  buckets.set(key, [...recent(key, now), now]);
-  if (buckets.size > MAX_KEYS) cleanupExpired(now);
+  const values = [...recent(key, now), now];
+  buckets.delete(key); // re-insert so the most recently active keys stay at the end
+  buckets.set(key, values);
+  evictOverflow();
 }
 
 export function checkLimit(req: Request, res: Response, identifier?: string): boolean {

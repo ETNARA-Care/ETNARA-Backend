@@ -71,4 +71,10 @@ describe("auth rate limiting", () => {
     expect(rateLimitKeyCountForTests()).toBe(0);
     vi.useRealTimers();
   });
+  it("caps the store at 10,000 keys quickly under a spray of unique emails", () => {
+    const start = Date.now();
+    for (let i = 0; i < 20000; i++) recordAttempt(request(`10.1.${i % 250}.1`), `spray${i}@example.com`);
+    expect(rateLimitKeyCountForTests()).toBeLessThanOrEqual(10_000);
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
 });
