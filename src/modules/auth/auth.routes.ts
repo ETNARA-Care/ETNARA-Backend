@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
+import { checkLimit, recordAttempt } from "./auth.rateLimit.js";
 import { login, logout, requestPasswordReset, confirmPasswordReset, InvalidCredentialsError, InvalidPasswordResetTokenError } from "./auth.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 
@@ -20,13 +21,16 @@ router.post("/auth/login", async (req: Request, res: Response) => {
     return;
   }
   const identifier = (parsed.data.email ?? parsed.data.phone) as string;
+  if (!checkLimit(req, res, identifier)) return;
   try {
     const result = await login(identifier, parsed.data.password, { ipAddress: req.ip });
+    recordAttempt(req, identifier, false);
     // Never echo back password_hash, token_hash, or any other internal
     // field -- only the one-time raw token and its expiration.
     res.status(200).json({ token: result.token, expiresAt: result.expiresAt.toISOString() });
   } catch (err) {
     if (err instanceof InvalidCredentialsError) {
+      recordAttempt(req, identifier);
       res.status(401).json({ error: "INVALID_CREDENTIALS" });
       return;
     }
@@ -52,6 +56,8 @@ const passwordResetConfirmSchema = z.object({
 router.post("/auth/password-reset/request", async (req: Request, res: Response) => {
   const parsed = passwordResetRequestSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  if (!checkLimit(req, res, parsed.data.email)) return;
+  recordAttempt(req, parsed.data.email);
   try {
     await requestPasswordReset(parsed.data.email);
     res.status(200).json({ ok: true });
@@ -64,6 +70,8 @@ router.post("/auth/password-reset/request", async (req: Request, res: Response) 
 router.post("/auth/password-reset/confirm", async (req: Request, res: Response) => {
   const parsed = passwordResetConfirmSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  if (!checkLimit(req, res)) return;
+  recordAttempt(req);
   try {
     await confirmPasswordReset(parsed.data.token, parsed.data.password);
     res.status(200).json({ ok: true });
