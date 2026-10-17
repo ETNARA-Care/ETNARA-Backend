@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { validateRepairPrIntent } from "./repairPrPreflight.js";
 import { validateVersionedRepairProposal } from "./versionedRepairProposal.js";
+import { runRepairGithubVersionPreflight } from "./repairGithubVersionPreflight.js";
 import { buildReadOnlyRepairPlan } from "./repairPlanPilot.js";
 import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
@@ -123,6 +124,28 @@ router.post("/platform/tower/pilot/versioned-repair-preflight", requireAuth, asy
     res.setHeader("Cache-Control", "no-store");
     res.json({ proposal, mode: "dry-run", githubWriteEnabled: false,
       currentGithubVersionVerified: false, approvalRequired: true });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Admin-only live GitHub SHA comparison. GET-only adapter; no patch or PR writes. */
+router.post("/platform/tower/pilot/live-repair-version-preflight", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    const result = await runRepairGithubVersionPreflight(req.body, process.env.TOWER_GITHUB_READ_TOKEN);
+    res.setHeader("Cache-Control", "no-store");
+    if (result.status === "invalid") { res.status(400).json({ error: "INVALID_VERSIONED_REPAIR_PROPOSAL" }); return; }
+    if (result.status === "unavailable") { res.status(503).json({ error: "GITHUB_READ_UNAVAILABLE", githubWriteEnabled: false }); return; }
+    if (result.status === "stale" || result.status === "incomplete") {
+      res.status(409).json({ status: result.status, readyToApply: false, approvalRequired: true, githubWriteEnabled: false });
+      return;
+    }
+    res.json({ status: "match", currentGithubVersionVerified: true, readyToApply: false,
+      approvalRequired: true, githubWriteEnabled: false });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
