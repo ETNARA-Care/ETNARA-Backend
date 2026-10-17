@@ -13,6 +13,7 @@ describe("GitHub live repair version preflight", () => {
       status: "match", readyToApply: false, approvalRequired: true, githubWriteEnabled: false,
     });
     expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls.length).toBe(1);
   });
   it("rejects stale versions and unavailable tokens", async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () =>
