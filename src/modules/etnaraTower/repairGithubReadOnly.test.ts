@@ -5,7 +5,7 @@ const path = "src/modules/etnaraTower/liveHealthCollector.ts";
 const token = "example-token-for-tests";
 describe("read-only GitHub blob metadata", () => {
   it("requests only allowlisted file metadata from GitHub", async () => {
-    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: async () => ({
+    const fetcher = vi.fn(async (_url: Parameters<typeof fetch>[0], _init?: RequestInit) => ({ ok: true, json: async () => ({
       type: "file", path, sha: "a".repeat(40),
     }) } as Response));
     expect(await fetchRepairGithubBlobMetadata(repo, [path], token, fetcher))
