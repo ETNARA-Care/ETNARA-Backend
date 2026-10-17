@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { validateRepairPrIntent } from "./repairPrPreflight.js";
+import { validateVersionedRepairProposal } from "./versionedRepairProposal.js";
 import { buildReadOnlyRepairPlan } from "./repairPlanPilot.js";
 import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
@@ -102,6 +103,26 @@ router.post("/platform/tower/pilot/repair-pr-preflight", requireAuth, async (req
     }
     res.setHeader("Cache-Control", "no-store");
     res.json({ intent, mode: "dry-run", githubWriteEnabled: false, approvalRequired: true });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) {
+      res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
+      return;
+    }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Platform-admin-only dry-run check for a versioned LEO repair proposal. No GitHub writes. */
+router.post("/platform/tower/pilot/versioned-repair-preflight", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    const proposal = validateVersionedRepairProposal(req.body);
+    if (!proposal) {
+      res.status(400).json({ error: "INVALID_VERSIONED_REPAIR_PROPOSAL" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ proposal, mode: "dry-run", githubWriteEnabled: false,
+      currentGithubVersionVerified: false, approvalRequired: true });
   } catch (error) {
     if (error instanceof UnauthorizedPlatformAccessError) {
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
