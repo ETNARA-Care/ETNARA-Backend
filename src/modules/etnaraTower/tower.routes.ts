@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parseTowerAiRequest, runTowerAiPilot } from "./towerAiPilot.js";
 import { validateRepairPrIntent } from "./repairPrPreflight.js";
 import { validateVersionedRepairProposal } from "./versionedRepairProposal.js";
 import { runRepairGithubVersionPreflight } from "./repairGithubVersionPreflight.js";
@@ -44,6 +45,24 @@ router.get("/platform/tower/overview", requireAuth, async (req: AuthenticatedReq
       return;
     }
     res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+/** Explicit platform-admin AI request. No tools, writes, automation or data retrieval. */
+router.post("/platform/tower/ai/analyze", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const input = parseTowerAiRequest(req.body);
+  if (!input) { res.status(400).json({ error: "INVALID_AI_REQUEST" }); return; }
+  try {
+    await withPlatformContext(req.auth!.userId, async () => true);
+    res.setHeader("Cache-Control", "no-store");
+    if (process.env.TOWER_AI_ENABLED !== "true" || !process.env.TOWER_AI_API_KEY || !process.env.TOWER_AI_MODEL) {
+      res.status(503).json({ error: "TOWER_AI_NOT_CONFIGURED", autonomousExecutionEnabled: false }); return;
+    }
+    const result = await runTowerAiPilot(input);
+    if (!result) { res.status(502).json({ error: "AI_PROVIDER_UNAVAILABLE" }); return; }
+    res.json({ ...result, agentId: input.agentId, mode: "advisory-only", autonomousExecutionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) { res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" }); return; }
+    res.status(502).json({ error: "AI_PROVIDER_UNAVAILABLE" });
   }
 });
 /** First agent pilot: explicit, allowlisted, platform-admin-only read-only health check. */
