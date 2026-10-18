@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { parseTowerAiRequest, runTowerAiPilot } from "./towerAiPilot.js";
+import { reserveTowerAiRequest } from "./towerAiQuota.js";
 import { validateRepairPrIntent } from "./repairPrPreflight.js";
 import { validateVersionedRepairProposal } from "./versionedRepairProposal.js";
 import { runRepairGithubVersionPreflight } from "./repairGithubVersionPreflight.js";
@@ -56,6 +57,11 @@ router.post("/platform/tower/ai/analyze", requireAuth, async (req: Authenticated
     res.setHeader("Cache-Control", "no-store");
     if (process.env.TOWER_AI_ENABLED !== "true" || !process.env.TOWER_AI_API_KEY || !process.env.TOWER_AI_MODEL) {
       res.status(503).json({ error: "TOWER_AI_NOT_CONFIGURED", autonomousExecutionEnabled: false }); return;
+    }
+    const quota = reserveTowerAiRequest(req.auth!.userId);
+    if (!quota.allowed) {
+      res.setHeader("Retry-After", String(quota.retryAfterSeconds));
+      res.status(429).json({ error: "TOWER_AI_RATE_LIMITED" }); return;
     }
     const result = await runTowerAiPilot(input);
     if (!result) { res.status(502).json({ error: "AI_PROVIDER_UNAVAILABLE" }); return; }
