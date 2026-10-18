@@ -5,6 +5,7 @@ import { runRepairGithubVersionPreflight } from "./repairGithubVersionPreflight.
 import { buildReadOnlyRepairPlan } from "./repairPlanPilot.js";
 import { listTaskAuditForAdmin } from "./corporateTaskPostgresAuditRead.js";
 import { reviewCorporateTask } from "./corporateTaskPostgresReview.js";
+import { reassignCorporateTask, listCorporateTaskAssignments } from "./corporateTaskPostgresAssignment.js";
 import { createCorporateTaskForPlatformAdmin } from "./corporateTaskPostgresCreate.js";
 import { listCorporateTasksForPlatformAdmin } from "./corporateTaskPostgresRead.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
@@ -209,6 +210,30 @@ router.post("/platform/tower/tasks/:taskId/review", requireAuth, async (req: Aut
       res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" });
       return;
     }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+router.post("/platform/tower/tasks/:taskId/reassign", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const result = await reassignCorporateTask(req.auth!.userId, String(req.params.taskId), req.body);
+    res.setHeader("Cache-Control", "no-store");
+    if (result === "invalid") { res.status(400).json({ error: "INVALID_ASSIGNMENT" }); return; }
+    if (result === "not_found") { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
+    if (result === "conflict") { res.status(409).json({ error: "TASK_ASSIGNMENT_CONFLICT" }); return; }
+    res.json({ status: "updated", executionEnabled: false });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) { res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" }); return; }
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+router.get("/platform/tower/tasks/:taskId/assignments", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const events = await listCorporateTaskAssignments(req.auth!.userId, String(req.params.taskId));
+    res.setHeader("Cache-Control", "no-store");
+    if (events === null) { res.status(404).json({ error: "TASK_NOT_FOUND" }); return; }
+    res.json({ events });
+  } catch (error) {
+    if (error instanceof UnauthorizedPlatformAccessError) { res.status(403).json({ error: "PLATFORM_ADMIN_REQUIRED" }); return; }
     res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
