@@ -32,11 +32,24 @@ export async function runTowerAiPilot(input: {agentId: TowerAiAgentId; question:
         input: input.question,
       }),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const category = response.status === 401 || response.status === 403 ? 'authentication'
+        : response.status === 429 ? 'quota_or_rate_limit'
+        : response.status === 400 || response.status === 404 ? 'request_or_model'
+        : response.status >= 500 ? 'provider_server_error' : 'other_provider_error';
+      // Never log credentials, prompts, provider response bodies, or patient data.
+      console.error('[Tower AI] Provider request failed', { status: response.status, category });
+      return null;
+    }
     const data: unknown = await response.json();
     if (!data || typeof data !== 'object') return null;
     const result = data as {output?: Array<{type?:string;content?:Array<{type?:string;text?:string}>}>};
     const answer = (result.output ?? []).flatMap(item => item.content ?? []).filter(item => item.type === 'output_text' && typeof item.text === 'string').map(item => item.text!).join('\n').slice(0,5000).trim();
+    if (!answer) console.error('[Tower AI] Provider returned no output text');
     return answer ? {answer,model} : null;
+  } catch (error) {
+    const category = error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'network_or_parse_error';
+    console.error('[Tower AI] Provider request failed', { category });
+    return null;
   } finally { clearTimeout(timeout); }
 }
