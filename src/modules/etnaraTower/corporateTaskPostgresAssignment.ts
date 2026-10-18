@@ -13,6 +13,7 @@ export async function reassignCorporateTask(userId: string, taskId: string, inpu
     !TOWER_CORPORATE_AGENTS.some(agent => agent.id === value.nextAgentId) ||
     !TOWER_CORPORATE_AGENTS.some(agent => agent.id === value.expectedAgentId) ||
     value.expectedAgentId === value.nextAgentId) return 'invalid';
+  const reason = value.reason as string;
   return withPlatformContext(userId, async trx => {
     const current = await sql<{agent_id:string;status:string}>`SELECT agent_id, status FROM tower_corporate_tasks WHERE id = ${taskId} FOR UPDATE`.execute(trx);
     const task = current.rows[0];
@@ -20,7 +21,7 @@ export async function reassignCorporateTask(userId: string, taskId: string, inpu
     if (task.agent_id !== value.expectedAgentId || !['draft','submitted','in_review'].includes(task.status)) return 'conflict';
     await sql`UPDATE tower_corporate_tasks SET agent_id = ${value.nextAgentId as string}, updated_at = now() WHERE id = ${taskId}`.execute(trx);
     await sql`INSERT INTO tower_corporate_task_assignments (id, task_id, from_agent_id, to_agent_id, actor_id, reason)
-      VALUES (${randomUUID()}, ${taskId}, ${task.agent_id}, ${value.nextAgentId as string}, ${userId}, ${value.reason.trim()})`.execute(trx);
+      VALUES (${randomUUID()}, ${taskId}, ${task.agent_id}, ${value.nextAgentId as string}, ${userId}, ${reason.trim()})`.execute(trx);
     return 'updated';
   });
 }
