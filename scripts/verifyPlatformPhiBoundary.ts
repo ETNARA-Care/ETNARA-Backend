@@ -55,6 +55,19 @@ async function main() {
     if (role.rows[0].role !== "app_runtime" || !role.rows[0].active || !role.rows[0].admin) {
       throw new Error("RLS or platform admin fixture not active");
     }
+    const runtimeRole = await client.query(
+      "SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user"
+    );
+    if (runtimeRole.rows[0]?.rolbypassrls || runtimeRole.rows[0]?.rolsuper) {
+      throw new Error("Runtime role bypasses RLS; negative probe is invalid");
+    }
+    for (const table of tables) {
+      const status = await client.query(
+        "SELECT row_security_active($1::regclass) AS active",
+        [table]
+      );
+      if (!status.rows[0]?.active) throw new Error("RLS inactive for " + table);
+    }
     for (const table of tables) {
       const result = await client.query('SELECT 1 FROM "' + table + '" LIMIT 1');
       if ((result.rowCount ?? 0) !== 0) throw new Error("Platform PHI exposure: " + table);
