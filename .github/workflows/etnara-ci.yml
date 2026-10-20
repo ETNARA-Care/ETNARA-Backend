@@ -2,7 +2,7 @@ name: ETNARA CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'security/170-platform-phi-boundary']
   pull_request:
     branches: [main]
 
