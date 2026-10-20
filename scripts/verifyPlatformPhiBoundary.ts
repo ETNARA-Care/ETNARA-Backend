@@ -37,11 +37,22 @@ async function main() {
     );
 
     const policies = await client.query(
-      "SELECT tablename FROM pg_policies WHERE schemaname='public' AND policyname='platform_phi_deny' AND permissive='RESTRICTIVE'"
+      "SELECT tablename, roles, cmd, qual FROM pg_policies WHERE schemaname='public' AND policyname='platform_phi_deny' AND permissive='RESTRICTIVE'"
     );
     const covered = new Set(policies.rows.map((r: { tablename: string }) => r.tablename));
     for (const table of tables) {
       if (!covered.has(table)) throw new Error("Missing restrictive policy: " + table);
+      const policy = policies.rows.find((row: { tablename: string }) => row.tablename === table);
+      if (!policy || !["ALL", "SELECT"].includes(policy.cmd)) {
+        throw new Error("PHI read-deny policy does not cover SELECT: " + table);
+      }
+      if (!Array.isArray(policy.roles) ||
+          !policy.roles.some((role: string) => role === "public" || role === "app_runtime")) {
+        throw new Error("PHI deny policy does not apply to app_runtime: " + table);
+      }
+      if (!policy.qual || typeof policy.qual !== "string") {
+        throw new Error("PHI deny policy has no USING predicate: " + table);
+      }
     }
 
     await client.query("SAVEPOINT before_runtime");
