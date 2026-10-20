@@ -36,6 +36,16 @@ async function main() {
       [org.rows[0].id]
     );
 
+    // Prove the synthetic target exists before testing its invisibility.
+    // Otherwise an empty table could make a broken policy appear safe.
+    const seeded = await client.query(
+      "SELECT id FROM care_recipients WHERE id=$1",
+      [resident.rows[0].id]
+    );
+    if (seeded.rowCount !== 1) {
+      throw new Error("Synthetic resident fixture not visible to migration owner");
+    }
+
     const policies = await client.query(
       "SELECT tablename, roles, cmd, qual FROM pg_policies WHERE schemaname='public' AND policyname='platform_phi_deny' AND permissive='RESTRICTIVE'"
     );
