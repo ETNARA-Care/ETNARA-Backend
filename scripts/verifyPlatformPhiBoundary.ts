@@ -56,8 +56,12 @@ async function main() {
       if (!policy || !["ALL", "SELECT"].includes(policy.cmd)) {
         throw new Error("PHI read-deny policy does not cover SELECT: " + table);
       }
-      if (!Array.isArray(policy.roles) ||
-          !policy.roles.some((role: string) => role === "public" || role === "app_runtime")) {
+      // pg_policies.roles is a PostgreSQL name[]; pg drivers may return
+      // it as an array or as its text representation ({app_runtime}).
+      const policyRoles = Array.isArray(policy.roles)
+        ? policy.roles.map(String)
+        : String(policy.roles ?? "").replace(/[{}"]/g, "").split(",");
+      if (!policyRoles.some((role: string) => role.trim() === "public" || role.trim() === "app_runtime")) {
         throw new Error("PHI deny policy does not apply to app_runtime: " + table);
       }
       if (!policy.qual || typeof policy.qual !== "string" ||
