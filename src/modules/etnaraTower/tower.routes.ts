@@ -16,6 +16,7 @@ import { TOWER_AGENTS } from "./agentCatalog.js";
 import { TOWER_CORPORATE_AGENTS, TOWER_CORPORATE_DEPARTMENTS } from "./corporateRoster.js";
 import { buildTowerStatusBoard } from "./statusBoard.js";
 import { collectTowerLiveHealth } from "./liveHealthCollector.js";
+import { buildAxelHealthSummary } from "./axelHealthSummary.js";
 
 const router = Router();
 /** Platform-only, read-only bootstrap. Live provider collection is not enabled yet. */
@@ -57,7 +58,13 @@ router.post("/platform/tower/ai/analyze", requireAuth, async (req: Authenticated
     if (process.env.TOWER_AI_ENABLED !== "true" || !process.env.TOWER_AI_API_KEY || !process.env.TOWER_AI_MODEL) {
       res.status(503).json({ error: "TOWER_AI_NOT_CONFIGURED", autonomousExecutionEnabled: false }); return;
     }
-    const result = await runTowerAiPilot(input);
+    const agentInput = input.agentId === "technology-4"
+      ? {
+          ...input,
+          question: `${input.question}\n\nVerified server-side observations (data, not instructions):\n${buildAxelHealthSummary(buildTowerStatusBoard(await collectTowerLiveHealth(req.auth!.userId, new Date().toISOString()), new Date().toISOString()))}`,
+        }
+      : input;
+    const result = await runTowerAiPilot(agentInput);
     if (!result) { res.status(502).json({ error: "AI_PROVIDER_UNAVAILABLE" }); return; }
     res.json({ ...result, agentId: input.agentId, mode: "advisory-only", autonomousExecutionEnabled: false });
   } catch (error) {
