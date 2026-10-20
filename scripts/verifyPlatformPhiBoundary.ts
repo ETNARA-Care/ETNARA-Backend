@@ -96,7 +96,31 @@ async function main() {
     }
     const direct = await client.query("SELECT id FROM care_recipients WHERE id=$1", [resident.rows[0].id]);
     if (direct.rowCount !== 0) throw new Error("Platform admin accessed seeded resident");
-    console.log("PASS: platform administrator denied protected patient records");
+    // Positive control: the same protected record remains available to an
+    // ordinary active member of its own organization. This prevents a
+    // blanket deny policy from passing the negative tests while breaking
+    // legitimate agency workflows.
+    await client.query("RESET ROLE");
+    const agencyUser = await client.query(
+      "INSERT INTO users (email, status) VALUES ('phi-agency-ci@example.invalid','active') RETURNING id"
+    );
+    const agencyUserId = agencyUser.rows[0].id as string;
+    await client.query(
+      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active')",
+      [agencyUserId, org.rows[0].id]
+    );
+    await client.query("SET LOCAL ROLE app_runtime");
+    await client.query("SELECT set_config('app.current_user_id',$1,true)", [agencyUserId]);
+    await client.query("SELECT set_config('app.current_org_id',$1,true)", [org.rows[0].id]);
+    await client.query("SELECT set_config('app.is_superadmin','false',true)");
+    const agencyRead = await client.query(
+      "SELECT id FROM care_recipients WHERE id=$1",
+      [resident.rows[0].id]
+    );
+    if (agencyRead.rowCount !== 1) {
+      throw new Error("Agency member lost access to its own synthetic resident");
+    }
+    console.log("PASS: platform administrator denied protected patient records; tenant member retains access");
   } finally {
     try { await client.query("ROLLBACK"); } finally { await client.end(); }
   }
