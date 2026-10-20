@@ -64,6 +64,12 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyTenantIsolation.ts
 
+      - name: PostgreSQL platform PHI boundary verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyPlatformPhiBoundary.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
