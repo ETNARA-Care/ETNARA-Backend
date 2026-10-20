@@ -60,8 +60,9 @@ async function main() {
           !policy.roles.some((role: string) => role === "public" || role === "app_runtime")) {
         throw new Error("PHI deny policy does not apply to app_runtime: " + table);
       }
-      if (!policy.qual || typeof policy.qual !== "string") {
-        throw new Error("PHI deny policy has no USING predicate: " + table);
+      if (!policy.qual || typeof policy.qual !== "string" ||
+          !/NOT\\s+app_is_superadmin\\s*\\(\\s*\\)/i.test(policy.qual)) {
+        throw new Error("PHI deny policy must reject verified platform admins: " + table);
       }
     }
 
