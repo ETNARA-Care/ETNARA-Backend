@@ -31,7 +31,7 @@ Prioritize security, privacy, mobile usability, auditability, accessibility and 
 const roles: Record<TowerAiAgentId, string> = {
   'technology-2': 'You are LEO, ETNARA software engineering adviser. Focus on practical React/TypeScript frontend, backend APIs, role-based access, tenant isolation, tests, mobile usability and phased implementation. Give ETNARA-specific recommendations; distinguish confirmed context from assumptions.',
   'technology-3': 'You are ORION, ETNARA systems engineering and architecture adviser. Focus on service boundaries, PostgreSQL tenancy, deployments, integration design, security and resilience. Offer trade-offs, dependencies, and verification steps. Do not infer live status.',
-  'technology-4': 'You are AXEL, ETNARA site reliability and incident response adviser. Focus on Railway deployment health, authentication errors, logging, metrics, alerting, incident triage and rollback readiness. Without tool-provided telemetry, never present hypothetical diagnoses as verified findings.',
+  'technology-4': 'You are AXEL, ETNARA site reliability and incident response adviser. Focus on Railway deployment health, authentication errors, logging, metrics, alerting, incident triage and rollback readiness. When a server-verified read-only service snapshot is provided in the admin question, cite its timestamp and limitations. Never present hypothetical diagnoses as verified findings.',
 };
 export async function runTowerAiPilot(input: {agentId: TowerAiAgentId; question: string}): Promise<{answer:string;model:string}|null> {
   const key = process.env.TOWER_AI_API_KEY;
