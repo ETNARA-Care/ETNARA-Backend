@@ -1,14 +1,13 @@
 import pg from "pg";
 
-// Read-only regression probe against a disposable migrated database.
-// Requires a seeded active platform_admin and at least one care recipient.
-// Do not run with production credentials.
-const connectionString = process.env.MIGRATIONS_DATABASE_URL;
-if (!connectionString) throw new Error("MIGRATIONS_DATABASE_URL is required");
-if (process.env.NODE_ENV === "production") throw new Error("Refusing production test");
+// CI-only, disposable PostgreSQL. Never point at production.
+const url = process.env.MIGRATIONS_DATABASE_URL;
+if (!url || process.env.ETNARA_DISPOSABLE_DB !== "true") {
+  throw new Error("Requires MIGRATIONS_DATABASE_URL and ETNARA_DISPOSABLE_DB=true");
+}
+if (process.env.NODE_ENV === "production") throw new Error("Production prohibited");
 
-const client = new pg.Client({ connectionString });
-const protectedTables = [
+const tables = [
   "care_recipients", "care_plans", "care_events", "care_event_photos",
   "observations", "incidents", "incident_timeline_entries",
   "incident_attachments", "resident_documents", "family_relationships",
@@ -18,32 +17,53 @@ const protectedTables = [
   "assignment_history", "verification_events", "verification_overrides",
 ] as const;
 
+const client = new pg.Client({ connectionString: url });
 async function main() {
   await client.connect();
   try {
-    const admin = await client.query(
-      "SELECT user_id FROM platform_admins WHERE revoked_at IS NULL LIMIT 1"
-    );
-    if (!admin.rows[0]) throw new Error("Fixture missing: active platform_admin");
-    const baseline = await client.query("SELECT count(*)::int AS n FROM care_recipients");
-    if (baseline.rows[0].n === 0) throw new Error("Fixture missing: care recipient");
-
+    // Fixtures are inserted as migration owner and discarded by ROLLBACK.
     await client.query("BEGIN");
+    const user = await client.query(
+      "INSERT INTO users (email, status) VALUES ('phi-boundary-ci@example.invalid','active') RETURNING id"
+    );
+    const userId = user.rows[0].id as string;
+    await client.query("INSERT INTO platform_admins (user_id) VALUES ($1)", [userId]);
+    const org = await client.query(
+      "INSERT INTO organizations (name, organization_type, status) VALUES ('PHI Boundary CI','HOME_CARE_AGENCY','active') RETURNING id"
+    );
+    const resident = await client.query(
+      "INSERT INTO care_recipients (organization_id, first_name, last_name) VALUES ($1,'Synthetic','Patient') RETURNING id",
+      [org.rows[0].id]
+    );
+
+    const policies = await client.query(
+      "SELECT tablename FROM pg_policies WHERE schemaname='public' AND policyname='platform_phi_deny' AND permissive='RESTRICTIVE'"
+    );
+    const covered = new Set(policies.rows.map((r: { tablename: string }) => r.tablename));
+    for (const table of tables) {
+      if (!covered.has(table)) throw new Error("Missing restrictive policy: " + table);
+    }
+
+    await client.query("SAVEPOINT before_runtime");
     await client.query("SET LOCAL ROLE app_runtime");
-    await client.query("SELECT set_config('app.current_user_id',$1,true)", [admin.rows[0].user_id]);
+    await client.query("SELECT set_config('app.current_user_id',$1,true)", [userId]);
     await client.query("SELECT set_config('app.current_org_id','',true)");
     await client.query("SELECT set_config('app.is_superadmin','true',true)");
-    const check = await client.query("SELECT app_is_superadmin() AS authorized");
-    if (!check.rows[0]?.authorized) throw new Error("Fixture invalid: superadmin not recognized");
-
-    for (const table of protectedTables) {
-      // Identifiers are hardcoded, never user input.
-      const result = await client.query(`SELECT 1 FROM "${table}" LIMIT 1`);
-      if (result.rowCount !== 0) throw new Error(`PHI exposure: ${table}`);
+    const role = await client.query(
+      "SELECT current_user AS role, row_security_active('care_recipients'::regclass) AS active, app_is_superadmin() AS admin"
+    );
+    if (role.rows[0].role !== "app_runtime" || !role.rows[0].active || !role.rows[0].admin) {
+      throw new Error("RLS or platform admin fixture not active");
     }
-    console.log("Platform PHI deny: all protected tables invisible to platform session");
+    for (const table of tables) {
+      const result = await client.query('SELECT 1 FROM "' + table + '" LIMIT 1');
+      if ((result.rowCount ?? 0) !== 0) throw new Error("Platform PHI exposure: " + table);
+    }
+    const direct = await client.query("SELECT id FROM care_recipients WHERE id=$1", [resident.rows[0].id]);
+    if (direct.rowCount !== 0) throw new Error("Platform admin accessed seeded resident");
+    console.log("PASS: platform administrator denied protected patient records");
   } finally {
     try { await client.query("ROLLBACK"); } finally { await client.end(); }
   }
 }
-main().catch((err) => { console.error(err); process.exitCode = 1; });
+main().catch((e) => { console.error(e); process.exitCode = 1; });
