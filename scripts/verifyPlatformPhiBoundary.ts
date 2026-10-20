@@ -61,7 +61,7 @@ async function main() {
         throw new Error("PHI deny policy does not apply to app_runtime: " + table);
       }
       if (!policy.qual || typeof policy.qual !== "string" ||
-          !/NOT\\s+app_is_superadmin\\s*\\(\\s*\\)/i.test(policy.qual)) {
+          !/NOT\s+app_is_superadmin\s*\(\s*\)/i.test(policy.qual)) {
         throw new Error("PHI deny policy must reject verified platform admins: " + table);
       }
     }
