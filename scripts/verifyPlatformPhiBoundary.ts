@@ -120,7 +120,39 @@ async function main() {
     if (agencyRead.rowCount !== 1) {
       throw new Error("Agency member lost access to its own synthetic resident");
     }
-    console.log("PASS: platform administrator denied protected patient records; tenant member retains access");
+    // A second agency must not see the first agency's resident, even when
+    // the caller switches its claimed organization context.
+    await client.query("RESET ROLE");
+    const otherOrg = await client.query(
+      "INSERT INTO organizations (name, organization_type, status) VALUES ('PHI Boundary Other Agency','HOME_CARE_AGENCY','active') RETURNING id"
+    );
+    const otherUser = await client.query(
+      "INSERT INTO users (email, status) VALUES ('phi-other-agency-ci@example.invalid','active') RETURNING id"
+    );
+    await client.query(
+      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active')",
+      [otherUser.rows[0].id, otherOrg.rows[0].id]
+    );
+    await client.query("SET LOCAL ROLE app_runtime");
+    await client.query("SELECT set_config('app.current_user_id',$1,true)", [otherUser.rows[0].id]);
+    await client.query("SELECT set_config('app.current_org_id',$1,true)", [otherOrg.rows[0].id]);
+    await client.query("SELECT set_config('app.is_superadmin','false',true)");
+    const crossTenant = await client.query(
+      "SELECT id FROM care_recipients WHERE id=$1",
+      [resident.rows[0].id]
+    );
+    if (crossTenant.rowCount !== 0) {
+      throw new Error("Cross-tenant PHI exposure: another agency accessed the resident");
+    }
+    await client.query("SELECT set_config('app.current_org_id',$1,true)", [org.rows[0].id]);
+    const forgedTenant = await client.query(
+      "SELECT id FROM care_recipients WHERE id=$1",
+      [resident.rows[0].id]
+    );
+    if (forgedTenant.rowCount !== 0) {
+      throw new Error("Cross-tenant PHI exposure: forged organization context bypassed membership");
+    }
+    console.log("PASS: platform denied; agency allowed; other agency and forged context denied");
   } finally {
     try { await client.query("ROLLBACK"); } finally { await client.end(); }
   }
