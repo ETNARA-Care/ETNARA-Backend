@@ -40,7 +40,7 @@ router.get("/organizations/:organizationId/smartmatch/opportunities",
       const opportunities = await listAgencyOpportunities(req.auth!.userId, org.data);
       res.status(200).json({ opportunities });
     } catch (error) {
-      if (error instanceof MembershipNotActiveError) {
+      if (error instanceof SmartMatchForbiddenError || error instanceof MembershipNotActiveError) {
         res.status(403).json({ error: "FORBIDDEN" }); return;
       }
       res.status(500).json({ error: "INTERNAL_ERROR" });
@@ -61,7 +61,7 @@ router.post("/organizations/:organizationId/smartmatch/opportunities/:opportunit
       if (!result) { res.status(404).json({ error: "NOT_FOUND_OR_NOT_PUBLISHABLE" }); return; }
       res.status(200).json({ opportunity: result });
     } catch (error) {
-      if (error instanceof MembershipNotActiveError) {
+      if (error instanceof SmartMatchForbiddenError || error instanceof MembershipNotActiveError) {
         res.status(403).json({ error: "FORBIDDEN" }); return;
       }
       res.status(500).json({ error: "INTERNAL_ERROR" });
