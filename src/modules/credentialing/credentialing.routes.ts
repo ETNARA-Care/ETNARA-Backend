@@ -4,6 +4,7 @@ import {
   createCredential,
   listCredentials,
   listMyCredentialSummaries,
+  listPendingOrganizationCredentialReviews,
   initiateMyCredentialDocumentUpload,
   uploadMyCredentialDocumentContent,
   completeMyCredentialDocumentUpload,
@@ -436,6 +437,27 @@ router.post(
         String(req.params.credentialId), String(req.params.fileId)
       );
       res.status(200).json({ download });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/credentials/review-queue",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const items = await listPendingOrganizationCredentialReviews(
+        req.auth!.userId,
+        orgIdParsed.data
+      );
+      res.status(200).json({ items });
     } catch (err) {
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
