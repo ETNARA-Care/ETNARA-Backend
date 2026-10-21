@@ -126,3 +126,27 @@ export async function listAgencyApplicationCounts(userId: string, organizationId
     return result.rows;
   });
 }
+
+/**
+ * Read-only review queue. Only sanitized application metadata is returned.
+ * No patient data, caregiver profile, contact details or cross-tenant rows.
+ */
+export async function listAgencyPendingApplications(
+  userId: string, organizationId: string, opportunityId: string,
+) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireSmartMatchAgencyAdmin(trx, userId, organizationId);
+    const rows = await sql<{ id: string; status: string; created_at: string }>`
+      SELECT a.id, a.status, a.created_at
+      FROM smartmatch_applications a
+      JOIN smartmatch_opportunities o ON o.id = a.opportunity_id
+      WHERE o.id = ${opportunityId}
+        AND o.organization_id = ${organizationId}
+        AND o.visibility = 'INTERNAL'
+        AND a.status = 'PENDING'
+      ORDER BY a.created_at ASC, a.id ASC
+      LIMIT 100
+    `.execute(trx);
+    return rows.rows;
+  });
+}
