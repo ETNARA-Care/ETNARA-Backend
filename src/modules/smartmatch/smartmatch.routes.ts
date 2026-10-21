@@ -4,7 +4,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { MembershipNotActiveError } from "../../context/errors.js";
 import { smartMatchPublishSchema } from "./smartmatch.schemas.js";
 import {
-  publishInternalOpportunity, listAgencyOpportunities,
+  publishInternalOpportunity, listAgencyOpportunities, activateInternalOpportunity,
   SmartMatchForbiddenError, SmartMatchNetworkDisabledError,
 } from "./smartmatch.service.js";
 
@@ -39,6 +39,27 @@ router.get("/organizations/:organizationId/smartmatch/opportunities",
     try {
       const opportunities = await listAgencyOpportunities(req.auth!.userId, org.data);
       res.status(200).json({ opportunities });
+    } catch (error) {
+      if (error instanceof MembershipNotActiveError) {
+        res.status(403).json({ error: "FORBIDDEN" }); return;
+      }
+      res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  });
+
+router.post("/organizations/:organizationId/smartmatch/opportunities/:opportunityId/publish",
+  requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const org = uuid.safeParse(req.params.organizationId);
+    const opportunity = uuid.safeParse(req.params.opportunityId);
+    if (!org.success || !opportunity.success) {
+      res.status(400).json({ error: "INVALID_ID" }); return;
+    }
+    try {
+      const result = await activateInternalOpportunity(
+        req.auth!.userId, org.data, opportunity.data,
+      );
+      if (!result) { res.status(404).json({ error: "NOT_FOUND_OR_NOT_PUBLISHABLE" }); return; }
+      res.status(200).json({ opportunity: result });
     } catch (error) {
       if (error instanceof MembershipNotActiveError) {
         res.status(403).json({ error: "FORBIDDEN" }); return;
