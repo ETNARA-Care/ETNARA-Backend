@@ -101,3 +101,28 @@ async function requireSmartMatchAgencyAdmin(
   `.execute(trx);
   if (!result.rows[0]?.allowed) throw new SmartMatchForbiddenError();
 }
+
+/**
+ * Read-only aggregate for agency administrators. Never returns caregiver
+ * identities, patient details or applications from another organization.
+ * Submission and approval are intentionally not enabled.
+ */
+export async function listAgencyApplicationCounts(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireSmartMatchAgencyAdmin(trx, userId, organizationId);
+    const result = await sql<{
+      opportunity_id: string; pending_count: number;
+    }>`
+      SELECT a.opportunity_id, count(*)::integer AS pending_count
+      FROM smartmatch_applications a
+      JOIN smartmatch_opportunities o ON o.id = a.opportunity_id
+      WHERE o.organization_id = ${organizationId}
+        AND o.visibility = 'INTERNAL'
+        AND a.status = 'PENDING'
+      GROUP BY a.opportunity_id
+      ORDER BY a.opportunity_id
+      LIMIT 100
+    `.execute(trx);
+    return result.rows;
+  });
+}
