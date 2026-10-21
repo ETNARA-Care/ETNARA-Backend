@@ -4,6 +4,9 @@ import {
   createCredential,
   listCredentials,
   listMyCredentialSummaries,
+  initiateMyCredentialDocumentUpload,
+  uploadMyCredentialDocumentContent,
+  completeMyCredentialDocumentUpload,
   listCredentialTypes,
   initiateCredentialDocumentUpload,
   completeCredentialDocumentUpload,
@@ -13,7 +16,6 @@ import {
   updateCredential,
   createCredentialSchema,
   updateCredentialSchema,
-  platformVerificationSchema,
   createOrUpdateOrganizationReview,
   organizationReviewSchema,
   WorkerNotLinkedError,
@@ -37,7 +39,6 @@ import {
 import {
   MembershipNotActiveError,
   InvalidTenantContextError,
-  UnauthorizedPlatformAccessError,
 } from "../../context/errors.js";
 import { env } from "../../config/env.js";
 
@@ -138,6 +139,87 @@ router.get(
       res.status(200).json({ credentials });
     } catch (err) {
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/upload-url",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const bodyParsed = initiateCredentialDocumentUploadSchema.safeParse(req.body);
+    if (!orgIdParsed.success || !credentialId.success || !bodyParsed.success) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const upload = await initiateMyCredentialDocumentUpload(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, bodyParsed.data
+      );
+      res.status(201).json({ upload });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("initiateMyCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/:fileId/content",
+  requireAuth,
+  express.raw({
+    type: ["application/pdf", "image/jpeg", "image/png"],
+    limit: env.STORAGE_MAX_FILE_BYTES,
+  }),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const fileId = uuidParam.safeParse(req.params.fileId);
+    const contentTypeParsed = credentialDocumentContentTypeSchema.safeParse(req.headers["content-type"]);
+    if (!orgIdParsed.success || !credentialId.success || !fileId.success || !contentTypeParsed.success || !Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const upload = await uploadMyCredentialDocumentContent(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, fileId.data,
+        contentTypeParsed.data, req.body
+      );
+      res.status(200).json({ upload });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("uploadMyCredentialDocumentContent", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/:fileId/complete",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const fileId = uuidParam.safeParse(req.params.fileId);
+    if (!orgIdParsed.success || !credentialId.success || !fileId.success) {
+      res.status(400).json({ error: "INVALID_ID" });
+      return;
+    }
+    try {
+      const document = await completeMyCredentialDocumentUpload(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, fileId.data
+      );
+      res.status(200).json({ document });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("completeMyCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );
