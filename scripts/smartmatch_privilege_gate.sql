@@ -6,7 +6,7 @@ SELECT 1 / (CASE WHEN
   AND has_table_privilege('app_runtime', 'smartmatch_opportunities', 'INSERT')
   AND has_table_privilege('app_runtime', 'smartmatch_opportunities', 'UPDATE')
   AND NOT has_table_privilege('app_runtime', 'smartmatch_opportunities', 'DELETE')
-  AND NOT has_table_privilege('app_runtime', 'smartmatch_applications', 'SELECT')
+  AND has_table_privilege('app_runtime', 'smartmatch_applications', 'SELECT')
   AND NOT has_table_privilege('app_runtime', 'smartmatch_applications', 'INSERT')
   AND NOT has_table_privilege('app_runtime', 'smartmatch_applications', 'UPDATE')
   AND NOT has_table_privilege('app_runtime', 'smartmatch_applications', 'DELETE')
