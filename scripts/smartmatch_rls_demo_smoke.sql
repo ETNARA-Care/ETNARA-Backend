@@ -22,6 +22,7 @@ WITH attempted AS (
 )
 SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM attempted) THEN 1 ELSE 0 END)
   AS agency_a_cannot_update_b;
+-- The runtime role must never be able to delete opportunities.
 ROLLBACK;
 
 BEGIN;
@@ -35,5 +36,5 @@ SELECT 1 / (CASE WHEN NOT EXISTS (
 ROLLBACK;
 
 -- Any failed assertion raises division_by_zero and ON_ERROR_STOP aborts the script.
--- Manual gate: any failed assertion blocks deployment. Also verify UPDATE RETURNING 0 rows,
--- non-admin 403, and denied application/location grants before approval.
+-- Manual gate: any failed assertion blocks deployment. Also verify non-admin 403
+-- and denied application/location grants before approval.
