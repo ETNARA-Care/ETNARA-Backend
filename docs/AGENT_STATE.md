@@ -2,6 +2,35 @@
 
 ## Current Status
 
+## 2026-10-21 — Phase 12.0 offline-safe care events (gate/12.0-offline-safe-care-events)
+
+- Migration 080 adds nullable `care_events.client_event_id` with a partial
+  unique index on (organization_id, organization_worker_membership_id,
+  client_event_id). Additive only; RLS policies unchanged.
+- POST care-events accepts optional `clientEventId` and `occurredAt`. A retry
+  returns the stored row (200, `replayed: true`) before the active-visit guard;
+  concurrent retries resolve through ON CONFLICT DO NOTHING; no duplicate
+  family notification. `occurredAt` must be at or after the active check-in and
+  no more than 2 minutes in the future. Reusing an id for another record is 409.
+- After check-out the shift is invisible to the worker (076), so the app must
+  deliver pending records before letting the caregiver finish the visit.
+- FOUND AND FIXED (migration 081): 076 made app_worker_has_shift_assignment read
+  shifts and verification_events, whose worker policies call the same helper.
+  Under app_runtime this recursed until PostgreSQL killed the backend (signal 9)
+  and restarted the whole server when a caregiver accepted a shift. 081 keeps
+  the 076 body verbatim and makes the helper SECURITY DEFINER with a fixed
+  search_path (same pattern as 079).
+- FOUND, NOT FIXED: accepting an assignment logs "messaging synchronization
+  failed: could not determine data type of parameter $4" in
+  syncAssignedWorkerConversationAccess; the acceptance succeeds but the worker
+  may not be added to the recipient conversation.
+- Validation on fresh PostgreSQL 16: bootstrap x2, tenant isolation, platform
+  PHI boundary, invitation activation, new verifyCareEventIdempotency (17/17),
+  76 files / 250 tests, build and diff check pass.
+- Exact next step: Rafa's gate PASS, then apply 080 + 081 on Railway before
+  the frontend offline queue ships.
+
+
 Project: ETNARA Care
 Repository: ETNARA-Backend
 Branch: phase-10/10.0-multi-agency-compliance

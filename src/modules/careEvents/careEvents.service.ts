@@ -33,6 +33,18 @@ export class EventTypeNotEnabledError extends Error {
     this.name = "EventTypeNotEnabledError";
   }
 }
+export class OccurredAtOutOfRangeError extends Error {
+  constructor() {
+    super("OCCURRED_AT_OUT_OF_RANGE");
+    this.name = "OccurredAtOutOfRangeError";
+  }
+}
+export class ClientEventConflictError extends Error {
+  constructor() {
+    super("CLIENT_EVENT_ID_CONFLICT");
+    this.name = "ClientEventConflictError";
+  }
+}
 export class InvalidFileForPhotoError extends Error {
   constructor(reason: string) {
     super(reason);
@@ -85,7 +97,14 @@ export const createCareEventSchema = z.object({
   noteText: z.string().trim().max(MAX_NOTE_LENGTH).optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
   storedFileId: z.string().uuid().optional(),
+  // Phase 12.0: device-generated id that makes a retry return the stored row
+  // instead of inserting a duplicate, and the real time the care happened.
+  clientEventId: z.string().uuid().optional(),
+  occurredAt: z.string().datetime({ offset: true }).optional(),
 });
+
+/** Tolerated device clock drift ahead of the server when occurredAt is supplied. */
+const MAX_CLOCK_SKEW_MS = 2 * 60 * 1000;
 export type CreateCareEventInput = z.infer<typeof createCareEventSchema>;
 
 interface CareEventRow {
@@ -118,7 +137,7 @@ async function resolveMembership(trx: unknown, workerId: string, organizationId:
   return result.rows[0] ?? null;
 }
 
-async function assertActiveVisit(trx: unknown, shiftId: string, membershipId: string): Promise<void> {
+async function assertActiveVisit(trx: unknown, shiftId: string, membershipId: string): Promise<string> {
   const lastCheckIn = await sql<{ occurred_at: string }>`
     SELECT occurred_at FROM verification_events
     WHERE shift_id = ${shiftId} AND organization_worker_membership_id = ${membershipId} AND event_type = 'check_in'
@@ -133,6 +152,47 @@ async function assertActiveVisit(trx: unknown, shiftId: string, membershipId: st
     LIMIT 1
   `.execute(trx as never);
   if (laterCheckOut.rows[0]) throw new NoActiveVisitError();
+  return lastCheckIn.rows[0].occurred_at;
+}
+
+async function findByClientEventId(trx: unknown, organizationId: string, membershipId: string, clientEventId: string) {
+  const result = await sql<CareEventRow & { type_code: string }>`
+    SELECT ce.id, ce.organization_id, ce.shift_id, ce.care_recipient_id, ce.organization_worker_membership_id,
+           ce.care_event_type_id, ce.occurred_at, ce.note_text, ce.structured_data, ce.created_at,
+           cet.code AS type_code
+    FROM care_events ce
+    JOIN care_event_types cet ON cet.id = ce.care_event_type_id
+    WHERE ce.organization_id = ${organizationId}
+      AND ce.organization_worker_membership_id = ${membershipId}
+      AND ce.client_event_id = ${clientEventId}
+    LIMIT 1
+  `.execute(trx as never);
+  return result.rows[0] ?? null;
+}
+
+/**
+ * A replay must describe the same record: same shift, recipient and type.
+ * Reusing an id for something else is a client bug, never silently merged.
+ */
+function replayOrConflict(
+  existing: CareEventRow & { type_code: string },
+  shiftId: string,
+  input: CreateCareEventInput
+): CareEventRow {
+  if (existing.shift_id !== shiftId || existing.care_recipient_id !== input.careRecipientId || existing.type_code !== input.typeCode) {
+    throw new ClientEventConflictError();
+  }
+  const { type_code: _typeCode, ...event } = existing;
+  return event;
+}
+
+function resolveOccurredAt(input: CreateCareEventInput, checkInAt: string): string | null {
+  if (!input.occurredAt) return null;
+  const occurred = new Date(input.occurredAt).getTime();
+  if (Number.isNaN(occurred)) throw new OccurredAtOutOfRangeError();
+  if (occurred < new Date(checkInAt).getTime()) throw new OccurredAtOutOfRangeError();
+  if (occurred > Date.now() + MAX_CLOCK_SKEW_MS) throw new OccurredAtOutOfRangeError();
+  return new Date(occurred).toISOString();
 }
 
 async function assertRecipientConsistency(
@@ -177,7 +237,7 @@ export async function createCareEvent(
   organizationId: string,
   shiftId: string,
   input: CreateCareEventInput
-): Promise<CareEventRow> {
+): Promise<{ event: CareEventRow; replayed: boolean }> {
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const workerId = await resolveWorkerForUser(trx, userId);
@@ -191,7 +251,17 @@ export async function createCareEvent(
     const shift = shiftRow.rows[0];
     if (!shift) throw new ShiftNotFoundError();
 
-    await assertActiveVisit(trx, shiftId, membership.id);
+    // A retry of a record that already reached the server is answered before
+    // the active-visit guard, so a lost response never creates a duplicate.
+    // After check-out the shift is no longer visible to the worker (076), so
+    // the app must deliver pending records before letting the visit end.
+    if (input.clientEventId) {
+      const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId);
+      if (existing) return { event: replayOrConflict(existing, shiftId, input), replayed: true };
+    }
+
+    const checkInAt = await assertActiveVisit(trx, shiftId, membership.id);
+    const occurredAt = resolveOccurredAt(input, checkInAt);
     await assertRecipientConsistency(trx, organizationId, shift, input.careRecipientId);
     const eventTypeId = await resolveEnabledEventType(trx, organizationId, input.typeCode);
 
@@ -216,14 +286,27 @@ export async function createCareEvent(
     const result = await sql<CareEventRow>`
       INSERT INTO care_events (
         organization_id, shift_id, care_recipient_id, organization_worker_membership_id,
-        care_event_type_id, note_text, structured_data
+        care_event_type_id, note_text, structured_data, client_event_id, occurred_at
       ) VALUES (
         ${organizationId}, ${shiftId}, ${input.careRecipientId}, ${membership.id},
-        ${eventTypeId}, ${input.noteText ?? null}, ${structuredData ? JSON.stringify(structuredData) : null}
+        ${eventTypeId}, ${input.noteText ?? null}, ${structuredData ? JSON.stringify(structuredData) : null},
+        ${input.clientEventId ?? null}, COALESCE(${occurredAt}::timestamptz, now())
       )
+      ON CONFLICT (organization_id, organization_worker_membership_id, client_event_id)
+        WHERE client_event_id IS NOT NULL
+        DO NOTHING
       RETURNING id, organization_id, shift_id, care_recipient_id, organization_worker_membership_id,
                 care_event_type_id, occurred_at, note_text, structured_data, created_at
     `.execute(trx);
+    if (!result.rows[0]) {
+      // A concurrent retry stored the same clientEventId between our lookup
+      // and this insert. Return that row; notifications were sent once by it.
+      const existing = input.clientEventId
+        ? await findByClientEventId(trx, organizationId, membership.id, input.clientEventId)
+        : null;
+      if (!existing) throw new ClientEventConflictError();
+      return { event: replayOrConflict(existing, shiftId, input), replayed: true };
+    }
     const event = result.rows[0];
 
     if (input.typeCode === "PHOTO" && input.storedFileId) {
@@ -267,7 +350,7 @@ export async function createCareEvent(
         )
     `.execute(trx);
 
-    return event;
+    return { event, replayed: false };
   });
 }
 
