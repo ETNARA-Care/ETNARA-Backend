@@ -62,6 +62,8 @@ function summarizeType(notificationType: string): string {
       return "Credencial próxima a vencer";
     case "CREDENTIAL_EXPIRED":
       return "Credencial vencida";
+    case "CREDENTIAL_REVIEW_PENDING":
+      return "Credencial pendiente de revisión";
     default:
       return "Notificación";
   }
