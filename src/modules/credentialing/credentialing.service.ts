@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 import { z } from "zod";
-import { withTenantContext, withPlatformContext } from "../../context/tenantContext.js";
-import { InvalidTenantContextError, UnauthorizedPlatformAccessError } from "../../context/errors.js";
+import { withTenantContext } from "../../context/tenantContext.js";
+import { InvalidTenantContextError } from "../../context/errors.js";
 import { randomUUID } from "node:crypto";
 import { env } from "../../config/env.js";
 import { createPrivateDownloadUrl, inspectPrivateObject, uploadPrivateObject } from "../storage/objectStorage.js";
@@ -124,6 +124,7 @@ export interface MyCredentialSummary {
   status: string;
   expiresAt: string | null;
   verificationStatus: "verified" | "pending" | "rejected";
+  reviewNotes: string | null;
 }
 
 export interface CredentialTypeCatalogItem {
@@ -174,8 +175,36 @@ async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, wor
 }
 
 async function assertCredentialManager(trx: unknown) {
-  const result = await sql<{ allowed: boolean }>`SELECT (app_is_org_manager() OR app_is_superadmin()) AS allowed`.execute(trx as never);
+  const result = await sql<{ allowed: boolean }>`SELECT app_is_org_manager() AS allowed`.execute(trx as never);
   if (!result.rows[0]?.allowed) throw new CredentialManagementForbiddenError();
+}
+
+async function assertCredentialUploadActor(trx: unknown, workerId: string) {
+  const result = await sql<{ allowed: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        WHERE w.id = ${workerId}
+          AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      )
+    ) AS allowed
+  `.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new CredentialManagementForbiddenError();
+}
+
+async function resolveCurrentWorkerId(trx: unknown, userId: string, organizationId: string): Promise<string> {
+  const result = await sql<{ id: string }>`
+    SELECT w.id
+    FROM workers w
+    JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+    WHERE w.user_id = ${userId}
+      AND owm.organization_id = ${organizationId}
+      AND owm.status = 'active'
+    LIMIT 1
+  `.execute(trx as never);
+  if (!result.rows[0]) throw new WorkerNotLinkedError();
+  return result.rows[0].id;
 }
 
 async function assertCredentialBelongsToWorker(trx: unknown, workerId: string, credentialId: string) {
@@ -281,7 +310,7 @@ export async function initiateCredentialDocumentUpload(
   assertUuid(workerId, "workerId");
   assertUuid(credentialId, "credentialId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertCredentialManager(trx);
+    await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     const fileId = randomUUID();
@@ -352,7 +381,7 @@ export async function completeCredentialDocumentUpload(
   assertUuid(credentialId, "credentialId");
   assertUuid(fileId, "fileId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertCredentialManager(trx);
+    await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     const fileResult = await sql<{ id: string; storage_key: string; content_type: string; original_filename: string; size_bytes: string }>`
@@ -476,24 +505,15 @@ export async function listMyCredentialSummaries(
   organizationId: string
 ): Promise<MyCredentialSummary[]> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    const worker = await sql<{ id: string }>`
-      SELECT w.id
-      FROM workers w
-      JOIN organization_worker_memberships owm ON owm.worker_id = w.id
-      WHERE w.user_id = ${userId}
-        AND owm.organization_id = ${organizationId}
-        AND owm.status = 'active'
-      LIMIT 1
-    `.execute(trx);
-    if (!worker.rows[0]) throw new WorkerNotLinkedError();
-
+    const workerId = await resolveCurrentWorkerId(trx, userId, organizationId);
     const result = await sql<{
       id: string;
       type_code: string;
       type_name: string;
       status: string;
       expires_at: string | null;
-      verification_status: "verified" | "pending" | "rejected";
+      review_status: "approved" | "pending" | "rejected" | null;
+      review_notes: string | null;
     }>`
       SELECT c.id, ct.code AS type_code, ct.name AS type_name,
              CASE
@@ -501,30 +521,13 @@ export async function listMyCredentialSummaries(
                ELSE c.status::text
              END AS status,
              c.expires_at,
-             CASE
-               WHEN EXISTS (
-                 SELECT 1 FROM credential_platform_verifications cpv
-                 WHERE cpv.credential_id = c.id AND cpv.status = 'verified'
-               ) OR EXISTS (
-                 SELECT 1 FROM organization_credential_reviews ocr
-                 WHERE ocr.credential_id = c.id
-                   AND ocr.organization_id = ${organizationId}
-                   AND ocr.review_status = 'approved'
-               ) THEN 'verified'
-               WHEN EXISTS (
-                 SELECT 1 FROM credential_platform_verifications cpv
-                 WHERE cpv.credential_id = c.id AND cpv.status = 'rejected'
-               ) OR EXISTS (
-                 SELECT 1 FROM organization_credential_reviews ocr
-                 WHERE ocr.credential_id = c.id
-                   AND ocr.organization_id = ${organizationId}
-                   AND ocr.review_status = 'rejected'
-               ) THEN 'rejected'
-               ELSE 'pending'
-             END AS verification_status
+             ocr.review_status,
+             ocr.notes AS review_notes
       FROM credentials c
       JOIN credential_types ct ON ct.id = c.credential_type_id
-      WHERE c.worker_id = ${worker.rows[0].id}
+      LEFT JOIN organization_credential_reviews ocr
+        ON ocr.credential_id = c.id AND ocr.organization_id = ${organizationId}
+      WHERE c.worker_id = ${workerId}
         AND c.status <> 'revoked'
       ORDER BY ct.name
     `.execute(trx);
@@ -535,9 +538,40 @@ export async function listMyCredentialSummaries(
       typeName: row.type_name,
       status: row.status,
       expiresAt: row.expires_at,
-      verificationStatus: row.verification_status,
+      verificationStatus: row.review_status === "approved" ? "verified"
+        : row.review_status === "rejected" ? "rejected" : "pending",
+      reviewNotes: row.review_notes,
     }));
   });
+}
+
+export async function initiateMyCredentialDocumentUpload(
+  userId: string, organizationId: string, credentialId: string,
+  input: InitiateCredentialDocumentUploadInput
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return initiateCredentialDocumentUpload(userId, organizationId, workerId, credentialId, input);
+}
+
+export async function uploadMyCredentialDocumentContent(
+  userId: string, organizationId: string, credentialId: string, fileId: string,
+  contentType: z.infer<typeof credentialDocumentContentTypeSchema>, body: Buffer
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return uploadCredentialDocumentContent(userId, organizationId, workerId, credentialId, fileId, contentType, body);
+}
+
+export async function completeMyCredentialDocumentUpload(
+  userId: string, organizationId: string, credentialId: string, fileId: string
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return completeCredentialDocumentUpload(userId, organizationId, workerId, credentialId, fileId);
 }
 
 export async function getCredential(
@@ -599,182 +633,7 @@ export async function updateCredential(
 
 // ===================== Platform Verification =====================
 
-export const platformVerificationSchema = z.object({
-  status: z.enum(["verified", "rejected"]),
-  notes: z.string().trim().max(2000).optional(),
-}).superRefine((input, context) => {
-  if (input.status === "rejected" && !input.notes) {
-    context.addIssue({ code: "custom", path: ["notes"], message: "notes are required when rejecting a credential" });
-  }
-});
-export type PlatformVerificationInput = z.infer<typeof platformVerificationSchema>;
 
-export interface PlatformCredentialQueueItem {
-  credential_id: string;
-  worker_id: string;
-  worker_name: string;
-  credential_type_code: string;
-  credential_type_name: string;
-  issuing_entity_name: string | null;
-  issued_at: string | null;
-  expires_at: string | null;
-  credential_status: string;
-  file_id: string;
-  original_filename: string;
-  content_type: string;
-  uploaded_at: string;
-  verification_status: "pending" | "verified" | "rejected";
-  verified_at: string | null;
-  verification_notes: string | null;
-  organization_names: string[];
-}
-
-export async function listPlatformCredentialVerificationQueue(actingUserId: string) {
-  return withPlatformContext(actingUserId, async (trx) => {
-    const result = await sql<PlatformCredentialQueueItem>`
-      SELECT
-        c.id AS credential_id,
-        w.id AS worker_id,
-        COALESCE(w.display_name, 'Cuidador sin nombre') AS worker_name,
-        ct.code AS credential_type_code,
-        ct.name AS credential_type_name,
-        c.issuing_entity_name,
-        c.issued_at,
-        c.expires_at,
-        c.status AS credential_status,
-        sf.id AS file_id,
-        sf.original_filename,
-        sf.content_type,
-        dv.created_at AS uploaded_at,
-        COALESCE(latest.status::text, 'pending') AS verification_status,
-        latest.verified_at,
-        latest.notes AS verification_notes,
-        ARRAY(
-          SELECT DISTINCT o.name
-          FROM organization_worker_memberships owm
-          JOIN organizations o ON o.id = owm.organization_id
-          WHERE owm.worker_id = w.id AND owm.status = 'active'
-          ORDER BY o.name
-        ) AS organization_names
-      FROM credentials c
-      JOIN workers w ON w.id = c.worker_id
-      JOIN credential_types ct ON ct.id = c.credential_type_id
-      JOIN documents d ON d.id = c.document_id
-      JOIN document_versions dv ON dv.document_id = d.id AND dv.file_id = d.file_id
-      JOIN stored_files sf ON sf.id = d.file_id AND sf.status = 'active'
-      LEFT JOIN LATERAL (
-        SELECT cpv.status, cpv.verified_at, cpv.notes
-        FROM credential_platform_verifications cpv
-        WHERE cpv.credential_id = c.id AND cpv.file_id = d.file_id
-        ORDER BY cpv.verified_at DESC
-        LIMIT 1
-      ) latest ON true
-      WHERE c.status <> 'revoked'
-      ORDER BY
-        CASE WHEN latest.status IS NULL THEN 0 WHEN latest.status = 'rejected' THEN 1 ELSE 2 END,
-        dv.created_at DESC
-      LIMIT 200
-    `.execute(trx);
-    return result.rows;
-  });
-}
-
-/**
- * ONLY callable through withPlatformContext(), which itself re-verifies
- * platform_admins before opening any transaction. No organization, worker,
- * or frontend-controlled flag can reach this path.
- */
-export async function createPlatformVerification(
-  actingUserId: string,
-  credentialId: string,
-  input: PlatformVerificationInput
-) {
-  assertUuid(credentialId, "credentialId");
-  return withPlatformContext(actingUserId, async (trx) => {
-    const credCheck = await sql<{ id: string; document_id: string | null; file_id: string | null }>`
-      SELECT c.id, c.document_id, d.file_id
-      FROM credentials c
-      LEFT JOIN documents d ON d.id = c.document_id
-      WHERE c.id = ${credentialId} AND c.status <> 'revoked'
-      LIMIT 1
-    `.execute(
-      trx
-    );
-    const credential = credCheck.rows[0];
-    if (!credential) throw new CredentialNotFoundError();
-    if (!credential.document_id || !credential.file_id) throw new CredentialDocumentRequiredError();
-
-    const latestDecision = await sql<{
-      id: string; credential_id: string; verified_by_user_id: string;
-      verified_at: string; status: string; notes: string | null; file_id: string;
-    }>`
-      SELECT id, credential_id, verified_by_user_id, verified_at, status, notes, file_id
-      FROM credential_platform_verifications
-      WHERE credential_id = ${credentialId} AND file_id = ${credential.file_id}
-      ORDER BY verified_at DESC LIMIT 1
-    `.execute(trx);
-    if (
-      latestDecision.rows[0]?.status === input.status
-      && latestDecision.rows[0]?.notes === (input.notes ?? null)
-    ) return latestDecision.rows[0];
-
-    const result = await sql<{
-      id: string;
-      credential_id: string;
-      file_id: string;
-      verified_by_user_id: string;
-      verified_at: string;
-      status: string;
-      notes: string | null;
-    }>`
-      INSERT INTO credential_platform_verifications (credential_id, file_id, verified_by_user_id, status, notes)
-      VALUES (${credentialId}, ${credential.file_id}, ${actingUserId}, ${input.status}, ${input.notes ?? null})
-      RETURNING id, credential_id, file_id, verified_by_user_id, verified_at, status, notes
-    `.execute(trx);
-    await sql`
-      UPDATE documents
-      SET status = ${input.status}, updated_at = now()
-      WHERE id = ${credential.document_id} AND file_id = ${credential.file_id}
-    `.execute(trx);
-    return result.rows[0];
-  });
-}
-
-export async function createPlatformCredentialDocumentDownload(
-  actingUserId: string,
-  credentialId: string,
-  fileId: string
-) {
-  assertUuid(credentialId, "credentialId");
-  assertUuid(fileId, "fileId");
-  const file = await withPlatformContext(actingUserId, async (trx) => {
-    const result = await sql<{ storage_key: string; original_filename: string; content_type: string }>`
-      SELECT sf.storage_key, sf.original_filename, sf.content_type
-      FROM credentials c
-      JOIN documents d ON d.id = c.document_id
-      JOIN document_versions dv ON dv.document_id = d.id AND dv.file_id = d.file_id
-      JOIN stored_files sf ON sf.id = dv.file_id
-      WHERE c.id = ${credentialId} AND sf.id = ${fileId} AND sf.status = 'active'
-      LIMIT 1
-    `.execute(trx);
-    if (!result.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
-    return result.rows[0];
-  });
-  const downloadUrl = await createPrivateDownloadUrl(file.storage_key, file.original_filename, file.content_type);
-  return { downloadUrl, expiresInSeconds: 300 };
-}
-
-export async function listPlatformVerifications(actingUserId: string, credentialId: string) {
-  assertUuid(credentialId, "credentialId");
-  return withPlatformContext(actingUserId, async (trx) => {
-    const result = await sql<{ id: string; status: string; verified_at: string; notes: string | null }>`
-      SELECT id, status, verified_at, notes FROM credential_platform_verifications
-      WHERE credential_id = ${credentialId}
-      ORDER BY verified_at DESC
-    `.execute(trx);
-    return result.rows;
-  });
-}
 
 // ===================== Organization Credential Review =====================
 
@@ -814,8 +673,7 @@ export async function createOrUpdateOrganizationReview(
     if (!credCheck.rows[0]) throw new CredentialNotFoundError();
     if (!credCheck.rows[0].document_id) throw new CredentialDocumentRequiredError();
 
-    // Organization review is tenant-local. It must never mutate the shared/global
-    // document status; only ETNARA Platform verification owns that state.
+    // Organization review is tenant-local and never exposes the worker document to ETNARA Platform.
 
     await sql`
       INSERT INTO organization_document_version_reviews (
