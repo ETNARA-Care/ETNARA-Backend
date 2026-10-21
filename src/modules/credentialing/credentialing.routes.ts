@@ -13,10 +13,6 @@ import {
   updateCredential,
   createCredentialSchema,
   updateCredentialSchema,
-  createPlatformVerification,
-  listPlatformVerifications,
-  listPlatformCredentialVerificationQueue,
-  createPlatformCredentialDocumentDownload,
   platformVerificationSchema,
   createOrUpdateOrganizationReview,
   organizationReviewSchema,
@@ -364,88 +360,8 @@ router.post(
   }
 );
 
-// ===================== Platform Verification (platform admin only) =====================
-
-router.get(
-  "/platform/credentials/verification-queue",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const credentials = await listPlatformCredentialVerificationQueue(req.auth!.userId);
-      res.status(200).json({ credentials });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
-
-router.post(
-  "/platform/credentials/:credentialId/documents/:fileId/download-url",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const download = await createPlatformCredentialDocumentDownload(
-        req.auth!.userId,
-        String(req.params.credentialId),
-        String(req.params.fileId)
-      );
-      res.status(200).json({ download });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
-
-router.post(
-  "/platform/credentials/:credentialId/verifications",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const bodyParsed = platformVerificationSchema.safeParse(req.body);
-    if (!bodyParsed.success) {
-      res.status(400).json({ error: "INVALID_PAYLOAD" });
-      return;
-    }
-    try {
-      const verification = await createPlatformVerification(
-        req.auth!.userId,
-        String(req.params.credentialId),
-        bodyParsed.data
-      );
-      res.status(201).json({ verification });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
-
-router.get(
-  "/platform/credentials/:credentialId/verifications",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const verifications = await listPlatformVerifications(req.auth!.userId, String(req.params.credentialId));
-      res.status(200).json({ verifications });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
+// Platform-level employee credential inspection is intentionally disabled.
+// Organizations retain tenant-scoped credential review below.
 
 // ===================== Organization Credential Review =====================
 
