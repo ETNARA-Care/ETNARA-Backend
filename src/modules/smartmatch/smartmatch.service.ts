@@ -45,6 +45,7 @@ export async function publishInternalOpportunity(
 
 export async function listAgencyOpportunities(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireSmartMatchAgencyAdmin(trx, userId, organizationId);
     const rows = await sql<{
       id: string; region_label: string; role_label: string;
       starts_at: string; ends_at: string; status: string;
@@ -66,6 +67,7 @@ export async function activateInternalOpportunity(
   userId: string, organizationId: string, opportunityId: string,
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireSmartMatchAgencyAdmin(trx, userId, organizationId);
     const updated = await sql<{ id: string; status: string }>`
       UPDATE smartmatch_opportunities
       SET status = 'PUBLISHED', updated_at = now()
@@ -79,4 +81,23 @@ export async function activateInternalOpportunity(
     `.execute(trx);
     return updated.rows[0] ?? null;
   });
+}
+
+async function requireSmartMatchAgencyAdmin(
+  trx: Parameters<Parameters<typeof withTenantContext>[1]>[0],
+  userId: string,
+  organizationId: string,
+): Promise<void> {
+  const result = await sql<{ allowed: boolean }>`
+    SELECT EXISTS (
+      SELECT 1 FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id
+      WHERE om.user_id = ${userId}
+        AND om.organization_id = ${organizationId}
+        AND om.status = 'active'
+        AND r.code = 'ORGANIZATION_ADMIN'
+    ) AS allowed
+  `.execute(trx);
+  if (!result.rows[0]?.allowed) throw new SmartMatchForbiddenError();
 }
