@@ -95,8 +95,19 @@ async function main() {
       if (!status.rows[0]?.active) throw new Error("RLS inactive for " + table);
     }
     for (const table of tables) {
-      const result = await client.query('SELECT 1 FROM "' + table + '" LIMIT 1');
-      if ((result.rowCount ?? 0) !== 0) throw new Error("Platform PHI exposure: " + table);
+      // Tables without runtime SELECT grants are secure by default. A
+      // savepoint prevents PostgreSQL's permission error from aborting the
+      // surrounding fixture transaction.
+      await client.query("SAVEPOINT phi_table_probe");
+      try {
+        const result = await client.query('SELECT 1 FROM "' + table + '" LIMIT 1');
+        if ((result.rowCount ?? 0) !== 0) throw new Error("Platform PHI exposure: " + table);
+        await client.query("RELEASE SAVEPOINT phi_table_probe");
+      } catch (error: any) {
+        await client.query("ROLLBACK TO SAVEPOINT phi_table_probe");
+        await client.query("RELEASE SAVEPOINT phi_table_probe");
+        if (error?.code !== "42501") throw error;
+      }
     }
     const direct = await client.query("SELECT id FROM care_recipients WHERE id=$1", [resident.rows[0].id]);
     if (direct.rowCount !== 0) throw new Error("Platform admin accessed seeded resident");
