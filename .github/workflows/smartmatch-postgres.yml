@@ -5,6 +5,7 @@ on:
       - 'migrations/078_smartmatch_foundation.sql'
       - 'migrations/079_smartmatch_approval_invariants.sql'
       - 'migrations/080_smartmatch_agency_opportunity_rls.sql'
+      - 'migrations/081_smartmatch_agency_application_review.sql'
       - 'scripts/smartmatch_*.sql'
       - '.github/workflows/smartmatch-postgres.yml'
   workflow_dispatch:
@@ -37,7 +38,7 @@ jobs:
         run: psql -X -v ON_ERROR_STOP=1 -f scripts/smartmatch_ci_fixture.sql
       - name: Apply SmartMatch migrations only
         run: |
-          for migration in migrations/078_smartmatch_foundation.sql migrations/079_smartmatch_approval_invariants.sql migrations/080_smartmatch_agency_opportunity_rls.sql; do
+          for migration in migrations/078_smartmatch_foundation.sql migrations/079_smartmatch_approval_invariants.sql migrations/080_smartmatch_agency_opportunity_rls.sql migrations/081_smartmatch_agency_application_review.sql; do
             psql -X -v ON_ERROR_STOP=1 -f "$migration"
           done
       - name: Insert synthetic opportunity
