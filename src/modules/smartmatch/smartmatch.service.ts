@@ -57,3 +57,26 @@ export async function listAgencyOpportunities(userId: string, organizationId: st
     return rows.rows;
   });
 }
+
+/**
+ * Publish a vetted INTERNAL opportunity. The agency administrator must
+ * explicitly publish their own draft. No cross-organization discovery.
+ */
+export async function activateInternalOpportunity(
+  userId: string, organizationId: string, opportunityId: string,
+) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const updated = await sql<{ id: string; status: string }>`
+      UPDATE smartmatch_opportunities
+      SET status = 'PUBLISHED', updated_at = now()
+      WHERE id = ${opportunityId}
+        AND organization_id = ${organizationId}
+        AND created_by_user_id = ${userId}
+        AND visibility = 'INTERNAL'
+        AND status = 'DRAFT'
+        AND starts_at > now()
+      RETURNING id, status
+    `.execute(trx);
+    return updated.rows[0] ?? null;
+  });
+}
