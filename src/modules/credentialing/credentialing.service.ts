@@ -345,7 +345,7 @@ export async function uploadCredentialDocumentContent(
   }
 
   const file = await withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertCredentialManager(trx);
+    await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     const result = await sql<{ storage_key: string; content_type: string; size_bytes: string }>`
