@@ -8,7 +8,7 @@ const m081 = read("migrations/081_fix_shift_assignment_rls_recursion.sql");
 
 const body = (sql: string) => {
   const start = sql.indexOf("SELECT EXISTS (");
-  const end = sql.indexOf("$$;", start);
+  const end = sql.indexOf("$$", start);
   return sql.slice(start, end).replace(/public\./g, "").replace(/\s+/g, " ").trim();
 };
 
