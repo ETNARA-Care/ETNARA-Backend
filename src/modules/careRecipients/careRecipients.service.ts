@@ -173,3 +173,116 @@ export async function updateCareRecipient(
     return result.rows[0];
   });
 }
+
+// ---------------------------------------------------------------------------
+// Phase 12.1: address and directions for home visits (care_recipient_locations,
+// migration 082). PostgreSQL RLS is the authority; these checks only give the
+// API explicit answers instead of empty results.
+// ---------------------------------------------------------------------------
+
+export class LocationWriteForbiddenError extends Error {
+  constructor() {
+    super("LOCATION_WRITE_FORBIDDEN");
+    this.name = "LocationWriteForbiddenError";
+  }
+}
+
+const optionalText = (max: number) =>
+  z.string().trim().max(max).transform((value) => (value.length ? value : null)).nullable().optional();
+
+export const upsertLocationSchema = z
+  .object({
+    addressLine: optionalText(200),
+    municipality: optionalText(60),
+    accessNotes: optionalText(500),
+    latitude: z.number().min(-90).max(90).nullable().optional(),
+    longitude: z.number().min(-180).max(180).nullable().optional(),
+  })
+  .strict()
+  .refine((d) => (d.latitude == null) === (d.longitude == null), {
+    message: "latitude and longitude go together",
+  });
+export type UpsertLocationInput = z.infer<typeof upsertLocationSchema>;
+
+export interface CareRecipientLocation {
+  care_recipient_id: string;
+  address_line: string | null;
+  municipality: string | null;
+  access_notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  updated_at: string;
+}
+
+function toLocation(row: Record<string, unknown> | undefined): CareRecipientLocation | null {
+  if (!row) return null;
+  return {
+    care_recipient_id: String(row.care_recipient_id),
+    address_line: (row.address_line as string | null) ?? null,
+    municipality: (row.municipality as string | null) ?? null,
+    access_notes: (row.access_notes as string | null) ?? null,
+    latitude: row.latitude == null ? null : Number(row.latitude),
+    longitude: row.longitude == null ? null : Number(row.longitude),
+    updated_at: String(row.updated_at),
+  };
+}
+
+/**
+ * Managers, and workers with an assigned not-yet-ended shift (or open visit)
+ * for this recipient, may read. Everyone else, including family members of the
+ * recipient, gets RecipientNotFoundError: no signal about the address.
+ */
+export async function getCareRecipientLocation(userId: string, organizationId: string, recipientId: string) {
+  assertValidRecipientId(recipientId);
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const access = await sql<{ allowed: boolean }>`
+      SELECT (app_is_org_manager() OR app_worker_has_recipient_assignment(${recipientId}::uuid)) AS allowed
+    `.execute(trx);
+    if (!access.rows[0]?.allowed) throw new RecipientNotFoundError();
+    const result = await sql<Record<string, unknown>>`
+      SELECT care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
+      FROM care_recipient_locations
+      WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId}
+      LIMIT 1
+    `.execute(trx);
+    return toLocation(result.rows[0]);
+  });
+}
+
+/** Managers only. Creates or replaces the recipient's address in one statement. */
+export async function upsertCareRecipientLocation(
+  userId: string,
+  organizationId: string,
+  recipientId: string,
+  input: UpsertLocationInput
+) {
+  assertValidRecipientId(recipientId);
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const manager = await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx);
+    if (!manager.rows[0]?.ok) throw new LocationWriteForbiddenError();
+    const recipient = await sql<{ id: string }>`
+      SELECT id FROM care_recipients WHERE id = ${recipientId} AND organization_id = ${organizationId} LIMIT 1
+    `.execute(trx);
+    if (!recipient.rows[0]) throw new RecipientNotFoundError();
+
+    const result = await sql<Record<string, unknown>>`
+      INSERT INTO care_recipient_locations (
+        care_recipient_id, organization_id, address_line, municipality, access_notes,
+        latitude, longitude, updated_at, updated_by_user_id
+      ) VALUES (
+        ${recipientId}, ${organizationId}, ${input.addressLine ?? null}, ${input.municipality ?? null},
+        ${input.accessNotes ?? null}, ${input.latitude ?? null}, ${input.longitude ?? null}, now(), ${userId}
+      )
+      ON CONFLICT (care_recipient_id) DO UPDATE SET
+        address_line = EXCLUDED.address_line,
+        municipality = EXCLUDED.municipality,
+        access_notes = EXCLUDED.access_notes,
+        latitude = EXCLUDED.latitude,
+        longitude = EXCLUDED.longitude,
+        updated_at = now(),
+        updated_by_user_id = EXCLUDED.updated_by_user_id
+      RETURNING care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
+    `.execute(trx);
+    return toLocation(result.rows[0]);
+  });
+}

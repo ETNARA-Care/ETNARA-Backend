@@ -2,6 +2,16 @@
 
 ## In Progress
 
+### ETN-039 — Phase 12.1 recipient address and directions
+- store the visit address in `care_recipient_locations` with its own RLS
+- managers read and write; assigned workers read only during a live assignment
+- family and platform administrators have no access; no delete
+- strict payload validation and paired coordinates
+- HTTP + RLS verification in CI
+
+Status: Backend implemented on `gate/12.1-recipient-address`; awaiting gate
+PASS. Frontend pending. Publish after Railway returns and 082 is applied.
+
 ### ETN-038 — Phase 10.0 multi-agency establishments
 - reuse organizations as the legal tenant and locations as establishments
 - require one explicit active organization for every operation

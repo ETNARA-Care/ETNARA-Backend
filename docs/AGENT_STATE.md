@@ -6,6 +6,23 @@ Project: ETNARA Care
 Repository: ETNARA-Backend
 Branch: phase-10/10.0-multi-agency-compliance
 
+## 2026-10-21 — Phase 12.1 recipient address and directions
+
+- Migration 082 adds `care_recipient_locations` (address line, municipality,
+  access notes, optional paired coordinates) in its own table so RLS controls
+  the address independently of the recipient row.
+- Managers (ORGANIZATION_ADMIN, SUPERVISOR) read and write. A worker reads only
+  while `app_worker_has_recipient_assignment()` is true (assigned, not-ended
+  shift or open visit) and never writes. Family members and platform
+  administrators get no access. No DELETE grant; clearing is an UPDATE.
+- A SECURITY DEFINER trigger rejects a location whose organization differs from
+  its recipient's (CARE_RECIPIENT_LOCATION_ORG_MISMATCH).
+- New routes: GET and PUT `/organizations/:organizationId/care-recipients/:recipientId/location`.
+- Verification: `scripts/verifyRecipientLocationAccess.ts` (21/21, HTTP + RLS
+  attacks) added to CI; the table is included in the platform PHI boundary.
+- Exact next step: gate PASS from Rafa, then the frontend (agency edit fields,
+  caregiver "Cómo llegar" card). Publish only after Railway returns and 082 is applied.
+
 ## 2026-09-27 — Phase 10.0 multi-agency establishments
 
 - Reuses the existing organization tenant and locations hierarchy; no parallel

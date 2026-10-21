@@ -8,7 +8,7 @@ if (!url || process.env.ETNARA_DISPOSABLE_DB !== "true") {
 if (process.env.NODE_ENV === "production") throw new Error("Production prohibited");
 
 const tables = [
-  "care_recipients", "care_plans", "care_events", "care_event_photos",
+  "care_recipients", "care_recipient_locations", "care_plans", "care_events", "care_event_photos",
   "observations", "incidents", "incident_timeline_entries",
   "incident_attachments", "resident_documents", "family_relationships",
   "consent_records", "family_invitations", "message_threads",
