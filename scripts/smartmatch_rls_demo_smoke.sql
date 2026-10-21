@@ -22,7 +22,6 @@ WITH attempted AS (
 )
 SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM attempted) THEN 1 ELSE 0 END)
   AS agency_a_cannot_update_b;
--- The runtime role must never be able to delete opportunities.
 ROLLBACK;
 
 BEGIN;
@@ -33,6 +32,14 @@ SELECT set_config('app.is_superadmin', 'false', true);
 SELECT 1 / (CASE WHEN NOT EXISTS (
   SELECT 1 FROM smartmatch_opportunities WHERE id = :'opportunity_a'::uuid
 ) THEN 1 ELSE 0 END) AS agency_b_cannot_read_a;
+-- The inverse UPDATE must also affect zero rows.
+WITH attempted AS (
+  UPDATE smartmatch_opportunities SET updated_at = updated_at
+  WHERE id = :'opportunity_a'::uuid
+  RETURNING id
+)
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM attempted) THEN 1 ELSE 0 END)
+  AS agency_b_cannot_update_a;
 ROLLBACK;
 
 -- Any failed assertion raises division_by_zero and ON_ERROR_STOP aborts the script.
