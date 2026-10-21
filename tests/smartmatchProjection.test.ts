@@ -17,7 +17,7 @@ describe("SmartMatch discovery projection", () => {
       patientName: "Private",
       exactAddress: "Private",
       organizationId: "secret",
-    });
+    } as typeof candidate);
     expect(result).toEqual(candidate);
   });
 
