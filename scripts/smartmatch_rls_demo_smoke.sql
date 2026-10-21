@@ -14,6 +14,14 @@ SELECT 1 / (CASE WHEN EXISTS (
 SELECT 1 / (CASE WHEN NOT EXISTS (
   SELECT 1 FROM smartmatch_opportunities WHERE organization_id = :'agency_b'::uuid
 ) THEN 1 ELSE 0 END) AS agency_a_cannot_read_b;
+-- Cross-agency UPDATE must affect zero rows even if the opportunity UUID is known.
+WITH attempted AS (
+  UPDATE smartmatch_opportunities SET updated_at = updated_at
+  WHERE organization_id = :'agency_b'::uuid
+  RETURNING id
+)
+SELECT 1 / (CASE WHEN NOT EXISTS (SELECT 1 FROM attempted) THEN 1 ELSE 0 END)
+  AS agency_a_cannot_update_b;
 ROLLBACK;
 
 BEGIN;
