@@ -124,6 +124,7 @@ export interface MyCredentialSummary {
   status: string;
   expiresAt: string | null;
   verificationStatus: "verified" | "pending" | "rejected";
+  reviewNotes: string | null;
 }
 
 export interface CredentialTypeCatalogItem {
@@ -174,8 +175,36 @@ async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, wor
 }
 
 async function assertCredentialManager(trx: unknown) {
-  const result = await sql<{ allowed: boolean }>`SELECT (app_is_org_manager() OR app_is_superadmin()) AS allowed`.execute(trx as never);
+  const result = await sql<{ allowed: boolean }>`SELECT app_is_org_manager() AS allowed`.execute(trx as never);
   if (!result.rows[0]?.allowed) throw new CredentialManagementForbiddenError();
+}
+
+async function assertCredentialUploadActor(trx: unknown, workerId: string) {
+  const result = await sql<{ allowed: boolean }>`
+    SELECT (
+      app_is_org_manager()
+      OR EXISTS (
+        SELECT 1 FROM workers w
+        WHERE w.id = ${workerId}
+          AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      )
+    ) AS allowed
+  `.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new CredentialManagementForbiddenError();
+}
+
+async function resolveCurrentWorkerId(trx: unknown, userId: string, organizationId: string): Promise<string> {
+  const result = await sql<{ id: string }>`
+    SELECT w.id
+    FROM workers w
+    JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+    WHERE w.user_id = ${userId}
+      AND owm.organization_id = ${organizationId}
+      AND owm.status = 'active'
+    LIMIT 1
+  `.execute(trx as never);
+  if (!result.rows[0]) throw new WorkerNotLinkedError();
+  return result.rows[0].id;
 }
 
 async function assertCredentialBelongsToWorker(trx: unknown, workerId: string, credentialId: string) {
@@ -281,7 +310,7 @@ export async function initiateCredentialDocumentUpload(
   assertUuid(workerId, "workerId");
   assertUuid(credentialId, "credentialId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertCredentialManager(trx);
+    await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     const fileId = randomUUID();
@@ -352,7 +381,7 @@ export async function completeCredentialDocumentUpload(
   assertUuid(credentialId, "credentialId");
   assertUuid(fileId, "fileId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertCredentialManager(trx);
+    await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     const fileResult = await sql<{ id: string; storage_key: string; content_type: string; original_filename: string; size_bytes: string }>`
@@ -476,24 +505,15 @@ export async function listMyCredentialSummaries(
   organizationId: string
 ): Promise<MyCredentialSummary[]> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    const worker = await sql<{ id: string }>`
-      SELECT w.id
-      FROM workers w
-      JOIN organization_worker_memberships owm ON owm.worker_id = w.id
-      WHERE w.user_id = ${userId}
-        AND owm.organization_id = ${organizationId}
-        AND owm.status = 'active'
-      LIMIT 1
-    `.execute(trx);
-    if (!worker.rows[0]) throw new WorkerNotLinkedError();
-
+    const workerId = await resolveCurrentWorkerId(trx, userId, organizationId);
     const result = await sql<{
       id: string;
       type_code: string;
       type_name: string;
       status: string;
       expires_at: string | null;
-      verification_status: "verified" | "pending" | "rejected";
+      review_status: "approved" | "pending" | "rejected" | null;
+      review_notes: string | null;
     }>`
       SELECT c.id, ct.code AS type_code, ct.name AS type_name,
              CASE
@@ -501,30 +521,13 @@ export async function listMyCredentialSummaries(
                ELSE c.status::text
              END AS status,
              c.expires_at,
-             CASE
-               WHEN EXISTS (
-                 SELECT 1 FROM credential_platform_verifications cpv
-                 WHERE cpv.credential_id = c.id AND cpv.status = 'verified'
-               ) OR EXISTS (
-                 SELECT 1 FROM organization_credential_reviews ocr
-                 WHERE ocr.credential_id = c.id
-                   AND ocr.organization_id = ${organizationId}
-                   AND ocr.review_status = 'approved'
-               ) THEN 'verified'
-               WHEN EXISTS (
-                 SELECT 1 FROM credential_platform_verifications cpv
-                 WHERE cpv.credential_id = c.id AND cpv.status = 'rejected'
-               ) OR EXISTS (
-                 SELECT 1 FROM organization_credential_reviews ocr
-                 WHERE ocr.credential_id = c.id
-                   AND ocr.organization_id = ${organizationId}
-                   AND ocr.review_status = 'rejected'
-               ) THEN 'rejected'
-               ELSE 'pending'
-             END AS verification_status
+             ocr.review_status,
+             ocr.notes AS review_notes
       FROM credentials c
       JOIN credential_types ct ON ct.id = c.credential_type_id
-      WHERE c.worker_id = ${worker.rows[0].id}
+      LEFT JOIN organization_credential_reviews ocr
+        ON ocr.credential_id = c.id AND ocr.organization_id = ${organizationId}
+      WHERE c.worker_id = ${workerId}
         AND c.status <> 'revoked'
       ORDER BY ct.name
     `.execute(trx);
@@ -535,9 +538,40 @@ export async function listMyCredentialSummaries(
       typeName: row.type_name,
       status: row.status,
       expiresAt: row.expires_at,
-      verificationStatus: row.verification_status,
+      verificationStatus: row.review_status === "approved" ? "verified"
+        : row.review_status === "rejected" ? "rejected" : "pending",
+      reviewNotes: row.review_notes,
     }));
   });
+}
+
+export async function initiateMyCredentialDocumentUpload(
+  userId: string, organizationId: string, credentialId: string,
+  input: InitiateCredentialDocumentUploadInput
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return initiateCredentialDocumentUpload(userId, organizationId, workerId, credentialId, input);
+}
+
+export async function uploadMyCredentialDocumentContent(
+  userId: string, organizationId: string, credentialId: string, fileId: string,
+  contentType: z.infer<typeof credentialDocumentContentTypeSchema>, body: Buffer
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return uploadCredentialDocumentContent(userId, organizationId, workerId, credentialId, fileId, contentType, body);
+}
+
+export async function completeMyCredentialDocumentUpload(
+  userId: string, organizationId: string, credentialId: string, fileId: string
+) {
+  const workerId = await withTenantContext({ userId, organizationId }, (trx) =>
+    resolveCurrentWorkerId(trx, userId, organizationId)
+  );
+  return completeCredentialDocumentUpload(userId, organizationId, workerId, credentialId, fileId);
 }
 
 export async function getCredential(
