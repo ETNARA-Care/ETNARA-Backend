@@ -120,9 +120,14 @@ async function main() {
       "INSERT INTO users (email, status) VALUES ('phi-agency-ci@example.invalid','active') RETURNING id"
     );
     const agencyUserId = agencyUser.rows[0].id as string;
-    await client.query(
-      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active')",
+    const agencyMembership = await client.query(
+      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active') RETURNING id",
       [agencyUserId, org.rows[0].id]
+    );
+    await client.query(
+      `INSERT INTO user_roles (organization_membership_id, organization_id, role_id)
+       SELECT $1, $2, id FROM roles WHERE code='ORGANIZATION_ADMIN'`,
+      [agencyMembership.rows[0].id, org.rows[0].id]
     );
     await client.query("SET LOCAL ROLE app_runtime");
     await client.query("SELECT set_config('app.current_user_id',$1,true)", [agencyUserId]);
@@ -144,9 +149,14 @@ async function main() {
     const otherUser = await client.query(
       "INSERT INTO users (email, status) VALUES ('phi-other-agency-ci@example.invalid','active') RETURNING id"
     );
-    await client.query(
-      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active')",
+    const otherMembership = await client.query(
+      "INSERT INTO organization_memberships (user_id, organization_id, status) VALUES ($1,$2,'active') RETURNING id",
       [otherUser.rows[0].id, otherOrg.rows[0].id]
+    );
+    await client.query(
+      `INSERT INTO user_roles (organization_membership_id, organization_id, role_id)
+       SELECT $1, $2, id FROM roles WHERE code='ORGANIZATION_ADMIN'`,
+      [otherMembership.rows[0].id, otherOrg.rows[0].id]
     );
     await client.query("SET LOCAL ROLE app_runtime");
     await client.query("SELECT set_config('app.current_user_id',$1,true)", [otherUser.rows[0].id]);
