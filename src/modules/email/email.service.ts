@@ -16,6 +16,8 @@ export interface OrganizationAdminInvitationEmail {
   organizationName: string;
   activationToken: string;
   invitedByEmail: string;
+  /** Defaults to administrator; agencies can also invite supervisors. */
+  staffRole?: "ORGANIZATION_ADMIN" | "SUPERVISOR";
 }
 
 export interface EmailConfig {
@@ -56,7 +58,7 @@ export async function sendOrganizationAdminInvitationEmail(
     <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
       <h1>${config.senderName}</h1>
       <p>Hola,</p>
-      <p>Has sido invitado a administrar una organización en ${config.senderName}.</p>
+      <p>${payload.staffRole === "SUPERVISOR" ? `Has sido invitado como supervisor de una organización en ${config.senderName}.` : `Has sido invitado a administrar una organización en ${config.senderName}.`}</p>
       <p><strong>Organización:</strong> ${escapeHtml(payload.organizationName)}</p>
       <p><strong>Invitado por:</strong> ${escapeHtml(payload.invitedByEmail)}</p>
       <p>Este token de invitación expira en 7 días.</p>
@@ -86,7 +88,7 @@ export async function sendOrganizationAdminInvitationEmail(
       body: JSON.stringify({
         from: `${config.senderName} <${config.senderEmail}>`,
         to: payload.recipientEmail,
-        subject: `Invitación de administrador en ${config.senderName}`,
+        subject: payload.staffRole === "SUPERVISOR" ? `Invitación de supervisor en ${config.senderName}` : `Invitación de administrador en ${config.senderName}`,
         html: htmlContent,
       }),
     });

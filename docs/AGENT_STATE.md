@@ -2,6 +2,29 @@
 
 ## Current Status
 
+## 2026-10-22 — Phase 12.2 team invitations + administrator authority (gate/12.2-team-invitations-admin-authority)
+
+- Migration 085:
+  - SECURITY DEFINER helpers app_is_org_admin(), app_is_org_manager_definer(), app_role_code().
+  - CLOSED A PRIVILEGE GAP: user_roles and organization_memberships had one
+    permissive FOR ALL policy without WITH CHECK, so any active member
+    (caregiver, family) could write roles/memberships directly as app_runtime.
+    RESTRICTIVE write policies now require an org administrator or the
+    platform; a supervisor may grant only WORKER/FAMILY. No app code wrote
+    these tables as app_runtime (all writes are SECURITY DEFINER functions).
+  - access_invitations.staff_role (ORGANIZATION_ADMIN | SUPERVISOR) for type
+    organization_admin; trigger defaults to ORGANIZATION_ADMIN; only org admins
+    or the platform may read/create/change these rows. Activation grants
+    staff_role; inspection shows "Supervisor de la organización".
+  - Rates, timesheets and pay periods: RESTRICTIVE admin-only policies.
+- New module team: GET /organizations/:id/team, POST .../team/invitations
+  {email, role}, POST .../team/invitations/:id/revoke — ORGANIZATION_ADMIN only.
+- Timesheet and pay-period services require app_is_org_admin(); pay-period
+  routes now return 403 (was 500) when forbidden.
+- Verification: scripts/verifyTeamAndAdminAuthority.ts 28/28 in CI.
+- Limitation: inviting an email that already has an ETNARA account is not
+  supported yet (ACCOUNT_ALREADY_EXISTS, unchanged activation behavior).
+
 ## 2026-10-22 — Agency plain language (fix/agency-plain-language)
 
 - Planning and coverage texts use real Spanish plurals instead of "(s)"/"(es)".

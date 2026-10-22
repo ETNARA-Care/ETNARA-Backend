@@ -38,7 +38,7 @@ describe("Phase 7.8 timesheets, billing and payroll preparation", () => {
   it("requires manager review, configured rates and an audit trail", () => {
     const service = read("src/modules/timesheets/timesheets.service.ts");
     const routes = read("src/modules/timesheets/timesheets.routes.ts");
-    expect(service).toContain("SELECT app_is_org_manager() AS is_manager");
+    expect(service).toContain("SELECT app_is_org_admin() AS is_manager"); // 085: money is for administrators only
     expect(service).toContain("FINANCIAL_RATE_REQUIRED");
     expect(service).toContain("TIMESHEET_APPROVED");
     expect(service).toContain("TIMESHEET_DISPUTED");
