@@ -20,5 +20,7 @@ BEGIN
       EXECUTE format('CREATE POLICY %I ON %I FOR INSERT WITH CHECK (%s)', prefix || '_insert', t, scope_expr);
     END IF;
     EXECUTE format('CREATE POLICY %I ON %I FOR UPDATE USING (%s) WITH CHECK (%s)', prefix || '_update', t, scope_expr, scope_expr);
+    EXECUTE format('DROP POLICY IF EXISTS platform_document_deny ON %I', t);
+    EXECUTE format('CREATE POLICY platform_document_deny ON %I AS RESTRICTIVE FOR ALL TO app_runtime USING (NOT app_is_superadmin()) WITH CHECK (NOT app_is_superadmin())', t);
   END LOOP;
 END $$;
