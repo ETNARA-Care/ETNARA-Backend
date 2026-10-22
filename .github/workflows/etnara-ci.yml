@@ -90,6 +90,7 @@ jobs:
           export DEMO_PASSWORD="$demo_password"
           npx tsx scripts/verifyAssignmentMessagingSync.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
+          npx tsx scripts/verifyRecipientLocationAccess.ts
 
       - name: Diff safety check
         run: git diff --check
