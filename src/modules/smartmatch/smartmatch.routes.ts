@@ -6,6 +6,7 @@ import { smartMatchPublishSchema } from "./smartmatch.schemas.js";
 import {
   publishInternalOpportunity, listAgencyOpportunities, activateInternalOpportunity,
   SmartMatchForbiddenError, SmartMatchNetworkDisabledError, listAgencyApplicationCounts, listAgencyPendingApplications,
+  listCaregiverInternalOpportunities,
 } from "./smartmatch.service.js";
 
 const router = Router();
@@ -97,6 +98,23 @@ router.get("/organizations/:organizationId/smartmatch/opportunities/:opportunity
         req.auth!.userId, org.data, opportunity.data,
       );
       res.status(200).json({ applications });
+    } catch (error) {
+      if (error instanceof SmartMatchForbiddenError || error instanceof MembershipNotActiveError) {
+        res.status(403).json({ error: "FORBIDDEN" }); return;
+      }
+      res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  });
+
+
+/** Read-only caregiver discovery, restricted to their own active agency. */
+router.get("/organizations/:organizationId/smartmatch/available-opportunities",
+  requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const org = uuid.safeParse(req.params.organizationId);
+    if (!org.success) { res.status(400).json({ error: "INVALID_ID" }); return; }
+    try {
+      const opportunities = await listCaregiverInternalOpportunities(req.auth!.userId, org.data);
+      res.status(200).json({ opportunities });
     } catch (error) {
       if (error instanceof SmartMatchForbiddenError || error instanceof MembershipNotActiveError) {
         res.status(403).json({ error: "FORBIDDEN" }); return;
