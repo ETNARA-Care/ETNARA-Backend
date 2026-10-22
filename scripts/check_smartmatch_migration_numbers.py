@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-SMARTMATCH = ("078_", "079_", "080_", "081_")
+SMARTMATCH = ("090_", "091_", "092_", "093_")
 
 def main() -> int:
     files = sorted(Path("migrations").glob("*.sql"))
