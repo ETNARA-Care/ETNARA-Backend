@@ -10,6 +10,9 @@ BEGIN
       prefix := 'resident_documents_establishment';
     END IF;
     scope_expr := 'organization_id = NULLIF(current_setting(''app.current_org_id'', true), '''')::uuid AND NOT app_is_superadmin() AND (app_is_org_manager() OR app_is_establishment_admin(establishment_id))';
+    IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename = t AND permissive = 'PERMISSIVE' AND policyname NOT IN (prefix || '_read', prefix || '_insert', prefix || '_update')) THEN
+      RAISE EXCEPTION 'Unexpected permissive policy on %: review before changing document permissions', t;
+    END IF;
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', prefix || '_read', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', prefix || '_insert', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', prefix || '_update', t);
@@ -22,9 +25,6 @@ BEGIN
     EXECUTE format('CREATE POLICY %I ON %I FOR UPDATE USING (%s) WITH CHECK (%s)', prefix || '_update', t, scope_expr, scope_expr);
     EXECUTE format('DROP POLICY IF EXISTS platform_document_deny ON %I', t);
     EXECUTE format('CREATE POLICY platform_document_deny ON %I AS RESTRICTIVE FOR ALL TO app_runtime USING (NOT app_is_superadmin()) WITH CHECK (NOT app_is_superadmin())', t);
-    -- Ensure there is no role-specific permissive bypass beyond the expected policies.
-    IF EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = current_schema() AND tablename = t AND permissive = 'PERMISSIVE' AND policyname NOT IN (prefix || '_read', prefix || '_insert', prefix || '_update')) THEN
-      RAISE EXCEPTION 'Unexpected permissive policy on %: review before changing document permissions', t;
-    END IF;
+
   END LOOP;
 END $$;
