@@ -3,6 +3,10 @@ import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { evaluateWorkerEligibility } from "../eligibility/eligibility.service.js";
 
+/** "1 turno" / "3 turnos": real Spanish plurals instead of a parenthesized plural. */
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+
 export class CoverageRecommendationForbiddenError extends Error {
   constructor() {
     super("COVERAGE_RECOMMENDATION_FORBIDDEN");
@@ -170,7 +174,7 @@ export async function recommendCoverage(
       reasons.push("Coincide con su disponibilidad declarada");
     }
     if (worker.continuity_count > 0) {
-      reasons.push(`Continuidad: ${worker.continuity_count} turno(s) completado(s) con esta persona`);
+      reasons.push(`Continuidad: ${count(worker.continuity_count, "turno completado", "turnos completados")} con esta persona`);
     }
     const scheduledHours = Math.round((worker.scheduled_minutes_next_7_days / 60) * 10) / 10;
     reasons.push(`Carga próxima: ${scheduledHours} h programadas en 7 días`);

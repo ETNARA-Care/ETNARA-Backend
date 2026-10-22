@@ -75,7 +75,7 @@ async function requireManager(trx: unknown): Promise<void> {
 async function buildOperationsCenter(trx: unknown, organizationId: string): Promise<OperationsCenter> {
   const shifts = await sql<any>`
     SELECT s.id, s.scheduled_start, s.scheduled_end,
-      trim(concat_ws(' ', cr.first_name, cr.last_name)) recipient,
+      COALESCE(NULLIF(trim(cr.preferred_name), ''), trim(concat_ws(' ', cr.first_name, cr.last_name))) recipient,
       EXISTS (
         SELECT 1 FROM assignments a
         WHERE a.shift_id = s.id
@@ -107,7 +107,7 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
 
   const incidents = await sql<any>`
     SELECT i.id, i.created_at, i.severity,
-      trim(concat_ws(' ', cr.first_name, cr.last_name)) recipient
+      COALESCE(NULLIF(trim(cr.preferred_name), ''), trim(concat_ws(' ', cr.first_name, cr.last_name))) recipient
     FROM incidents i
     JOIN care_recipients cr ON cr.id = i.care_recipient_id
     WHERE i.organization_id = ${organizationId} AND i.status <> 'resolved'
