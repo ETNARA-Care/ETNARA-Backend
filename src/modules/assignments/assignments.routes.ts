@@ -32,7 +32,7 @@ const router = Router();
 const uuidParam = z.string().uuid();
 
 function logUnexpectedAssignmentError(operation: string, err: unknown): void {
-  const error = err instanceof Error ? err : new Error("Unknown error");
+  const errorName = err instanceof Error ? err.name : "UnknownError";
   const databaseCode =
     typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
       ? err.code
@@ -42,8 +42,7 @@ function logUnexpectedAssignmentError(operation: string, err: unknown): void {
   // organization IDs, shift IDs, SQL text, or clinical information.
   console.error("Unexpected assignment operation failure", {
     operation,
-    name: error.name,
-    message: error.message,
+    name: errorName,
     ...(databaseCode ? { databaseCode } : {}),
   });
 }
