@@ -10,8 +10,8 @@ describe("Phase 9.1 assisted compliance agent", () => {
 
     expect(service).toContain("getComplianceSummary(userId, organizationId");
     expect(service).toContain("c.expires_at BETWEEN current_date AND current_date + 30");
-    expect(service).toContain("PLATFORM_VERIFICATION_REJECTED");
     expect(service).toContain("CREDENTIAL_EXPIRED");
+    expect(service).toContain("ORGANIZATION_REVIEW_MISSING");
     expect(service).toContain("selected = priorityCandidates.slice(0, 5)");
     expect(service).not.toMatch(/openai|anthropic|mock/i);
   });
