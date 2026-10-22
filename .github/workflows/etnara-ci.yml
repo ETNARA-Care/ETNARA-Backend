@@ -100,6 +100,7 @@ jobs:
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
+          npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
 
       - name: Diff safety check
         run: git diff --check

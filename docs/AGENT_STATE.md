@@ -2,6 +2,20 @@
 
 ## Current Status
 
+## 2026-10-22 — Phase 12.3 staff roles + existing accounts (gate/12.3-staff-roles-existing-accounts)
+
+- POST /organizations/:id/team/roles {membershipId | workerMembershipId, role,
+  enabled}: ORGANIZATION_ADMIN gives or removes SUPERVISOR/ADMINISTRATOR to
+  someone already in the agency. A caregiver keeps WORKER (decision: both
+  roles). Guards: cannot remove own admin, never the last admin (advisory
+  lock), caregiver must have an activated account. RLS from 085 unchanged.
+- Team list exposes workerMembershipId for staff who also work shifts.
+- POST /platform/admin-invitations/accept (authenticated): an existing ETNARA
+  account accepts a staff invitation; the SQL function checks the invited email
+  is this user (INVITATION_IDENTITY_MISMATCH otherwise).
+- Verification: scripts/verifyStaffRolesAndExistingAccounts.ts 18/18 in CI.
+  No migration.
+
 ## 2026-10-22 — Phase 12.2 team invitations + administrator authority (gate/12.2-team-invitations-admin-authority)
 
 - Migration 085:
