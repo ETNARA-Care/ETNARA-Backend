@@ -9,14 +9,14 @@ SmartMatch is **not deployed**. Backend PR #179 and frontend PR #203 must remain
 - Runtime logs showed PostgreSQL error 42883 from `app_advance_due_coverage_campaigns()`; database initialization remains unverified.
 - Never reuse real agency, caregiver, resident or patient data in this environment.
 
-## Migration coordination HOLD
-- The user is completing five concurrent changes. Do **not** apply or publish migrations until the user confirms they are finished.
-- Migration number **082 is reserved for PR #187** (agency-document privacy); SmartMatch must not claim or reuse 082.
-- Do not merge PR #179, PR #203 or PR #187, apply migrations, or change any production Railway service as part of this gate.
+## Migration coordination (2026-10-22)
+- User confirmed the five concurrent changes are finished; the previous waiting condition is cleared.
+- Migration number **082 belongs to PR #187** (agency-document privacy); SmartMatch must not claim or reuse 082.
+- Continue isolated staging preparation and security verification. Do not merge PR #179, PR #203 or PR #187 or change production Railway services without a validated deployment plan.
 - SmartMatch currently carries proposed migrations 078–081; reconcile these numbers against the latest main migration ledger before execution. Existing numbers may collide with other work.
 - Both SmartMatch branches diverge from main; review/rebase conflicts separately, only after concurrent work is settled.
 
-## Verification sequence (once the migration hold is lifted)
+## Verification sequence before demo release
 1. Verify staging database identity, backup and migration ledger; reconcile all migration numbers without overwriting existing migrations.
 2. Initialize **only the isolated** PostgreSQL schema with approved migrations. Check functions, grants, FORCE RLS and restrictive policies using `app_runtime` (not the table owner).
 3. Create two synthetic agencies A/B, agency admins, and fictional caregivers. No patient names, actual addresses, or production credentials.
