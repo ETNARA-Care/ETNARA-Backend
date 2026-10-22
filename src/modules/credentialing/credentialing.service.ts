@@ -786,6 +786,7 @@ export async function createOrUpdateOrganizationReview(
         WHERE id = ${existing.rows[0].id}
         RETURNING id, credential_id, organization_id, review_status, notes, reviewed_at
       `.execute(trx);
+      await sql`SELECT app_notify_credential_review_result(${credentialId}, ${input.reviewStatus})`.execute(trx);
       return result.rows[0];
     }
 
@@ -804,6 +805,7 @@ export async function createOrUpdateOrganizationReview(
       )
       RETURNING id, credential_id, organization_id, review_status, notes, reviewed_at
     `.execute(trx);
+    await sql`SELECT app_notify_credential_review_result(${credentialId}, ${input.reviewStatus})`.execute(trx);
     return result.rows[0];
   });
 }
