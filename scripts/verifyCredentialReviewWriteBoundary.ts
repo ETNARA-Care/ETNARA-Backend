@@ -7,7 +7,7 @@ if (!connectionString) throw new Error("MIGRATIONS_DATABASE_URL is required");
 const client = new Client({ connectionString });
 const q = (text: string, params: unknown[] = []) => client.query(text, params);
 
-async function runtimeContext(userId: string, organizationId: string, fn: () => Promise<void>) {
+async function runtimeContext(userId: string, organizationId: string, fn: () => Promise<void>, commit = false) {
   await q("BEGIN");
   try {
     await q("SET LOCAL ROLE app_runtime");
@@ -15,7 +15,7 @@ async function runtimeContext(userId: string, organizationId: string, fn: () => 
     await q("SELECT set_config('app.current_org_id',$1,true)", [organizationId]);
     await q("SELECT set_config('app.is_superadmin','false',true)");
     await fn();
-    await q("ROLLBACK");
+    await q(commit ? "COMMIT" : "ROLLBACK");
   } catch (error) {
     try { await q("ROLLBACK"); } catch {}
     throw error;
@@ -74,7 +74,7 @@ async function main() {
 
       const other = await q(`SELECT app_reset_credential_review_pending($1) AS count`,[credentialOther]);
       if (Number(other.rows[0]?.count ?? 0) !== 0) throw new Error("caregiver reset another caregiver credential");
-    });
+    }, true);
 
     const afterReset = (await q(`SELECT review_status,notes,reviewed_at FROM organization_credential_reviews WHERE id=$1`,[reviewA])).rows[0];
     if (afterReset.review_status !== "pending" || afterReset.notes !== null || afterReset.reviewed_at !== null) {
