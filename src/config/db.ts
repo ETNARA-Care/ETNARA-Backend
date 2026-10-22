@@ -41,7 +41,12 @@ pool.on("error", (err) => {
   // This must never crash the whole process silently -- log and let the
   // pool recover on next checkout.
   // eslint-disable-next-line no-console
-  console.error("Unexpected PostgreSQL pool error on idle client", err);
+  console.error("Unexpected PostgreSQL pool error on idle client", {
+    name: err.name,
+    code: typeof (err as Error & { code?: unknown }).code === "string"
+      ? (err as Error & { code: string }).code
+      : "UNKNOWN",
+  });
 });
 
 export interface Database {
