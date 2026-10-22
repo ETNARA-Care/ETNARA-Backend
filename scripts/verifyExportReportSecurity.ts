@@ -7,7 +7,7 @@ const ALLOWED_PLATFORM_EXPORT_FILES = new Set<string>([
   // here after security review. Keep empty by default.
 ]);
 
-const exportPattern = /(?:text\/csv|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/pdf|Content-Disposition|attachment;|\/export(?:s)?\b|\/reports?\b|csv-stringify|exceljs|xlsx|papaparse)/i;
+const exportPattern = /(?:text\/csv|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|Content-Disposition|attachment;|\/export(?:s)?\b|\/reports?\b|csv-stringify|exceljs|xlsx|papaparse)/i;
 const platformRoutePattern = /\/platform\//;
 const tenantContextPattern = /withTenantContext\s*\(/;
 const platformContextPattern = /withPlatformContext\s*\(/;
