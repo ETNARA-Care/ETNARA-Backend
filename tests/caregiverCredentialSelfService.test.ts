@@ -50,12 +50,8 @@ describe("caregiver credential self-service security contract", () => {
       "export async function completeCredentialDocumentUpload",
       "export async function listCredentialDocumentVersions",
     );
-    expect(complete).toMatch(
-      /UPDATE organization_credential_reviews[\s\S]*review_status = 'pending'[\s\S]*notes = NULL[\s\S]*reviewed_at = NULL/,
-    );
-    expect(complete).toMatch(
-      /WHERE credential_id = \$\{credentialId\} AND organization_id = \$\{organizationId\}/,
-    );
+    expect(complete).toContain("app_reset_credential_review_pending(${credentialId})");
+    expect(complete).not.toMatch(/UPDATE organization_credential_reviews/);
   });
 
   it("requires a reason when the agency rejects a caregiver credential", () => {
