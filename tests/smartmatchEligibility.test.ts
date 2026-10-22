@@ -36,4 +36,23 @@ describe("SmartMatch eligibility", () => {
     expect(isSmartMatchEligible({ ...eligible, credentialEligible: false })).toBe(false);
     expect(isSmartMatchEligible({ ...eligible, scheduleAvailable: false })).toBe(false);
   });
+  it("rejects non-finite, fractional, negative and excessive travel estimates", () => {
+    for (const drivingMinutes of [NaN, Infinity, -1, 24.5, 26]) {
+      expect(isSmartMatchEligible({ ...eligible, drivingMinutes })).toBe(false);
+    }
+    expect(isSmartMatchEligible({ ...eligible, drivingMinutes: 0 })).toBe(true);
+  });
+
+  it("never lets network membership override caregiver consent or credentials", () => {
+    const network = {
+      ...eligible,
+      visibility: "NETWORK" as const,
+      sameOrganization: false,
+      activeNetworkMembership: true,
+    };
+    expect(isSmartMatchEligible({ ...network, optedIn: false })).toBe(false);
+    expect(isSmartMatchEligible({ ...network, credentialEligible: false })).toBe(false);
+    expect(isSmartMatchEligible({ ...network, scheduleAvailable: false })).toBe(false);
+  });
+
 });
