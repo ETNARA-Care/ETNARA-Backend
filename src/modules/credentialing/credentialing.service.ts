@@ -427,6 +427,7 @@ export async function completeCredentialDocumentUpload(
       SET review_status = 'pending', notes = NULL, reviewed_at = NULL
       WHERE credential_id = ${credentialId} AND organization_id = ${organizationId}
     `.execute(trx);
+    await sql`SELECT app_notify_credential_review_managers(${credentialId})`.execute(trx);
     return { documentId, fileId, version, status: "presented" as const };
   });
 }
@@ -631,6 +632,85 @@ export async function updateCredential(
   });
 }
 
+export interface PendingCredentialReviewItem {
+  membershipId: string;
+  workerId: string;
+  workerDisplayName: string | null;
+  credentialId: string;
+  credentialTypeCode: string;
+  credentialTypeName: string;
+  expiresAt: string | null;
+  fileId: string;
+  originalFilename: string;
+  contentType: string;
+  sizeBytes: number;
+  submittedAt: string;
+}
+
+export async function listPendingOrganizationCredentialReviews(
+  userId: string,
+  organizationId: string
+): Promise<PendingCredentialReviewItem[]> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertCredentialManager(trx);
+    const result = await sql<{
+      membership_id: string;
+      worker_id: string;
+      display_name: string | null;
+      credential_id: string;
+      type_code: string;
+      type_name: string;
+      expires_at: string | null;
+      file_id: string;
+      original_filename: string;
+      content_type: string;
+      size_bytes: string;
+      submitted_at: string;
+    }>`
+      SELECT owm.id AS membership_id,
+             w.id AS worker_id,
+             w.display_name,
+             c.id AS credential_id,
+             ct.code AS type_code,
+             ct.name AS type_name,
+             c.expires_at,
+             sf.id AS file_id,
+             sf.original_filename,
+             sf.content_type,
+             sf.size_bytes,
+             dv.created_at AS submitted_at
+      FROM organization_worker_memberships owm
+      JOIN workers w ON w.id = owm.worker_id
+      JOIN credentials c ON c.worker_id = w.id AND c.status <> 'revoked'
+      JOIN credential_types ct ON ct.id = c.credential_type_id
+      JOIN documents d ON d.id = c.document_id
+      JOIN stored_files sf ON sf.id = d.file_id AND sf.status = 'active'
+      JOIN document_versions dv ON dv.document_id = d.id AND dv.file_id = d.file_id
+      LEFT JOIN organization_credential_reviews ocr
+        ON ocr.credential_id = c.id AND ocr.organization_id = ${organizationId}
+      WHERE owm.organization_id = ${organizationId}
+        AND owm.status = 'active'
+        AND COALESCE(ocr.review_status, 'pending') = 'pending'
+      ORDER BY dv.created_at ASC, w.display_name NULLS LAST, ct.name
+    `.execute(trx);
+
+    return result.rows.map((row) => ({
+      membershipId: row.membership_id,
+      workerId: row.worker_id,
+      workerDisplayName: row.display_name,
+      credentialId: row.credential_id,
+      credentialTypeCode: row.type_code,
+      credentialTypeName: row.type_name,
+      expiresAt: row.expires_at,
+      fileId: row.file_id,
+      originalFilename: row.original_filename,
+      contentType: row.content_type,
+      sizeBytes: Number(row.size_bytes),
+      submittedAt: row.submitted_at,
+    }));
+  });
+}
+
 // ===================== Platform Verification =====================
 
 
@@ -706,6 +786,7 @@ export async function createOrUpdateOrganizationReview(
         WHERE id = ${existing.rows[0].id}
         RETURNING id, credential_id, organization_id, review_status, notes, reviewed_at
       `.execute(trx);
+      await sql`SELECT app_notify_credential_review_result(${credentialId}, ${input.reviewStatus})`.execute(trx);
       return result.rows[0];
     }
 
@@ -724,6 +805,7 @@ export async function createOrUpdateOrganizationReview(
       )
       RETURNING id, credential_id, organization_id, review_status, notes, reviewed_at
     `.execute(trx);
+    await sql`SELECT app_notify_credential_review_result(${credentialId}, ${input.reviewStatus})`.execute(trx);
     return result.rows[0];
   });
 }

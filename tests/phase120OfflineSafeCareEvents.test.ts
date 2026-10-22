@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const read = (path: string) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8");
 const service = read("src/modules/careEvents/careEvents.service.ts");
 const routes = read("src/modules/careEvents/careEvents.routes.ts");
-const migration080 = read("migrations/080_care_event_client_ids.sql");
+const migration080 = read("migrations/083_care_event_client_ids.sql");
 const migration081 = read("migrations/081_fix_shift_assignment_rls_recursion.sql");
 const ci = read(".github/workflows/etnara-ci.yml");
 

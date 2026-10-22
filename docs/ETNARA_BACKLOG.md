@@ -14,6 +14,11 @@ Status: Gate implemented and verified locally; awaiting PASS.
   type of parameter $4"; acceptance succeeds, conversation access may not.
 
 Status: Found during Phase 12.0; not started.
+### BUG — assignment acceptance messaging sync
+- caregivers were never added to the recipient conversation on acceptance
+- fixed by resolving the thread with app_find_family_thread_id() and casting parameters
+
+Status: Fixed on `fix/assignment-messaging-sync`; verified 7/7 against PostgreSQL 16.
 
 ### ETN-038 — Phase 10.0 multi-agency establishments
 - reuse organizations as the legal tenant and locations as establishments

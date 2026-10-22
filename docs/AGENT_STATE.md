@@ -4,7 +4,7 @@
 
 ## 2026-10-21 — Phase 12.0 offline-safe care events (gate/12.0-offline-safe-care-events)
 
-- Migration 080 adds nullable `care_events.client_event_id` with a partial
+- Migration 083 (renumbered from 080 to avoid a clash) adds nullable `care_events.client_event_id` with a partial
   unique index on (organization_id, organization_worker_membership_id,
   client_event_id). Additive only; RLS policies unchanged.
 - POST care-events accepts optional `clientEventId` and `occurredAt`. A retry
@@ -27,9 +27,24 @@
 - Validation on fresh PostgreSQL 16: bootstrap x2, tenant isolation, platform
   PHI boundary, invitation activation, new verifyCareEventIdempotency (17/17),
   76 files / 250 tests, build and diff check pass.
-- Exact next step: Rafa's gate PASS, then apply 080 + 081 on Railway before
+- Exact next step: Rafa's gate PASS, then deploy; the Railway pre-deploy bootstrap applies 083 before
   the frontend offline queue ships.
 
+## 2026-10-21 — Fix: caregiver never joined the recipient conversation (fix/assignment-messaging-sync)
+
+- Accepting a shift logged "messaging synchronization failed: could not
+  determine data type of parameter $4" from an untyped `${roomId} IS NOT NULL`.
+- Root cause was deeper: message_threads_read only shows threads the user already
+  participates in, so the accepting worker could never SELECT the thread to join.
+  Even with the cast the INSERT…SELECT inserted 0 rows.
+- The thread is now resolved with the existing SECURITY DEFINER helper
+  app_find_family_thread_id() (migration 035); the INSERT stays under
+  message_thread_participants_write (self only, authorized recipient only).
+  No new privileged function, no RLS change.
+- verifyAssignmentMessagingSync.ts: 3/6 before the fix, 7/7 after, including a
+  direct RLS attack (joining an unassigned recipient's thread is rejected). Wired into CI.
+- Regression: tenant isolation, platform PHI, invitations, 88 files / 272 tests,
+  build and diff check pass.
 
 Project: ETNARA Care
 Repository: ETNARA-Backend
