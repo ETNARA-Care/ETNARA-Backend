@@ -75,6 +75,9 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyAccessInvitationActivation.ts
 
+      - name: Export/report security guard
+        run: npx tsx scripts/verifyExportReportSecurity.ts
+
       - name: PostgreSQL HTTP and RLS verifications (seeded demo)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
