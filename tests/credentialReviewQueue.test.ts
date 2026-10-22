@@ -30,7 +30,7 @@ describe("credential review queue and notifications", () => {
     const service = read("src/modules/credentialing/credentialing.service.ts");
     const migration = read("migrations/080_credential_review_queue_notifications.sql");
 
-    expect(service).toMatch(/UPDATE organization_credential_reviews[\s\S]*review_status = 'pending'[\s\S]*app_notify_credential_review_managers/);
+    expect(service).toMatch(/app_reset_credential_review_pending\(\$\{credentialId\}\)[\s\S]*app_notify_credential_review_managers/);
     expect(migration).toContain("SECURITY DEFINER SET search_path = public");
     expect(migration).toContain("r.code IN ('ORGANIZATION_ADMIN', 'SUPERVISOR')");
     expect(migration).toContain("w.user_id = v_current_user_id");
