@@ -1,24 +1,33 @@
 # SmartMatch — Demo agency verification gate
 
-SmartMatch demo is **not deployed**. Backend PR #179 and frontend PR #203 are draft.
+SmartMatch is **not deployed**. Backend PR #179 and frontend PR #203 must remain unmerged until security validation.
 
-## Environment gate (mandatory)
-Railway project `hopeful-education` currently exposes only the environment named `production`. Services named `etnara-care-backend-staging` and `etnara-care-staging-db` are within that production environment. Service names alone do not prove isolation.
+## Verified isolated environment (2026-10-22)
+- Railway project: `etnara-document-security-staging` (`b829c0bd-43a3-4458-82b3-c4650b840173`), environment `staging` (`651dd762-08c1-4674-97de-d11869579df1`).
+- Independent PostgreSQL service and backend service exist; Railway reports both deployments SUCCESS.
+- The backend service currently tracks `audit/agency-document-permissions-20261022`, **not** this SmartMatch branch. Deployment SUCCESS does **not** prove SmartMatch is deployed or that the database schema is initialized.
+- Runtime logs showed PostgreSQL error 42883 from `app_advance_due_coverage_campaigns()`; database initialization remains unverified.
+- Never reuse real agency, caregiver, resident or patient data in this environment.
 
-Do not apply migrations 078–080, merge, or switch the production service source branch merely to run this demo. First provision/verify an isolated nonproduction environment and database, with only synthetic users and synthetic opportunities.
+## Migration coordination HOLD
+- The user is completing five concurrent changes. Do **not** apply or publish migrations until the user confirms they are finished.
+- Migration number **082 is reserved for PR #187** (agency-document privacy); SmartMatch must not claim or reuse 082.
+- Do not merge PR #179, PR #203 or PR #187, apply migrations, or change any production Railway service as part of this gate.
+- SmartMatch currently carries proposed migrations 078–081; reconcile these numbers against the latest main migration ledger before execution. Existing numbers may collide with other work.
+- Both SmartMatch branches diverge from main; review/rebase conflicts separately, only after concurrent work is settled.
 
-## Verification sequence
-1. Back up or snapshot the isolated database and verify its connection target.
-2. Apply migrations 078, 079, 080 on the isolated database and inspect grants, FORCE RLS, and policy behavior as `app_runtime` (not the table owner).
-3. Seed two **synthetic** active agencies A and B with different organization admins. Never reuse real patient records.
-4. Authenticate admin A, create an INTERNAL draft, list it, publish it. Verify admin B cannot read or update A's opportunity even if the UUID is known.
-5. Verify non-admin A and platform administration cannot list, create, or publish agency opportunities.
-6. Verify an invalid date range and NETWORK publication are rejected.
-7. Verify no patient name, exact address, or clinical fields appear in any response. Validate caregiver-location and application tables remain inaccessible.
-8. Open frontend PR #203 preview against this isolated backend, select agency A/B, confirm the UI refetches on org switch and never shows stale A records while B is selected.
-9. Verify API, database, and frontend tests; record observed outcomes, not assumptions.
+## Verification sequence (once the migration hold is lifted)
+1. Verify staging database identity, backup and migration ledger; reconcile all migration numbers without overwriting existing migrations.
+2. Initialize **only the isolated** PostgreSQL schema with approved migrations. Check functions, grants, FORCE RLS and restrictive policies using `app_runtime` (not the table owner).
+3. Create two synthetic agencies A/B, agency admins, and fictional caregivers. No patient names, actual addresses, or production credentials.
+4. Authenticate admin A: create an INTERNAL draft, list and publish. Confirm admin B cannot list, read, modify or publish A's opportunity even when given its UUID.
+5. Confirm platform administrators and unauthorized agency users cannot browse private opportunities or underlying agency documents.
+6. Reject invalid date ranges and NETWORK publication until network-mode opt-in and security review are complete.
+7. Confirm all opportunity responses, audit logs and errors omit patient identifiers, exact service addresses and precise caregiver coordinates.
+8. Connect the frontend PR #203 preview to isolated staging; switch A/B and verify stale A records never display for B.
+9. Verify API tests, RLS PostgreSQL integration tests and frontend tests; record observed results and outstanding failures.
 
-## Not yet supported
-- Caregiver opportunity discovery, 25-minute routing, consent-based saved location, applications, eligibility and transactional approval are not implemented as integrated endpoints.
-- The current published opportunity is **metadata only**, not yet linked to an actual shift/patient.
-- CI green is not equivalent to a PostgreSQL RLS integration test.
+## Current limitations
+- The existing agency demo UI supports draft/list/publish opportunities; this is not an end-to-end SmartMatch assignment flow.
+- Caregiver discovery, route-time provider integration, location consent persistence, integrated applications, eligibility recheck and transactional assignment approval need end-to-end validation/implementation.
+- CI passing and Railway deployment SUCCESS do not replace real PostgreSQL authorization tests.
