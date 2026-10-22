@@ -2,6 +2,18 @@
 
 ## In Progress
 
+### BPH12-001 — Phase 12.0 offline-safe care events
+- idempotent care event creation with device `clientEventId`
+- device `occurredAt` bounded by the active visit
+- migration 081 fixes the shift-assignment RLS recursion introduced by 076
+
+Status: Gate implemented and verified locally; awaiting PASS.
+
+### BUG — assignment acceptance messaging sync
+- `syncAssignedWorkerConversationAccess` fails with "could not determine data
+  type of parameter $4"; acceptance succeeds, conversation access may not.
+
+Status: Found during Phase 12.0; not started.
 ### BUG — assignment acceptance messaging sync
 - caregivers were never added to the recipient conversation on acceptance
 - fixed by resolving the thread with app_find_family_thread_id() and casting parameters

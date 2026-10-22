@@ -11,6 +11,8 @@ import {
   RecipientNotInContextError,
   EventTypeNotEnabledError,
   InvalidFileForPhotoError,
+  OccurredAtOutOfRangeError,
+  ClientEventConflictError,
 } from "./careEvents.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -53,6 +55,14 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(409).json({ error: "EVENT_TYPE_NOT_ENABLED" });
     return true;
   }
+  if (err instanceof OccurredAtOutOfRangeError) {
+    res.status(400).json({ error: "OCCURRED_AT_OUT_OF_RANGE" });
+    return true;
+  }
+  if (err instanceof ClientEventConflictError) {
+    res.status(409).json({ error: "CLIENT_EVENT_ID_CONFLICT" });
+    return true;
+  }
   if (err instanceof InvalidFileForPhotoError) {
     res.status(400).json({ error: err.message });
     return true;
@@ -79,13 +89,14 @@ router.post(
       return;
     }
     try {
-      const event = await createCareEvent(
+      const { event, replayed } = await createCareEvent(
         req.auth!.userId,
         orgIdParsed.data,
         String(req.params.shiftId),
         bodyParsed.data
       );
-      res.status(201).json({ event });
+      // 201 for a new record; 200 when a retry returns the record already stored.
+      res.status(replayed ? 200 : 201).json({ event, replayed });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
