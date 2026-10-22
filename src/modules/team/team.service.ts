@@ -19,7 +19,7 @@ export class TeamForbiddenError extends Error {
 }
 
 export class TeamInvitationError extends Error {
-  constructor(public readonly code: "ALREADY_A_MEMBER" | "INVITATION_NOT_FOUND") {
+  constructor(public readonly code: "ALREADY_A_MEMBER" | "INVITATION_NOT_FOUND" | "MEMBER_NOT_FOUND" | "NO_ACCOUNT_YET" | "CANNOT_REMOVE_OWN_ADMIN" | "LAST_ADMIN") {
     super(code);
     this.name = "TeamInvitationError";
   }
@@ -42,6 +42,8 @@ export interface TeamMember {
   email: string;
   roles: Array<"ORGANIZATION_ADMIN" | "SUPERVISOR">;
   isYou: boolean;
+  /** Set when this person also works shifts as a caregiver here. */
+  workerMembershipId: string | null;
 }
 
 export interface TeamInvitation {
@@ -55,9 +57,11 @@ export interface TeamInvitation {
 export async function listTeam(userId: string, organizationId: string): Promise<{ members: TeamMember[]; invitations: TeamInvitation[] }> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertOrgAdmin(trx);
-    const members = await sql<{ membership_id: string; email: string; user_id: string; roles: string[] }>`
+    const members = await sql<{ membership_id: string; email: string; user_id: string; roles: string[]; worker_membership_id: string | null }>`
       SELECT om.id AS membership_id, u.email, u.id AS user_id,
-             array_agg(DISTINCT r.code ORDER BY r.code) AS roles
+             array_agg(DISTINCT r.code ORDER BY r.code) AS roles,
+             (SELECT owm.id FROM workers w JOIN organization_worker_memberships owm ON owm.worker_id = w.id
+               WHERE w.user_id = u.id AND owm.organization_id = om.organization_id AND owm.status = 'active' LIMIT 1) AS worker_membership_id
       FROM organization_memberships om
       JOIN users u ON u.id = om.user_id
       JOIN user_roles ur ON ur.organization_membership_id = om.id AND ur.organization_id = om.organization_id
@@ -83,6 +87,7 @@ export async function listTeam(userId: string, organizationId: string): Promise<
         email: row.email,
         roles: row.roles.filter((code): code is "ORGANIZATION_ADMIN" | "SUPERVISOR" => code === "ORGANIZATION_ADMIN" || code === "SUPERVISOR"),
         isYou: row.user_id === userId,
+        workerMembershipId: row.worker_membership_id,
       })),
       invitations: invitations.rows.map((row) => ({
         id: row.id,
@@ -153,5 +158,69 @@ export async function revokeTeamInvitation(userId: string, organizationId: strin
     `.execute(trx);
     if (!result.rows[0]) throw new TeamInvitationError("INVITATION_NOT_FOUND");
     return { id: result.rows[0].id };
+  });
+}
+
+/**
+ * Phase 12.3: give or remove a staff role to someone already in this agency
+ * (e.g. a caregiver who also becomes a supervisor and keeps working shifts).
+ * Identify the person by organization membership or by caregiver membership.
+ */
+export const setStaffRoleSchema = z.object({
+  membershipId: z.string().uuid().optional(),
+  workerMembershipId: z.string().uuid().optional(),
+  role: staffRoleSchema,
+  enabled: z.boolean(),
+}).strict().refine((value) => Boolean(value.membershipId) !== Boolean(value.workerMembershipId), {
+  message: "Exactly one of membershipId or workerMembershipId",
+});
+export type SetStaffRoleInput = z.infer<typeof setStaffRoleSchema>;
+
+export async function setStaffRole(userId: string, organizationId: string, input: SetStaffRoleInput) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgAdmin(trx);
+    // Serialize role changes per agency so two admins cannot remove each other at once.
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${"team-roles:" + organizationId}))`.execute(trx);
+    const target = input.membershipId
+      ? await sql<{ membership_id: string; user_id: string }>`
+          SELECT om.id AS membership_id, om.user_id FROM organization_memberships om
+          WHERE om.id = ${input.membershipId}::uuid AND om.organization_id = ${organizationId} AND om.status = 'active'
+        `.execute(trx)
+      : await sql<{ membership_id: string | null; user_id: string | null }>`
+          SELECT om.id AS membership_id, w.user_id FROM organization_worker_memberships owm
+          JOIN workers w ON w.id = owm.worker_id
+          LEFT JOIN organization_memberships om ON om.user_id = w.user_id AND om.organization_id = owm.organization_id AND om.status = 'active'
+          WHERE owm.id = ${input.workerMembershipId!}::uuid AND owm.organization_id = ${organizationId} AND owm.status = 'active'
+        `.execute(trx);
+    const row = target.rows[0];
+    if (!row) throw new TeamInvitationError("MEMBER_NOT_FOUND");
+    if (!row.membership_id || !row.user_id) throw new TeamInvitationError("NO_ACCOUNT_YET");
+
+    const role = await sql<{ id: string }>`SELECT id FROM roles WHERE code = ${input.role} LIMIT 1`.execute(trx);
+    if (!role.rows[0]) throw new Error("ROLE_NOT_CONFIGURED");
+
+    if (input.enabled) {
+      await sql`
+        INSERT INTO user_roles (organization_membership_id, organization_id, role_id)
+        VALUES (${row.membership_id}::uuid, ${organizationId}, ${role.rows[0].id})
+        ON CONFLICT ON CONSTRAINT user_roles_organization_membership_id_role_id_key DO NOTHING
+      `.execute(trx);
+    } else {
+      if (input.role === "ORGANIZATION_ADMIN") {
+        if (row.user_id === userId) throw new TeamInvitationError("CANNOT_REMOVE_OWN_ADMIN");
+        const admins = await sql<{ count: string }>`
+          SELECT count(DISTINCT om.id)::text AS count FROM organization_memberships om
+          JOIN user_roles ur ON ur.organization_membership_id = om.id AND ur.organization_id = om.organization_id
+          JOIN roles r ON r.id = ur.role_id
+          WHERE om.organization_id = ${organizationId} AND om.status = 'active' AND r.code = 'ORGANIZATION_ADMIN'
+        `.execute(trx);
+        if (Number(admins.rows[0]?.count ?? 0) <= 1) throw new TeamInvitationError("LAST_ADMIN");
+      }
+      await sql`
+        DELETE FROM user_roles
+        WHERE organization_membership_id = ${row.membership_id}::uuid AND organization_id = ${organizationId} AND role_id = ${role.rows[0].id}
+      `.execute(trx);
+    }
+    return { membershipId: row.membership_id, role: input.role, enabled: input.enabled };
   });
 }

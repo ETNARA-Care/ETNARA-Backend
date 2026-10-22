@@ -9,6 +9,8 @@ import {
   inviteTeamMemberSchema,
   listTeam,
   revokeTeamInvitation,
+  setStaffRole,
+  setStaffRoleSchema,
 } from "./team.service.js";
 
 const router = Router();
@@ -24,7 +26,8 @@ function handleError(error: unknown, res: Response) {
     return;
   }
   if (error instanceof TeamInvitationError) {
-    res.status(error.code === "INVITATION_NOT_FOUND" ? 404 : 409).json({ error: error.code });
+    const status = error.code === "INVITATION_NOT_FOUND" || error.code === "MEMBER_NOT_FOUND" ? 404 : 409;
+    res.status(status).json({ error: error.code });
     return;
   }
   res.status(500).json({ error: "INTERNAL_ERROR" });
@@ -58,6 +61,18 @@ router.post("/organizations/:organizationId/team/invitations/:invitationId/revok
   if (!org.success || !invitation.success) return void res.status(400).json({ error: "INVALID_ID" });
   try {
     res.status(200).json(await revokeTeamInvitation(req.auth!.userId, org.data, invitation.data));
+  } catch (error) {
+    handleError(error, res);
+  }
+});
+
+router.post("/organizations/:organizationId/team/roles", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuid.safeParse(req.params.organizationId);
+  if (!org.success) return void res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+  const body = setStaffRoleSchema.safeParse(req.body);
+  if (!body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  try {
+    res.status(200).json(await setStaffRole(req.auth!.userId, org.data, body.data));
   } catch (error) {
     handleError(error, res);
   }
