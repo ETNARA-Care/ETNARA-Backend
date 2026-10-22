@@ -364,8 +364,14 @@ export async function respondToMyAssignment(
         saved.roomId
       );
     } catch (error) {
-      const details = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
-      console.error(`Assignment accepted but messaging synchronization failed: ${details}`);
+      const name = error instanceof Error ? error.name : "UnknownError";
+      const databaseCode = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+      console.error("Assignment accepted but messaging synchronization failed", {
+        name,
+        ...(databaseCode ? { databaseCode } : {}),
+      });
     }
   }
 
