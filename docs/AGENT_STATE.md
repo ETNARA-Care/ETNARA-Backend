@@ -2,6 +2,17 @@
 
 ## Current Status
 
+## 2026-10-22 — Coverage truth + alert time (fix/coverage-truth-and-alert-time)
+
+- Workforce planning counts a shift as covered only with an ACCEPTED
+  assignment (same rule as operations.service `!shift.accepted`). Texts now say
+  "cuidador confirmado".
+- Operational alert detail formats the shift start in America/Puerto_Rico
+  without seconds (`formatShiftStart`); Railway runs in UTC, so the old
+  `toLocaleString("es-PR")` showed times 4 hours off.
+- Test: tests/fixCoverageTruthAndAlertTime.test.ts. No migration, no RLS change.
+- Pairs with ETNARAMVP fix/agency-coverage-compliance-truth.
+
 ## 2026-10-21 — Phase 12.0 offline-safe care events (gate/12.0-offline-safe-care-events)
 
 - Migration 083 (renumbered from 080 to avoid a clash) adds nullable `care_events.client_event_id` with a partial

@@ -121,7 +121,7 @@ export async function getWorkforceForecast(
         count(*) FILTER (
           WHERE NOT EXISTS (
             SELECT 1 FROM assignments a
-            WHERE a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
+            WHERE a.shift_id = s.id AND a.response_status = 'accepted'
           )
         )::int AS uncovered_shifts
       FROM shifts s
@@ -307,7 +307,7 @@ export async function getWorkforceForecast(
       recommendedActions.push("Revisar horarios y disponibilidad del personal apto.");
     }
     if (uncoveredShifts > 0) {
-      explanations.push(`${uncoveredShifts} turno(s) todavía no tienen cuidador asignado.`);
+      explanations.push(`${uncoveredShifts} turno(s) todavía no tienen cuidador confirmado.`);
       recommendedActions.push("Abrir Turnos y comenzar la cobertura de los turnos sin asignar.");
     }
     if (unknownAvailabilityWorkers > 0) {
@@ -345,8 +345,8 @@ export async function getWorkforceForecast(
       ? `${riskyDays.length} día(s) presentan riesgo alto o crítico dentro del periodo.`
       : "No se detectaron déficits conocidos de capacidad dentro del periodo.",
     uncoveredShifts > 0
-      ? `${uncoveredShifts} turno(s) continúan sin asignar y requieren decisión de Administración.`
-      : "Todos los turnos programados tienen una asignación activa.",
+      ? `${uncoveredShifts} turno(s) no tienen cuidador confirmado y requieren decisión de Administración.`
+      : "Todos los turnos programados tienen un cuidador confirmado.",
     credentialRisks.length > 0
       ? `${credentialRisks.length} credencial(es) vencerán durante el periodo analizado.`
       : "No hay vencimientos de credenciales registrados dentro del periodo.",
