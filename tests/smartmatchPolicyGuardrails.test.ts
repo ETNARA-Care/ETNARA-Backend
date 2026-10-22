@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const migration = readFileSync(resolve(process.cwd(), "migrations/080_smartmatch_agency_opportunity_rls.sql"), "utf8");
-const foundation = readFileSync(resolve(process.cwd(), "migrations/078_smartmatch_foundation.sql"), "utf8");
+const migration = readFileSync(resolve(process.cwd(), "migrations/092_smartmatch_agency_opportunity_rls.sql"), "utf8");
+const foundation = readFileSync(resolve(process.cwd(), "migrations/090_smartmatch_foundation.sql"), "utf8");
 
 describe("SmartMatch database policy guardrails", () => {
   it("forces RLS on all new tenant-owned tables", () => {
