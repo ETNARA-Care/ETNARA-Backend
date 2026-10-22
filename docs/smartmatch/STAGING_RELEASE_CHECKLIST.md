@@ -10,7 +10,7 @@
 - Branch `feat/smartmatch-phase1-foundation` has diverged from main. Do not deploy this branch against a schema assumed to match main without checking migrations.
 
 ## Blocking issues to resolve before a working demo
-1. Compare main's current migration ledger with SmartMatch migrations `078`–`081`; rename/sequence conflicting numbers safely. Migration `082` belongs to agency-document PR #187.
+1. Compare main's current migration ledger with SmartMatch migrations `090`–`093`; rename/sequence conflicting numbers safely. Migration `082` belongs to agency-document PR #187.
 2. Verify isolated staging PostgreSQL schema initialization and runtime role `app_runtime` credentials. Existing staging backend was reporting PostgreSQL `42883` for `app_advance_due_coverage_campaigns()`, consistent with missing function/schema.
 3. Review branch divergence and integrate only reviewed SmartMatch changes with the latest main, avoiding unreviewed overwrites.
 4. Apply vetted migrations to **isolated** PostgreSQL, verify grants and RLS as runtime role, and seed only fictional agency A and agency B.
