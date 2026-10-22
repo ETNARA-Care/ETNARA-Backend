@@ -422,11 +422,7 @@ export async function completeCredentialDocumentUpload(
       VALUES (${documentId}, ${fileId}, ${version})
     `.execute(trx);
     await sql`UPDATE stored_files SET status = 'active' WHERE id = ${fileId}`.execute(trx);
-    await sql`
-      UPDATE organization_credential_reviews
-      SET review_status = 'pending', notes = NULL, reviewed_at = NULL
-      WHERE credential_id = ${credentialId} AND organization_id = ${organizationId}
-    `.execute(trx);
+    await sql`SELECT app_reset_credential_review_pending(${credentialId})`.execute(trx);
     await sql`SELECT app_notify_credential_review_managers(${credentialId})`.execute(trx);
     return { documentId, fileId, version, status: "presented" as const };
   });
