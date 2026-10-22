@@ -8,8 +8,19 @@ on:
       - 'migrations/081_smartmatch_agency_application_review.sql'
       - 'scripts/smartmatch_*.sql'
       - '.github/workflows/smartmatch-postgres.yml'
+      - 'scripts/check_smartmatch_migration_numbers.py'
   workflow_dispatch:
 jobs:
+  migration-prefix-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch main for migration prefix comparison
+        run: git fetch origin main:refs/remotes/origin/main
+      - name: Reject migration number conflicts with main
+        run: python3 scripts/check_smartmatch_migration_numbers.py
   tenant-isolation:
     runs-on: ubuntu-latest
     services:
