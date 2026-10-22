@@ -150,3 +150,39 @@ export async function listAgencyPendingApplications(
     return rows.rows;
   });
 }
+
+
+/**
+ * Only sanitized opportunity metadata for active caregivers in their own
+ * organization. RLS independently enforces published/internal/tenant bounds.
+ * No route-time or credential eligibility is asserted by this endpoint.
+ */
+export async function listCaregiverInternalOpportunities(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const membership = await sql<{ allowed: boolean }>`
+      SELECT EXISTS (
+        SELECT 1 FROM organization_memberships om
+        JOIN user_roles ur ON ur.organization_membership_id = om.id
+        JOIN roles r ON r.id = ur.role_id
+        WHERE om.user_id = ${userId}
+          AND om.organization_id = ${organizationId}
+          AND om.status = 'active'
+          AND r.code = 'CAREGIVER'
+      ) AS allowed
+    `.execute(trx);
+    if (!membership.rows[0]?.allowed) throw new SmartMatchForbiddenError();
+    const result = await sql<{
+      id: string; region_label: string; role_label: string;
+      starts_at: string; ends_at: string;
+    }>`
+      SELECT id, region_label, role_label, starts_at, ends_at
+      FROM smartmatch_opportunities
+      WHERE organization_id = ${organizationId}
+        AND visibility = 'INTERNAL'
+        AND status = 'PUBLISHED'
+        AND starts_at > now()
+      ORDER BY starts_at ASC, id ASC LIMIT 100
+    `.execute(trx);
+    return result.rows;
+  });
+}
