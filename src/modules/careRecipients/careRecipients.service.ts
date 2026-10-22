@@ -176,7 +176,7 @@ export async function updateCareRecipient(
 
 // ---------------------------------------------------------------------------
 // Phase 12.1: address and directions for home visits (care_recipient_locations,
-// migration 082). PostgreSQL RLS is the authority; these checks only give the
+// Migration 084). PostgreSQL RLS is the authority; these checks only give the
 // API explicit answers instead of empty results.
 // ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const migration = readFileSync("migrations/082_care_recipient_locations.sql", "utf8")
+const migration = readFileSync("migrations/084_care_recipient_locations.sql", "utf8")
   .split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
 const service = readFileSync("src/modules/careRecipients/careRecipients.service.ts", "utf8");
 const routes = readFileSync("src/modules/careRecipients/careRecipients.routes.ts", "utf8");

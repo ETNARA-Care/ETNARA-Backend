@@ -3,7 +3,7 @@
  *
  * Real Express app + real logins against a disposable PostgreSQL database
  * prepared by bootstrap:staging + seedDemo. Proves who can read and write
- * care_recipient_locations (migration 082):
+ * care_recipient_locations (Migration 084):
  *   - managers read and write
  *   - a worker reads only while assigned to a not-yet-ended shift
  *   - unassigned workers, family members and other organizations get nothing

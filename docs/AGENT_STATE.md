@@ -2,13 +2,57 @@
 
 ## Current Status
 
+## 2026-10-21 — Phase 12.0 offline-safe care events (gate/12.0-offline-safe-care-events)
+
+- Migration 083 (renumbered from 080 to avoid a clash) adds nullable `care_events.client_event_id` with a partial
+  unique index on (organization_id, organization_worker_membership_id,
+  client_event_id). Additive only; RLS policies unchanged.
+- POST care-events accepts optional `clientEventId` and `occurredAt`. A retry
+  returns the stored row (200, `replayed: true`) before the active-visit guard;
+  concurrent retries resolve through ON CONFLICT DO NOTHING; no duplicate
+  family notification. `occurredAt` must be at or after the active check-in and
+  no more than 2 minutes in the future. Reusing an id for another record is 409.
+- After check-out the shift is invisible to the worker (076), so the app must
+  deliver pending records before letting the caregiver finish the visit.
+- FOUND AND FIXED (migration 081): 076 made app_worker_has_shift_assignment read
+  shifts and verification_events, whose worker policies call the same helper.
+  Under app_runtime this recursed until PostgreSQL killed the backend (signal 9)
+  and restarted the whole server when a caregiver accepted a shift. 081 keeps
+  the 076 body verbatim and makes the helper SECURITY DEFINER with a fixed
+  search_path (same pattern as 079).
+- FOUND, NOT FIXED: accepting an assignment logs "messaging synchronization
+  failed: could not determine data type of parameter $4" in
+  syncAssignedWorkerConversationAccess; the acceptance succeeds but the worker
+  may not be added to the recipient conversation.
+- Validation on fresh PostgreSQL 16: bootstrap x2, tenant isolation, platform
+  PHI boundary, invitation activation, new verifyCareEventIdempotency (17/17),
+  76 files / 250 tests, build and diff check pass.
+- Exact next step: Rafa's gate PASS, then deploy; the Railway pre-deploy bootstrap applies 083 before
+  the frontend offline queue ships.
+
+## 2026-10-21 — Fix: caregiver never joined the recipient conversation (fix/assignment-messaging-sync)
+
+- Accepting a shift logged "messaging synchronization failed: could not
+  determine data type of parameter $4" from an untyped `${roomId} IS NOT NULL`.
+- Root cause was deeper: message_threads_read only shows threads the user already
+  participates in, so the accepting worker could never SELECT the thread to join.
+  Even with the cast the INSERT…SELECT inserted 0 rows.
+- The thread is now resolved with the existing SECURITY DEFINER helper
+  app_find_family_thread_id() (migration 035); the INSERT stays under
+  message_thread_participants_write (self only, authorized recipient only).
+  No new privileged function, no RLS change.
+- verifyAssignmentMessagingSync.ts: 3/6 before the fix, 7/7 after, including a
+  direct RLS attack (joining an unassigned recipient's thread is rejected). Wired into CI.
+- Regression: tenant isolation, platform PHI, invitations, 88 files / 272 tests,
+  build and diff check pass.
+
 Project: ETNARA Care
 Repository: ETNARA-Backend
 Branch: phase-10/10.0-multi-agency-compliance
 
 ## 2026-10-21 — Phase 12.1 recipient address and directions
 
-- Migration 082 adds `care_recipient_locations` (address line, municipality,
+- Migration 084 adds `care_recipient_locations` (address line, municipality,
   access notes, optional paired coordinates) in its own table so RLS controls
   the address independently of the recipient row.
 - Managers (ORGANIZATION_ADMIN, SUPERVISOR) read and write. A worker reads only
@@ -21,7 +65,7 @@ Branch: phase-10/10.0-multi-agency-compliance
 - Verification: `scripts/verifyRecipientLocationAccess.ts` (21/21, HTTP + RLS
   attacks) added to CI; the table is included in the platform PHI boundary.
 - Exact next step: gate PASS from Rafa, then the frontend (agency edit fields,
-  caregiver "Cómo llegar" card). Publish only after Railway returns and 082 is applied.
+  caregiver "Cómo llegar" card). Publish only after Railway returns and 084 is applied.
 
 ## 2026-09-27 — Phase 10.0 multi-agency establishments
 
