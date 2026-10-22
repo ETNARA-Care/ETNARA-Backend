@@ -323,17 +323,11 @@ export async function listFamilyShifts(
                WHERE c.worker_id = assigned_worker.worker_id
                  AND c.status = 'active'
                  AND (c.expires_at IS NULL OR c.expires_at >= current_date)
-                 AND (
-                   EXISTS (
-                     SELECT 1 FROM credential_platform_verifications cpv
-                     WHERE cpv.credential_id = c.id AND cpv.status = 'verified'
-                   )
-                   OR EXISTS (
-                     SELECT 1 FROM organization_credential_reviews ocr
-                     WHERE ocr.credential_id = c.id
-                       AND ocr.organization_id = ${organizationId}
-                       AND ocr.review_status = 'approved'
-                   )
+                 AND EXISTS (
+                   SELECT 1 FROM organization_credential_reviews ocr
+                   WHERE ocr.credential_id = c.id
+                     AND ocr.organization_id = ${organizationId}
+                     AND ocr.review_status = 'approved'
                  )
              ), '[]'::jsonb) AS caregiver_credentials
       FROM shifts s

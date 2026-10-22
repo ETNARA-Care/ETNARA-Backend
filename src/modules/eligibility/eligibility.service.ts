@@ -164,43 +164,26 @@ export async function evaluateWorkerEligibility(
           reason = "CREDENTIAL_NOT_ACTIVE";
         } else if (!notExpired) {
           reason = "CREDENTIAL_EXPIRED";
-        } else {
-          // A credential only "counts" toward eligibility once the
-          // platform has verified it -- verification travels with the
-          // worker, but eligibility never assumes it without checking.
-          const platformVerification = await sql<{ status: string }>`
-            SELECT cpv.status
-            FROM credential_platform_verifications cpv
-            LEFT JOIN documents d ON d.id = ${credential.document_id}
-            WHERE cpv.credential_id = ${credential.id}
-              AND (
-                cpv.file_id = d.file_id
-                OR (cpv.file_id IS NULL AND d.id IS NULL)
-              )
-            ORDER BY cpv.verified_at DESC LIMIT 1
+        } else if (req.requires_organization_review) {
+          // Private caregiver credential documents are reviewed by the
+          // organization that employs/contracts the caregiver. ETNARA Platform
+          // has no runtime document-inspection path and therefore must never be
+          // a prerequisite for worker eligibility.
+          const orgReview = await sql<{ id: string }>`
+            SELECT id FROM organization_credential_reviews
+            WHERE credential_id = ${credential.id} AND organization_id = ${organizationId}
+              AND review_status = 'approved'
+            LIMIT 1
           `.execute(trx);
-
-          if (!platformVerification.rows[0]) {
-            reason = "PLATFORM_VERIFICATION_MISSING";
-          } else if (platformVerification.rows[0].status === "rejected") {
-            reason = "PLATFORM_VERIFICATION_REJECTED";
-          } else if (req.requires_organization_review) {
-            const orgReview = await sql<{ id: string }>`
-              SELECT id FROM organization_credential_reviews
-              WHERE credential_id = ${credential.id} AND organization_id = ${organizationId}
-                AND review_status = 'approved'
-              LIMIT 1
-            `.execute(trx);
-            if (!orgReview.rows[0]) {
-              reason = "ORGANIZATION_REVIEW_MISSING";
-            } else {
-              satisfied = true;
-              reason = "OK";
-            }
+          if (!orgReview.rows[0]) {
+            reason = "ORGANIZATION_REVIEW_MISSING";
           } else {
             satisfied = true;
             reason = "OK";
           }
+        } else {
+          satisfied = true;
+          reason = "OK";
         }
       } else {
         // Preserve the normal "latest non-revoked credential" behavior so a
@@ -526,7 +509,6 @@ type ComplianceAgentWorker = {
 const CRITICAL_COMPLIANCE_REASONS = new Set([
   "CREDENTIAL_EXPIRED",
   "CREDENTIAL_REVOKED",
-  "PLATFORM_VERIFICATION_REJECTED",
 ]);
 
 const COMPLIANCE_AGENT_GUARDRAILS = [
@@ -537,17 +519,11 @@ const COMPLIANCE_AGENT_GUARDRAILS = [
 ];
 
 function complianceAgentRecommendation(blockers: string[], expiring: boolean) {
-  if (blockers.includes("PLATFORM_VERIFICATION_REJECTED")) {
-    return "Abrir el perfil, revisar el rechazo y solicitar una corrección o un documento nuevo.";
-  }
   if (blockers.includes("CREDENTIAL_EXPIRED") || blockers.includes("CREDENTIAL_REVOKED")) {
     return "Abrir el perfil y solicitar una credencial vigente antes de asignar trabajo.";
   }
   if (blockers.includes("MISSING_CREDENTIAL")) {
     return "Abrir el perfil y solicitar la credencial obligatoria que falta.";
-  }
-  if (blockers.includes("PLATFORM_VERIFICATION_MISSING")) {
-    return "Revisar el documento y dar seguimiento a la verificación de plataforma.";
   }
   if (blockers.includes("ORGANIZATION_REVIEW_MISSING")) {
     return "Abrir el perfil y realizar la revisión humana requerida por la agencia.";
