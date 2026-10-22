@@ -301,17 +301,17 @@ export async function getWorkforceForecast(
     const recommendedActions: string[] = [];
 
     if (requiredMinutes === 0) explanations.push("No hay turnos programados para este día.");
-    else explanations.push(`${totalShifts} turno(s) requieren ${Math.round(requiredMinutes / 6) / 10} h de cuidado.`);
+    else explanations.push(`${totalShifts === 1 ? "1 turno requiere" : `${totalShifts} turnos requieren`} ${Math.round(requiredMinutes / 6) / 10} h de cuidado.`);
     if (coverageGapMinutes > 0) {
       explanations.push(`Faltan ${Math.round(coverageGapMinutes / 6) / 10} h de disponibilidad declarada.`);
       recommendedActions.push("Revisar horarios y disponibilidad del personal apto.");
     }
     if (uncoveredShifts > 0) {
-      explanations.push(`${uncoveredShifts} turno(s) todavía no tienen cuidador confirmado.`);
+      explanations.push(`${uncoveredShifts === 1 ? "1 turno todavía no tiene" : `${uncoveredShifts} turnos todavía no tienen`} cuidador confirmado.`);
       recommendedActions.push("Abrir Turnos y comenzar la cobertura de los turnos sin asignar.");
     }
     if (unknownAvailabilityWorkers > 0) {
-      explanations.push(`${unknownAvailabilityWorkers} cuidador(es) aptos aún no configuraron disponibilidad.`);
+      explanations.push(`${unknownAvailabilityWorkers === 1 ? "1 cuidador apto aún no configuró" : `${unknownAvailabilityWorkers} cuidadores aptos aún no configuraron`} disponibilidad.`);
       recommendedActions.push("Solicitar que el personal complete su disponibilidad semanal.");
     }
     if (risk === "stable" && requiredMinutes > 0) recommendedActions.push("Mantener el plan y vigilar cambios de disponibilidad.");
@@ -342,13 +342,13 @@ export async function getWorkforceForecast(
   const uncoveredShifts = days.reduce((total, day) => total + day.uncoveredShifts, 0);
   const assistantSummary = [
     riskyDays.length > 0
-      ? `${riskyDays.length} día(s) presentan riesgo alto o crítico dentro del periodo.`
+      ? `${riskyDays.length === 1 ? "1 día presenta" : `${riskyDays.length} días presentan`} riesgo alto o crítico dentro del periodo.`
       : "No se detectaron déficits conocidos de capacidad dentro del periodo.",
     uncoveredShifts > 0
-      ? `${uncoveredShifts} turno(s) no tienen cuidador confirmado y requieren decisión de Administración.`
+      ? `${uncoveredShifts === 1 ? "1 turno no tiene cuidador confirmado y requiere" : `${uncoveredShifts} turnos no tienen cuidador confirmado y requieren`} decisión de Administración.`
       : "Todos los turnos programados tienen un cuidador confirmado.",
     credentialRisks.length > 0
-      ? `${credentialRisks.length} credencial(es) vencerán durante el periodo analizado.`
+      ? `${credentialRisks.length === 1 ? "1 credencial vencerá" : `${credentialRisks.length} credenciales vencerán`} durante el periodo analizado.`
       : "No hay vencimientos de credenciales registrados dentro del periodo.",
   ];
 

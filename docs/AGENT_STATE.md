@@ -2,6 +2,13 @@
 
 ## Current Status
 
+## 2026-10-22 — Agency plain language (fix/agency-plain-language)
+
+- Planning and coverage texts use real Spanish plurals instead of "(s)"/"(es)".
+- Operational alerts name the resident by preferred name when set
+  (COALESCE(preferred_name, first + last)), matching the agency screens.
+- Test: tests/fixAgencyPlainLanguage.test.ts. No migration or API-shape change.
+
 ## 2026-10-22 — Coverage truth + alert time (fix/coverage-truth-and-alert-time)
 
 - Workforce planning counts a shift as covered only with an ACCEPTED
