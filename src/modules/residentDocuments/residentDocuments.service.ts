@@ -6,7 +6,7 @@ import { createPrivateDownloadUrl, uploadPrivateObject } from "../storage/object
 export class ResidentDocumentForbiddenError extends Error { constructor(){super("RESIDENT_DOCUMENT_FORBIDDEN");} }
 export class ResidentDocumentNotFoundError extends Error { constructor(){super("RESIDENT_DOCUMENT_NOT_FOUND");} }
 async function assertManager(trx:any, organizationId:string, establishmentId:string, recipientId:string){
- const r=await sql<{allowed:boolean}>`SELECT EXISTS(SELECT 1 FROM care_recipients cr WHERE cr.id=${recipientId} AND cr.organization_id=${organizationId} AND cr.location_id=${establishmentId} AND cr.archived_at IS NULL AND (app_is_org_manager() OR app_is_superadmin() OR app_is_establishment_admin(${establishmentId}))) AS allowed`.execute(trx);
+ const r=await sql<{allowed:boolean}>`SELECT EXISTS(SELECT 1 FROM care_recipients cr WHERE cr.id=${recipientId} AND cr.organization_id=${organizationId} AND cr.location_id=${establishmentId} AND cr.archived_at IS NULL AND (app_is_org_manager() OR app_is_establishment_admin(${establishmentId}))) AS allowed`.execute(trx);
  if(!r.rows[0]?.allowed) throw new ResidentDocumentForbiddenError();
 }
 export async function listResidentDocuments(userId:string,organizationId:string,establishmentId:string,recipientId:string){return withTenantContext({userId,organizationId},async trx=>{await assertManager(trx,organizationId,establishmentId,recipientId);const r=await sql<any>`SELECT id,document_type,title,file_name,content_type,size_bytes,issued_on,expires_on,notes,created_at FROM resident_documents WHERE organization_id=${organizationId} AND establishment_id=${establishmentId} AND care_recipient_id=${recipientId} AND archived_at IS NULL ORDER BY created_at DESC`.execute(trx);return r.rows;});}
