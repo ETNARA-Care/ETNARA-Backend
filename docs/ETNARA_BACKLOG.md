@@ -2,6 +2,13 @@
 
 ## In Progress
 
+### ETN-040 — Phase 12.2 agency team invitations and administrator authority
+- agency administrators invite administrators and supervisors
+- only ORGANIZATION_ADMIN invites; supervisors cannot see money
+- close direct role/membership writes by non-administrators (RLS)
+
+Status: Backend gate on `gate/12.2-team-invitations-admin-authority`; frontend pending.
+
 ### ETN-039 — Phase 12.1 recipient address and directions
 - store the visit address in `care_recipient_locations` with its own RLS
 - managers read and write; assigned workers read only during a live assignment

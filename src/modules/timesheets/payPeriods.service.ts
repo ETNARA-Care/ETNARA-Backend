@@ -4,7 +4,7 @@ import { withTenantContext } from "../../context/tenantContext.js";
 import { TimesheetForbiddenError } from "./timesheets.service.js";
 
 export const payPeriodSchema=z.object({dateFrom:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),dateTo:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),cadence:z.enum(["weekly","biweekly","custom"]).default("biweekly")}).refine(v=>v.dateFrom<=v.dateTo);
-async function manager(trx:unknown){const r=await sql<{ok:boolean}>`SELECT app_is_org_manager() ok`.execute(trx as never);if(!r.rows[0]?.ok)throw new TimesheetForbiddenError()}
+async function manager(trx:unknown){const r=await sql<{ok:boolean}>`SELECT app_is_org_admin() ok`.execute(trx as never);if(!r.rows[0]?.ok)throw new TimesheetForbiddenError()}
 export async function previewPayPeriod(userId:string,organizationId:string,input:z.infer<typeof payPeriodSchema>){return withTenantContext({userId,organizationId},async trx=>{await manager(trx);const r=await sql<any>`
 SELECT t.id,t.status,t.approved_minutes,t.pay_amount_cents,t.bill_amount_cents,w.display_name worker_name,m.internal_role,
 CASE WHEN c.id IS NULL THEN NULL ELSE trim(concat_ws(' ',c.first_name,c.last_name)) END recipient_name
