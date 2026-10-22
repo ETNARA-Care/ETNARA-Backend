@@ -2,6 +2,12 @@
 
 ## In Progress
 
+### BUG — assignment acceptance messaging sync
+- caregivers were never added to the recipient conversation on acceptance
+- fixed by resolving the thread with app_find_family_thread_id() and casting parameters
+
+Status: Fixed on `fix/assignment-messaging-sync`; verified 7/7 against PostgreSQL 16.
+
 ### ETN-038 — Phase 10.0 multi-agency establishments
 - reuse organizations as the legal tenant and locations as establishments
 - require one explicit active organization for every operation
