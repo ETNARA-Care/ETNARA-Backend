@@ -25,7 +25,7 @@ describe("Phase 12.4 · offline check-in/out and caregiver session", () => {
   it("validates the device time: not in the future, not older than 7 days, after its check-in", () => {
     expect(service).toMatch(/const MAX_OFFLINE_AGE_MS = 7 \* 24 \* 3600 \* 1000;/);
     expect(service).toMatch(/if \(occurred > now \+ MAX_CLOCK_SKEW_MS\) throw new OccurredAtOutOfRangeError\(\);/);
-    expect(service).toMatch(/resolveOccurredAt\(input\.occurredAt, active\.occurred_at\)/);
+    expect(service).toMatch(/resolveOccurredAt\(input\.occurredAt, active\.occurred_at, input\.recordedOffline === true\)/);
     expect(routes).toMatch(/OCCURRED_AT_OUT_OF_RANGE/);
   });
 

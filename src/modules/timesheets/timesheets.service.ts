@@ -249,8 +249,8 @@ export async function listTimesheets(
         timesheet.reviewed_at,
         timesheet.created_at,
         timesheet.updated_at,
-        -- Phase 12.4: the check-in or check-out of this visit reached the
-        -- server late because the caregiver had no signal.
+        -- Phase 12.4: the check-in or check-out of this visit was sent
+        -- later because the caregiver had no signal.
         EXISTS (
           SELECT 1 FROM verification_events ve
           WHERE ve.shift_id = timesheet.shift_id
