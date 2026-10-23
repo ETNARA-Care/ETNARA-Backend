@@ -2,6 +2,19 @@
 
 ## Current Status
 
+## 2026-10-23 — SmartMatch Gate 5: notifications + privacy validation (claude/smartmatch-gate1-rls)
+
+- Migration 098: AFTER INSERT trigger on smartmatch_application_events writes into the existing
+  `notifications` table (in_app, no care_recipient_id). SUBMITTED -> every active admin of the
+  same agency (not the applicant); APPROVED/REJECTED/CLOSED(OPPORTUNITY_FILLED) -> the caregiver,
+  and the admins' SUBMITTED notification is marked read. Partial unique index makes it idempotent.
+- Role label: predefined options or validated free text (no digits, honorifics, clinical or
+  address words, max 60). Region must be one of the 78 Puerto Rico municipalities.
+- Event history exposes consent_version on SUBMITTED (auditable consent).
+- verifySmartMatchNotifications.ts 25/25 (12/25 without 098); verifySmartMatchDecisions.ts 49/49
+  (E7 credential revoked after review -> blocked, H6 consent); staging HTTP verifier 44 checks.
+- Next: Turnos integration ("Crear turno con esta cuidadora"), architecture review first.
+
 ## 2026-10-22 — SmartMatch Gate 3: integration hardening, two-agency flow (claude/smartmatch-gate1-rls)
 
 - Catalog audit of every SmartMatch policy/grant/trigger found 4 gaps, each confirmed as
