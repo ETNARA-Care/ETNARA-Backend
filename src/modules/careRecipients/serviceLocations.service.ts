@@ -50,6 +50,8 @@ export const resolveChangeRequestSchema = z.object({
   decision: z.enum(["APPROVE", "REJECT"]),
   note: text(300),
   apply: z.object({ addressLine: text(200), municipality, postalCode, accessNotes: text(500) }).strict().optional(),
+  /** Required when upcoming shifts use the address and the approval changes where the service is. */
+  confirmUpcomingShifts: z.literal(true).optional(),
 }).strict();
 /** Gate 6 fix: explicit confirmation of the exact map point (never implied by a search). */
 export const confirmGpsSchema = z.object({
@@ -204,7 +206,12 @@ export async function updateServiceLocation(userId: string, organizationId: stri
       WHERE id = ${locationId} AND organization_id = ${organizationId}
       RETURNING ${columns}`.execute(trx)).rows[0];
     const shifts = await upcomingShifts(trx, organizationId, recipientId);
-    return { location: await view(trx, row), upcomingShiftsUsingIt: shifts.filter((s) => s.effective_location_id === locationId).length };
+    const using = shifts.filter((s) => s.effective_location_id === locationId).map((s) => s.id);
+    const placeChanged = (["address_line", "municipality", "postal_code", "establishment_id", "latitude", "longitude"] as const)
+      .some((k) => String(row[k] ?? "") !== String(current[k] ?? ""));
+    // The assigned caregivers learn that their shift's address changed (never the address itself).
+    if (placeChanged && using.length > 0) await sql`SELECT app_notify_shift_location_changed(${using}::uuid[])`.execute(trx);
+    return { location: await view(trx, row), upcomingShiftsUsingIt: using.length };
   });
 }
 
@@ -469,6 +476,7 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
     if (!req) throw new LocationNotFoundError();
     if (req.status !== "PENDING") throw new LocationConflictError("REQUEST_ALREADY_RESOLVED");
     let appliedLocationId: string | null = null;
+    let affectedShiftIds: string[] = [];
     if (input.decision === "APPROVE") {
       const values = input.apply ?? {
         addressLine: req.proposed_address_line, municipality: req.proposed_municipality,
@@ -480,6 +488,20 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
         FOR UPDATE`.execute(trx)).rows[0];
       if (primary) {
         const keepEst = primary.establishment_id && !values.addressLine;
+        const nextPlace = {
+          address_line: keepEst ? null : values.addressLine ?? primary.address_line,
+          municipality: keepEst ? null : values.municipality ?? primary.municipality,
+          postal_code: keepEst ? null : values.postalCode ?? primary.postal_code,
+          establishment_id: keepEst ? primary.establishment_id : null,
+        };
+        const placeChanges = (["address_line", "municipality", "postal_code", "establishment_id"] as const)
+          .some((k) => (nextPlace[k] ?? null) !== (primary[k] ?? null));
+        // Upcoming shifts follow the official address: the agency must authorize it explicitly.
+        const affected = placeChanges
+          ? (await upcomingShifts(trx, organizationId, recipientId)).filter((s) => s.effective_location_id === primary.id).map((s) => s.id)
+          : [];
+        if (affected.length > 0 && input.confirmUpcomingShifts !== true) throw new LocationConflictError("UPCOMING_SHIFTS_NEED_CONFIRMATION");
+        affectedShiftIds = affected;
         await sql`
           UPDATE care_recipient_locations SET
             address_line = ${keepEst ? null : values.addressLine ?? primary.address_line},
@@ -504,7 +526,9 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
         status = ${input.decision === "APPROVE" ? "APPROVED" : "REJECTED"}, resolution_note = ${input.note ?? null},
         resolved_by_user_id = ${userId}, resolved_at = now(), applied_location_id = ${appliedLocationId}
       WHERE id = ${requestId} AND organization_id = ${organizationId}`.execute(trx);
-    return { status: input.decision === "APPROVE" ? "APPROVED" : "REJECTED", appliedLocationId };
+    // Tell the assigned caregivers their shift's address changed (never the address itself).
+    if (affectedShiftIds.length > 0) await sql`SELECT app_notify_shift_location_changed(${affectedShiftIds}::uuid[])`.execute(trx);
+    return { status: input.decision === "APPROVE" ? "APPROVED" : "REJECTED", appliedLocationId, upcomingShiftsUpdated: affectedShiftIds.length };
   });
 }
 

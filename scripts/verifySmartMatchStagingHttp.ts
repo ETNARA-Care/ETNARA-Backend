@@ -214,6 +214,12 @@ async function main() {
   const gpsNoConfirm = await call("POST", gpsUrl, a1.token, { latitude: 18.2341, longitude: -66.0485 });
   const gpsOutside = await call("POST", gpsUrl, a1.token, { latitude: 40.7128, longitude: -74.006, confirm: true });
   check("G11 GPS confirmation needs an explicit confirm and a point in Puerto Rico", gpsNoConfirm.status === 400 && gpsOutside.status === 400, `${gpsNoConfirm.status},${gpsOutside.status}`);
+  // Gate 6 close (104): only agency managers change family access. Both probes are refused before any write.
+  const relatives = await call("GET", `${R}/family-location-permissions`, a1.token);
+  const relId = ((relatives.body.relatives ?? []) as Json[])[0]?.id as string | undefined;
+  const revFam = relId ? await call("POST", `${R}/family/${relId}/revoke`, fam.token) : { status: 0 };
+  const revCg = relId ? await call("POST", `${R}/family/${relId}/revoke`, c1.token) : { status: 0 };
+  check("G12 relatives and caregivers cannot revoke family access (managers only)", !!relId && revFam.status === 403 && revCg.status === 403, `${revFam.status},${revCg.status}`);
   await call("POST", `/organizations/${c1.orgId}/me/shifts/${shiftId}/respond`, c1.token, { decision: "accepted" });
   await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
   const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});

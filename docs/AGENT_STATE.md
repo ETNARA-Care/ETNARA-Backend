@@ -2,6 +2,25 @@
 
 ## Current Status
 
+## 2026-10-23 — Gate 6 close: family write authority, approvals vs shifts (claude/smartmatch-gate1-rls)
+
+- Finding (wider than reported): family_relationships_own_or_staff (014, FOR ALL, no WITH CHECK) let any
+  active member -- relatives (they hold an active membership) and caregivers -- update/insert/delete
+  relationships in their org at DB level: own can_view_photos / can_participate_in_verification,
+  re-point to another person, self-insert, revoke/delete others. HTTP: POST .../family/:id/revoke had no
+  role check (any member could revoke another family's access).
+- 104: reads unchanged (family_relationships_read = 014 USING); UPDATE/DELETE managers only; INSERT
+  managers, or self-insert from own pending unexpired family invitation with default permissions
+  (SECURITY DEFINER app_family_invitation_allows_self_insert); subject immutable trigger. Revoke route
+  manager-only (403 FAMILY_MANAGER_ONLY). Secure access activation (SECURITY DEFINER) unaffected.
+- 105: street / municipality / establishment change also clears the GPS confirmation (ZIP alone does not).
+- Approving a family correction that changes the address used by upcoming shifts needs
+  confirmUpcomingShifts:true (409 UPCOMING_SHIFTS_NEED_CONFIRMATION); shifts are never rewritten;
+  assigned caregivers get SHIFT_LOCATION_CHANGED (also on the admin's own place edit).
+- Noted, not fixed: legacy POST /family-invitations/accept fails since 086 (invitee cannot re-read the
+  invitation); the product uses /access-invitations.
+- Verifier 93/93 (control without 104: 4 FP checks fail); staging verifier 67; npm test 428/428; CI replica 19/19.
+
 ## 2026-10-23 — Gate 6 fix: GPS confirmation separate from address verification (claude/smartmatch-gate1-rls)
 
 - iPhone finding: «Verificada» appeared without an exact point and navigation went to a street

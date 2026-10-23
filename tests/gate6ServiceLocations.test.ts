@@ -92,3 +92,41 @@ describe("Gate 6 fixes: address verified vs GPS confirmed (migration 103)", () =
     expect(read("src/modules/verification/verification.arrival.ts")).toContain("AND gps_confirmed_at IS NOT NULL");
   });
 });
+
+describe("Gate 6 close: family relationship write authority (migration 104)", () => {
+  const m104 = strip(read("migrations/104_family_relationship_write_authority.sql"));
+  const family = read("src/modules/family/family.service.ts");
+  it("replaces the FOR ALL policy: reads unchanged, writes only for managers", () => {
+    expect(m104).toContain("DROP POLICY IF EXISTS family_relationships_own_or_staff ON family_relationships");
+    expect(m104).toMatch(/CREATE POLICY family_relationships_read ON family_relationships\s+FOR SELECT/);
+    expect(m104).toMatch(/family_relationships_manager_update ON family_relationships\s+FOR UPDATE\s+USING [^;]*app_is_org_manager\(\)\)\s+WITH CHECK [^;]*app_is_org_manager\(\)\);/);
+    expect(m104).toMatch(/family_relationships_manager_delete ON family_relationships\s+FOR DELETE/);
+    expect(m104).not.toMatch(/CREATE POLICY family_relationships_\w+ ON family_relationships\s+(AS PERMISSIVE\s+)?FOR ALL/);
+  });
+  it("a relative self-inserts only from their own valid invitation with default permissions", () => {
+    expect(m104).toContain("AND can_participate_in_verification = false");
+    expect(m104).toContain("AND can_view_service_location = false");
+    expect(m104).toContain("AND is_primary_contact = false");
+    expect(m104).toMatch(/app_family_invitation_allows_self_insert\(invitation_id, organization_id, care_recipient_id,/);
+    expect(m104).toContain("AND i.status::text = 'pending'");
+    expect(m104).toContain("AND i.expires_at > now()");
+    expect(m104).toContain("FAMILY_RELATIONSHIP_SUBJECT_IMMUTABLE");
+  });
+  it("the HTTP revoke route requires an agency manager", () => {
+    expect(family).toMatch(/revokeFamilyRelationship[\s\S]*SELECT app_is_org_manager\(\) AS ok[\s\S]*throw new FamilyManagerOnlyError\(\)/);
+  });
+});
+
+describe("Gate 6 close: a new place invalidates the GPS point; approvals never move shifts silently (105)", () => {
+  const m105 = strip(read("migrations/105_service_location_street_change_clears_gps.sql"));
+  const service = read("src/modules/careRecipients/serviceLocations.service.ts");
+  it("street / municipality / establishment change clears the GPS confirmation; ZIP alone does not", () => {
+    expect(m105).toMatch(/\(NEW\.address_line, NEW\.municipality, NEW\.establishment_id\)\s+IS DISTINCT FROM \(OLD\.address_line, OLD\.municipality, OLD\.establishment_id\)[\s\S]*NEW\.gps_confirmed_at := NULL/);
+    expect(m105).not.toMatch(/\(NEW\.address_line, NEW\.municipality, NEW\.postal_code, NEW\.establishment_id\)[^;]*\n[^;]*NEW\.gps_confirmed_at := NULL/);
+  });
+  it("approving a correction used by upcoming shifts needs explicit confirmation and notifies caregivers", () => {
+    expect(service).toContain("confirmUpcomingShifts: z.literal(true).optional()");
+    expect(service).toContain('throw new LocationConflictError("UPCOMING_SHIFTS_NEED_CONFIRMATION")');
+    expect(service).toMatch(/affectedShiftIds\.length > 0\) await sql`SELECT app_notify_shift_location_changed/);
+  });
+});

@@ -81,6 +81,7 @@ async function main() {
     family: await person("a-family", orgA, ["FAMILY"]),
     family2: await person("a-family2", orgA, ["FAMILY"]),
     platform: await person("platform", orgA, []),
+    invitee: await person("a-invitee", orgA, []),
   };
   const B = { admin: await person("b-admin", orgB, ["ORGANIZATION_ADMIN"]), family: await person("b-family", orgB, ["FAMILY"]) };
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [A.platform.userId]);
@@ -221,9 +222,15 @@ async function main() {
     check("G7 moving the marker clears the GPS confirmation, keeps the written-address verification, and is in the history",
       moved2.body.location?.gpsConfirmedAt === null && !!moved2.body.location?.verifiedAt && !!histMove, JSON.stringify({ g: moved2.body.location?.gpsConfirmedAt, v: !!moved2.body.location?.verifiedAt, h: !!histMove }));
     await call("POST", GPS, A.admin.token, { latitude: 18.1760, longitude: -66.1620, confirm: true });
+    await call("POST", `${L}/service-locations/${altId}/verify`, A.admin.token);
+    const zipOnly = await call("PATCH", `${L}/service-locations/${altId}`, A.admin.token, { postalCode: "00736", accessNotes: "Portón verde" });
+    check("G8 a ZIP / access-notes edit clears only the address verification, not the confirmed point",
+      zipOnly.body.location?.verifiedAt === null && !!zipOnly.body.location?.gpsConfirmedAt, JSON.stringify({ v: zipOnly.body.location?.verifiedAt, g: zipOnly.body.location?.gpsConfirmedAt }));
     const rewritten = await call("PATCH", `${L}/service-locations/${altId}`, A.admin.token, { addressLine: "Calle Sol 4-B" });
-    check("G8 editing the written address clears only the address verification, not the confirmed point",
-      rewritten.body.location?.verifiedAt === null && !!rewritten.body.location?.gpsConfirmedAt);
+    check("G8b a new street clears the GPS confirmation too (the old point may be another house); marker kept as reference",
+      rewritten.body.location?.verifiedAt === null && rewritten.body.location?.gpsConfirmedAt === null && rewritten.body.location?.latitude === 18.176,
+      JSON.stringify({ g: rewritten.body.location?.gpsConfirmedAt, lat: rewritten.body.location?.latitude }));
+    await call("POST", GPS, A.admin.token, { latitude: 18.1760, longitude: -66.1620, confirm: true });
     let noCoords = false;
     try { await q(`UPDATE care_recipient_locations SET latitude=NULL, longitude=NULL, gps_confirmed_at=now(), gps_confirmed_by_user_id=$2 WHERE id=$1`, [altId, A.admin.userId]); }
     catch (e) { noCoords = (e as { code?: string }).code === "23514"; }
@@ -272,8 +279,61 @@ async function main() {
     const f0 = await call("GET", `/me/care-recipients/${rA}/service-location`, A.family.token);
     const f0rls = await asRuntime(A.family.userId, orgA, `SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1`, [rA]);
     check("F1 family sees no address until the agency allows it (API and RLS)", f0.status === 200 && f0.body.canView === false && f0.body.location === null && f0rls.length === 0, `status=${f0.status}`);
-    const selfGrant = await tryRuntime(A.family.userId, orgA, `UPDATE family_relationships SET can_view_service_location=true WHERE id=$1`, [relA]);
-    check("F2 a relative cannot grant the permission to themself", selfGrant !== null && /MANAGER_ONLY|permission|security/i.test(selfGrant.message), selfGrant?.message.slice(0, 60) ?? "allowed");
+    const touched = async (userId: string, sqlText: string, params: unknown[]) => {
+      try { return (await asRuntime(userId, orgA, sqlText + " RETURNING 1", params)).length; } catch { return -1; }
+    };
+    const relRow = async (id: string) => (await q<Json>(`SELECT * FROM family_relationships WHERE id=$1`, [id])).rows[0];
+    const selfGrant = await touched(A.family.userId, `UPDATE family_relationships SET can_view_service_location=true WHERE id=$1`, [relA]);
+    check("F2 a relative cannot grant the permission to themself", selfGrant <= 0, `touched=${selfGrant}`);
+
+    // ================================================================ P: family permissions (migration 104)
+    const flagWrites = [
+      await touched(A.family.userId, `UPDATE family_relationships SET can_view_photos = NOT can_view_photos WHERE id=$1`, [relA]),
+      await touched(A.family.userId, `UPDATE family_relationships SET can_participate_in_verification = true WHERE id=$1`, [relA]),
+      await touched(A.family.userId, `UPDATE family_relationships SET is_primary_contact = true WHERE id=$1`, [relA]),
+    ];
+    check("FP1 a relative cannot change their own can_view_photos / can_participate_in_verification / primary contact",
+      flagWrites.every((n) => n <= 0), `touched=${flagWrites.join(",")}`);
+    const repoint = await touched(A.family.userId, `UPDATE family_relationships SET care_recipient_id=$2 WHERE id=$1`, [relA, rA2]);
+    const selfInsert = await touched(A.family.userId,
+      `INSERT INTO family_relationships (user_id,organization_id,care_recipient_id,relationship_type,status) VALUES ($1,$2,$3,'hija','active')`, [A.family.userId, orgA, rA2]);
+    check("FP2 a relative cannot re-point their relationship nor add one to another person", repoint <= 0 && selfInsert <= 0, `${repoint},${selfInsert}`);
+    const rel2 = (await q<{ id: string }>(`SELECT id FROM family_relationships WHERE user_id=$1 AND care_recipient_id=$2`, [A.family2.userId, rA])).rows[0].id;
+    const dbRevoke = await touched(A.family.userId, `UPDATE family_relationships SET status='revoked', revoked_at=now() WHERE id=$1`, [rel2]);
+    const dbDelete = await touched(A.cg1.userId, `DELETE FROM family_relationships WHERE id=$1`, [rel2]);
+    const revokeUrl = `${L}/family/${rel2}/revoke`;
+    const revFam = await call("POST", revokeUrl, A.family.token);
+    const revCg = await call("POST", revokeUrl, A.cg1.token);
+    const rel2Row = await relRow(rel2);
+    check("FP3 relatives and caregivers cannot revoke or delete another family's access (DB and HTTP)",
+      dbRevoke <= 0 && dbDelete <= 0 && rel2Row?.status === "active" && revFam.status === 403 && revCg.status === 403, `${dbRevoke},${dbDelete},${revFam.status},${revCg.status}`);
+    const famRead = await asRuntime(A.family.userId, orgA, `SELECT id FROM family_relationships WHERE id=$1`, [relA]);
+    check("FP4 reads unchanged: the relative still sees their own relationship", famRead.length === 1);
+    // Policy self-insert path (legacy family_invitations): only with a valid pending invitation, defaults only.
+    const legacyInv = await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/family-invitations`, A.admin.token,
+      { email: A.invitee.email, relationshipType: "nieta", canViewPhotos: false });
+    const invId = legacyInv.body.invitation?.id as string | undefined;
+    await q(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active')`, [A.invitee.userId, orgA]);
+    const ins = (extra: string, vals: string) => tryRuntime(A.invitee.userId, orgA,
+      `INSERT INTO family_relationships (user_id,organization_id,care_recipient_id,invitation_id,relationship_type,can_view_photos,status${extra})
+       VALUES ($1,$2,$3,$4,'nieta',${vals},'active'${extra ? ",true" : ""})`, [A.invitee.userId, orgA, rA2, invId]);
+    const tampered = await ins(",can_participate_in_verification", "false");
+    const wrongPhoto = await ins("", "true");
+    const exact = await ins("", "false");  // succeeds (rolled back by asRuntime)
+    await q(`DELETE FROM organization_memberships WHERE user_id=$1 AND organization_id=$2`, [A.invitee.userId, orgA]);
+    check("FP5 self-insert only with a valid invitation and default permissions (extra permissions refused)",
+      legacyInv.status === 201 && tampered !== null && wrongPhoto !== null && exact === null,
+      `${legacyInv.status},${tampered ? "refused" : "allowed"},${wrongPhoto ? "refused" : "allowed"},${exact?.message.slice(0, 40) ?? "ok"}`);
+    // Product path: secure access invitation (SECURITY DEFINER activation) still links the relative.
+    const accInv = await call("POST", `/organizations/${orgA}/access-invitations`, A.admin.token,
+      { type: "family", email: A.invitee.email, careRecipientId: rA2, relationshipType: "nieta" });
+    const accepted = await call("POST", "/access-invitations/accept", A.invitee.token, { token: accInv.body.token });
+    const newRow = (await q<Json>(`SELECT * FROM family_relationships WHERE user_id=$1 AND care_recipient_id=$2`, [A.invitee.userId, rA2])).rows[0];
+    check("FP6 an invited relative still activates access through the secure invitation (default permissions)",
+      accInv.status === 201 && accepted.status === 200 && newRow?.status === "active" && newRow?.can_participate_in_verification === false,
+      `${accInv.status},${accepted.status} ${accepted.body.error ?? ""}`);
+    const revSup = newRow ? await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/family/${newRow.id}/revoke`, A.supervisor.token) : { status: 0 };
+    check("FP7 an agency manager still revokes family access", revSup.status === 200 && (newRow ? (await relRow(newRow.id)).status === "revoked" : false), `status=${revSup.status}`);
     const grant = await call("PUT", `${L}/family-location-permissions/${relA}`, A.admin.token, { canViewServiceLocation: true });
     const f1 = await call("GET", `/me/care-recipients/${rA}/service-location`, A.family.token);
     check("F3 with permission: primary address only, without coordinates or access notes",
@@ -297,11 +357,27 @@ async function main() {
     check("F9 admin rejects with a note; relative sees the status and is notified; cannot be resolved twice",
       rej.status === 200 && rejAgain.status === 409 && famReqs.body.requests?.[0]?.status === "REJECTED" && rejNotice.length === 1, `${rej.status},${rejAgain.status}`);
     const req2 = await call("POST", `/me/care-recipients/${rA}/location-change-requests`, A.family.token, { postalCode: "00726", accessNotes: "Timbre al lado del portón" });
-    const appr = await call("POST", `${L}/location-change-requests/${req2.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE" });
+    const shiftsBefore = (await q<{ id: string; service_location_id: string | null }>(`SELECT id, service_location_id FROM shifts WHERE care_recipient_id=$1 ORDER BY id`, [rA])).rows;
+    const cgNoticesBefore = (await notices(A.cg1, "SHIFT_LOCATION_CHANGED")).length + (await notices(A.cg2, "SHIFT_LOCATION_CHANGED")).length;
+    const apprNoAck = await call("POST", `${L}/location-change-requests/${req2.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE" });
+    const stillPending = (await q<{ status: string }>(`SELECT status FROM care_recipient_location_change_requests WHERE id=$1`, [req2.body.request?.id])).rows[0];
+    check("F10 approving a change that affects upcoming shifts needs the agency's explicit confirmation",
+      apprNoAck.status === 409 && apprNoAck.body.error === "UPCOMING_SHIFTS_NEED_CONFIRMATION" && stillPending.status === "PENDING", `status=${apprNoAck.status}`);
+    const appr = await call("POST", `${L}/location-change-requests/${req2.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", confirmUpcomingShifts: true });
     const after = (await q<{ postal_code: string; access_notes: string }>(`SELECT postal_code, access_notes FROM care_recipient_locations WHERE id=$1`, [newPrimary])).rows[0];
     const apprNotice = await notices(A.family, "LOCATION_CHANGE_APPROVED");
-    check("F10 approval applies the correction to the official address (by the agency) and notifies the relative",
+    check("F10b with confirmation: correction applied to the official address and the relative notified",
       appr.status === 200 && after.postal_code === "00726" && after.access_notes === "Timbre al lado del portón" && apprNotice.length === 1, `status=${appr.status}`);
+    const shiftsAfter = (await q<{ id: string; service_location_id: string | null }>(`SELECT id, service_location_id FROM shifts WHERE care_recipient_id=$1 ORDER BY id`, [rA])).rows;
+    const cgNoticesAfter = (await notices(A.cg1, "SHIFT_LOCATION_CHANGED")).length + (await notices(A.cg2, "SHIFT_LOCATION_CHANGED")).length;
+    check("F10c shifts are not rewritten; their caregivers are told the address changed (no address in the notice)",
+      JSON.stringify(shiftsAfter) === JSON.stringify(shiftsBefore) && appr.body.upcomingShiftsUpdated > 0 && cgNoticesAfter > cgNoticesBefore,
+      `updated=${appr.body.upcomingShiftsUpdated} notices ${cgNoticesBefore}->${cgNoticesAfter}`);
+    const histAppr = ((await call("GET", `${L}/service-locations/history`, A.admin.token)).body.events ?? [] as Json[])
+      .filter((e: Json) => e.location_id === newPrimary && e.event_type === "UPDATED" && e.actor_user_id === A.admin.userId);
+    const famReqsAfter = await call("GET", `/me/care-recipients/${rA}/location-change-requests`, A.family.token);
+    check("F10d history kept: the change is in the address history (by the admin) and the relative sees «APPROVED»",
+      histAppr.length > 0 && famReqsAfter.body.requests?.some((r: Json) => r.id === req2.body.request?.id && r.status === "APPROVED"), `events=${histAppr.length}`);
     const famPut = await call("PUT", `${L}/location`, A.family.token, { addressLine: "x" });
     check("F11 the family never edits the official address directly", [403, 404].includes(famPut.status), `status=${famPut.status}`);
 
