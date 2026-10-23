@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { journeyState, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
 import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
 import { withTenantContext } from "../../context/tenantContext.js";
@@ -273,6 +274,8 @@ export interface FamilyShiftSummary {
   status: string;
   checkedInAt: string | null;
   checkedOutAt: string | null;
+  /** Gate 7: «En camino» state (null for visits far from today). */
+  journey: JourneyState | null;
   caregiver: {
     displayName: string;
     credentials: Array<{
@@ -373,6 +376,17 @@ export async function listFamilyShifts(
         AND (s.care_recipient_id = ${careRecipientId} OR s.room_id = app_recipient_room_id(${careRecipientId}))
       ORDER BY s.scheduled_start DESC
     `.execute(trx);
+    // Gate 7: journey state for the visits around today (derived in the database;
+    // families never get the review flag, a location or an estimated time).
+    const nearby = result.rows.filter((r) => {
+      const t = new Date(r.scheduled_start).getTime();
+      return t > Date.now() - 36 * 3600_000 && t < Date.now() + 48 * 3600_000;
+    });
+    const journeys = new Map<string, JourneyState>();
+    for (const r of nearby) {
+      const st = await journeyState(trx, r.id);
+      if (st) journeys.set(r.id, toJourney(st, false));
+    }
     return result.rows.map((r) => ({
       id: r.id,
       careRecipientId,
@@ -381,6 +395,7 @@ export async function listFamilyShifts(
       status: r.status,
       checkedInAt: r.checked_in_at,
       checkedOutAt: r.checked_out_at,
+      journey: journeys.get(r.id) ?? null,
       caregiver: r.caregiver_display_name
         ? { displayName: r.caregiver_display_name, credentials: r.caregiver_credentials ?? [] }
         : null,

@@ -182,7 +182,11 @@ export async function notifyLateShiftArrivals(): Promise<number> {
 /** Same pattern as the coverage escalation worker: counts only, no tenant data in logs. */
 export function startLateArrivalWorker(): () => void {
   const tick = async () => {
-    try { await notifyLateShiftArrivals(); }
+    try {
+      await notifyLateShiftArrivals();
+      // Gate 7: preventive «sin salida» alert, 30 min before the start (same tick, counts only).
+      await sql`SELECT app_notify_shifts_not_en_route()`.execute(db);
+    }
     catch (error) {
       const failure = error as { name?: string; code?: string };
       console.error("Late arrival worker failed", { name: failure.name ?? "Error", code: failure.code ?? "UNKNOWN" });

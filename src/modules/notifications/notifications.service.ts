@@ -78,6 +78,17 @@ function summarizeType(notificationType: string): string {
       return "La oportunidad se cubrió con otra persona";
     case "SMARTMATCH_OPPORTUNITY_CANCELLED":
       return "La agencia canceló una oportunidad que tenías aprobada";
+    // Gate 7 «En camino»: never an address, a location or an estimated time.
+    case "FAMILY_CAREGIVER_EN_ROUTE":
+      return "La cuidadora va en camino";
+    case "FAMILY_CAREGIVER_DELAYED":
+      return "La cuidadora informó un retraso";
+    case "FAMILY_CAREGIVER_ARRIVED":
+      return "La cuidadora llegó al domicilio";
+    case "SHIFT_NOT_EN_ROUTE":
+      return "Aún no registra salida (turno en 30 min)";
+    case "SHIFT_DELAY_REPORTED":
+      return "Retraso de 30 min o más informado";
     case "SHIFT_LATE_ARRIVAL":
       return "Turno sin llegada registrada (15 min)";
     case "SHIFT_ARRIVAL_NEEDS_REVIEW":

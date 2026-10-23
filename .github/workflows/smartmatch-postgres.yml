@@ -10,6 +10,7 @@ on:
       - 'scripts/verifySmartMatchNotifications.ts'
       - 'scripts/verifySmartMatchShifts.ts'
       - 'scripts/verifyGate6ServiceLocations.ts'
+      - 'scripts/verifyGate7Journey.ts'
       - 'src/modules/careRecipients/**'
       - 'src/modules/verification/**'
       - 'src/modules/scheduling/**'
@@ -71,3 +72,5 @@ jobs:
         run: npx tsx scripts/verifySmartMatchShifts.ts
       - name: Gate 6 service locations over HTTP
         run: npx tsx scripts/verifyGate6ServiceLocations.ts
+      - name: Gate 7 journey (En Camino) over HTTP
+        run: npx tsx scripts/verifyGate7Journey.ts

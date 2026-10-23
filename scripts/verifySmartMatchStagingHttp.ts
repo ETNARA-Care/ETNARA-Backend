@@ -221,6 +221,18 @@ async function main() {
   const revCg = relId ? await call("POST", `${R}/family/${relId}/revoke`, c1.token) : { status: 0 };
   check("G12 relatives and caregivers cannot revoke family access (managers only)", !!relId && revFam.status === 403 && revCg.status === 403, `${revFam.status},${revCg.status}`);
   await call("POST", `/organizations/${c1.orgId}/me/shifts/${shiftId}/respond`, c1.token, { decision: "accepted" });
+  // Gate 7 «En Camino» (read-only probes: the SmartMatch shift is days away, so nothing is written).
+  const enRoute = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/journey/en-route`, c1.token, {});
+  const enRouteOther = await call("POST", `/organizations/${c2.orgId}/shifts/${shiftId}/journey/en-route`, c2.token, {});
+  check("G13 «Voy en camino» only inside its window and only by the assigned caregiver",
+    enRoute.status === 409 && enRoute.body.error === "JOURNEY_OUTSIDE_WINDOW" && enRouteOther.status === 404, `${enRoute.status} ${enRoute.body.error},${enRouteOther.status}`);
+  const famShifts = await call("GET", `${R}/family-shifts`, fam.token);
+  const famJourney = ((famShifts.body.shifts ?? []) as Json[]).find((x) => x.journey)?.journey;
+  check("G14 family view carries the derived journey state, without review flag or location",
+    famShifts.status === 200 && (famJourney === undefined || (!("arrivalNeedsReview" in famJourney) && !/lat|lng|eta/i.test(JSON.stringify(famJourney)))), `status=${famShifts.status}`);
+  const ops = await call("GET", `/organizations/${a1.orgId}/operations/journeys`, a1.token);
+  const opsCg = await call("GET", `/organizations/${c1.orgId}/operations/journeys`, c1.token);
+  check("G15 «Hoy en ruta» for agency managers only", ops.status === 200 && Array.isArray(ops.body.journeys) && opsCg.status === 403, `${ops.status},${opsCg.status}`);
   await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
   const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});
   check("G5 arrival without location consent is recorded and flagged for review (not blocked)",

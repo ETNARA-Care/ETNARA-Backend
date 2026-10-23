@@ -2,6 +2,28 @@
 
 ## Current Status
 
+## 2026-10-23 — Gate 7 «ETNARA En Camino» (claude/smartmatch-gate1-rls)
+
+- Decisions (user): all active authorised relatives see the journey; declared delays shown as declared
+  (never an ETA); «Voy en camino» from start-2h to start+1h; agency alerts: no departure 30 min before
+  (preventive), no arrival start+15 (existing 101), declared delay >= 30; family notices en camino,
+  llegó, retraso, iniciado, finalizado; arrival under review shown to family only as «Llegada
+  registrada»; delay reasons are categories (no free text). No GPS, no tracking, no routes, no ETA.
+- 106: shift_journey_events (append-only, no coordinate columns, FORCE RLS + platform_phi_deny; insert
+  by the assigned caregiver only; BEFORE INSERT validation in the DB: accepted assignment, confirmed
+  shift, window, before arrival/check-in, delays <= 3 and not repeated, advisory lock per shift);
+  app_shift_journey_state (derived: UNASSIGNED..CANCELLED; family gets no review flag); family notices
+  via app_notify_shift_family (accepted assignment, not cancelled, can_receive_notifications,
+  deduplicated); SHIFT_NOT_EN_ROUTE (worker tick) and SHIFT_DELAY_REPORTED (>= 30) to managers,
+  resolved by departure / arrival / check-in.
+- Reused: shift_arrivals, verification_events, SHIFT_STARTED / SHIFT_COMPLETED (no duplicate family
+  notices), family-shifts endpoint (+journey), 60 s worker.
+- Fixed (pre-existing): SHIFT_COMPLETED was never sent (status set to completed before notifying; 076
+  hides completed shifts from the caregiver). Now notified first, same transaction.
+- API: GET/POST .../shifts/:id/journey[/en-route|/delay] (idempotent, clientEventId, 404 when not the
+  caller's shift), GET .../operations/journeys (managers). verifyGate7Journey 36/36 (added to both CI
+  workflows); staging verifier G13-G15; npm test 437/437; CI replica 20/20.
+
 ## 2026-10-23 — Gate 6 close: family write authority, approvals vs shifts (claude/smartmatch-gate1-rls)
 
 - Finding (wider than reported): family_relationships_own_or_staff (014, FOR ALL, no WITH CHECK) let any

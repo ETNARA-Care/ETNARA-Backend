@@ -442,10 +442,13 @@ export async function checkOut(
       SELECT app_shift_has_open_check_in(${shiftId}) AS open
     `.execute(trx);
     if (!stillActive.rows[0]?.open) {
+      // Notify BEFORE completing: once the shift is completed the caregiver can no
+      // longer read it (076), so the recipients query would come back empty and
+      // nobody (agency or family) would learn the service finished. Same transaction.
+      await notifyShiftStatus(trx, userId, organizationId, shiftId, "SHIFT_COMPLETED");
       await sql`UPDATE shifts SET status = 'completed', updated_at = now() WHERE id = ${shiftId} AND status = 'in_progress'`.execute(
         trx
       );
-      await notifyShiftStatus(trx, userId, organizationId, shiftId, "SHIFT_COMPLETED");
     }
 
     return result.rows[0];
