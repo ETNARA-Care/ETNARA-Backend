@@ -11,6 +11,7 @@ on:
       - 'scripts/verifySmartMatchShifts.ts'
       - 'scripts/verifyGate6ServiceLocations.ts'
       - 'scripts/verifyGate7Journey.ts'
+      - 'scripts/verifySecurityAudit.ts'
       - 'src/modules/careRecipients/**'
       - 'src/modules/verification/**'
       - 'src/modules/scheduling/**'
@@ -74,3 +75,5 @@ jobs:
         run: npx tsx scripts/verifyGate6ServiceLocations.ts
       - name: Gate 7 journey (En Camino) over HTTP
         run: npx tsx scripts/verifyGate7Journey.ts
+      - name: Security audit hardening over HTTP
+        run: npx tsx scripts/verifySecurityAudit.ts

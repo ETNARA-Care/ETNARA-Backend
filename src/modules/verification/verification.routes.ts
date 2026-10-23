@@ -23,7 +23,7 @@ import {
 } from "./verification.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
-  AlreadyArrivedError, ArrivalAfterCheckInError, LocationConsentRequiredError, NoArrivalToReviewError,
+  AlreadyArrivedError, ArrivalAfterCheckInError, ArrivalOutsideWindowError, LocationConsentRequiredError, NoArrivalToReviewError,
   arrivalReviewSchema, arrivalSchema, consentSchema,
   getMyLocationConsent, grantLocationConsent, recordArrival, reviewArrival, revokeLocationConsent,
 } from "./verification.arrival.js";
@@ -85,6 +85,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof NoActiveCheckInError) {
     res.status(409).json({ error: "NO_ACTIVE_CHECK_IN" });
+    return true;
+  }
+  if (err instanceof ArrivalOutsideWindowError) {
+    res.status(409).json({ error: "ARRIVAL_OUTSIDE_WINDOW" });
     return true;
   }
   if (err instanceof AlreadyArrivedError || err instanceof ArrivalAfterCheckInError || err instanceof NoArrivalToReviewError) {
@@ -201,7 +205,12 @@ function gate6(handler: (req: AuthenticatedRequest, res: Response, orgId: string
     const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
     if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
     try { await handler(req, res, orgIdParsed.data); }
-    catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+    catch (err) {
+      if (handleError(err, res)) return;
+      // Bounded diagnostics: the code only, never the body (it may carry a device reading).
+      console.error("ARRIVAL_ERROR", { code: (err as { code?: string })?.code ?? "UNKNOWN" });
+      res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
   };
 }
 router.get("/organizations/:organizationId/me/location-consent", requireAuth, gate6(async (req, res, orgId) => {

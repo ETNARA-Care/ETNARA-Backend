@@ -229,7 +229,13 @@ export async function cancelFilledOpportunity(
     if (opp.shift_id) {
       const shift = (await sql<{ status: string }>`
         SELECT status::text AS status FROM shifts WHERE id = ${opp.shift_id} AND organization_id = ${organizationId}`.execute(trx)).rows[0];
-      if (shift && shift.status !== "cancelled") throw new SmartMatchConflictError("LINKED_SHIFT_ACTIVE");
+      // Active = not cancelled AND (started/finished or still has a caregiver). A shift
+      // that lost its caregiver (declined / removed) no longer pins the opportunity
+      // (security audit M5); the shift itself stays in Turnos for the agency.
+      const active = shift && shift.status !== "cancelled" && (["in_progress", "completed"].includes(shift.status) ||
+        Boolean((await sql<{ n: number }>`SELECT count(*)::int AS n FROM assignments WHERE shift_id = ${opp.shift_id}
+          AND organization_id = ${organizationId} AND response_status IN ('pending', 'accepted')`.execute(trx)).rows[0]?.n));
+      if (active) throw new SmartMatchConflictError("LINKED_SHIFT_ACTIVE");
     }
     const r = await sql<{ id: string; status: string; cancelled_at: string }>`
       UPDATE smartmatch_opportunities SET status = 'CANCELLED', cancellation_reason = ${input.reason},

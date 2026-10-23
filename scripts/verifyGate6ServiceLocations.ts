@@ -121,6 +121,8 @@ async function main() {
     const s = new Date(Date.now() + days * 86400e3); s.setUTCMinutes(0, 0, 0);
     return { scheduledStart: s.toISOString(), scheduledEnd: new Date(s.getTime() + hours * 3600e3).toISOString() };
   };
+  /** Arrival tests: «Llegué» is only accepted from 2 h before the start (migration 107). */
+  const soon = (id: string) => q(`UPDATE shifts SET scheduled_start = now() + interval '30 minutes', scheduled_end = now() + interval '4 hours' WHERE id = $1`, [id]);
   async function assignedShift(p: P, recipientId: string, days: number, extra: Json = {}) {
     const s = await call("POST", `/organizations/${orgA}/shifts`, A.admin.token, { careRecipientId: recipientId, ...future(days), ...extra });
     const id = s.body.shift?.id as string;
@@ -321,8 +323,8 @@ async function main() {
     const wrongPhoto = await ins("", "true");
     const exact = await ins("", "false");  // succeeds (rolled back by asRuntime)
     await q(`DELETE FROM organization_memberships WHERE user_id=$1 AND organization_id=$2`, [A.invitee.userId, orgA]);
-    check("FP5 self-insert only with a valid invitation and default permissions (extra permissions refused)",
-      legacyInv.status === 201 && tampered !== null && wrongPhoto !== null && exact === null,
+    check("FP5 relatives never self-insert, not even with a valid invitation (agency or secure activation only, 107)",
+      legacyInv.status === 201 && tampered !== null && wrongPhoto !== null && exact !== null,
       `${legacyInv.status},${tampered ? "refused" : "allowed"},${wrongPhoto ? "refused" : "allowed"},${exact?.message.slice(0, 40) ?? "ok"}`);
     // Product path: secure access invitation (SECURITY DEFINER activation) still links the relative.
     const accInv = await call("POST", `/organizations/${orgA}/access-invitations`, A.admin.token,
@@ -383,6 +385,7 @@ async function main() {
 
     // ================================================================ A: arrival and proximity
     const sA = await assignedShift(A.cg1, rA2, 2);
+    await soon(sA.id);
     await q(`INSERT INTO care_recipient_locations (care_recipient_id,organization_id,address_line,municipality,latitude,longitude) VALUES ($1,$2,'Parcela 3','Cayey',18.1100,-66.1660)`, [rA2, orgA]);
     const rA2Loc = (await q<{ id: string }>(`SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1`, [rA2])).rows[0].id;
     await q(`UPDATE shifts SET service_location_id=(SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1) WHERE id=$2`, [rA2, sA.id]);
@@ -401,21 +404,25 @@ async function main() {
     const consentRow = (await q<{ consent_version: string }>(`SELECT consent_version FROM worker_location_consents WHERE user_id=$1 AND revoked_at IS NULL`, [A.cg1.userId])).rows;
     check("A5 separate, versioned consent for location checks is recorded", consent.status === 201 && consentRow[0]?.consent_version === "location-check-v1", `status=${consent.status}`);
     const sUnconf = await assignedShift(A.cg1, rA2, 11);
+    await soon(sUnconf.id);
     await q(`UPDATE shifts SET service_location_id=$1 WHERE id=$2`, [rA2Loc, sUnconf.id]);
     const unconf = await call("POST", ARR(sUnconf.id), A.cg1.token, { latitude: 18.1105, longitude: -66.1655, accuracyM: 12 });
     check("G12 proximity is only compared with a confirmed GPS point (unconfirmed marker: NO_REFERENCE, no false alarm)",
       unconf.status === 201 && unconf.body.arrival?.proximity === "NO_REFERENCE" && unconf.body.arrival?.needsReview === false, JSON.stringify(unconf.body.arrival ?? unconf.body));
     await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/service-locations/${rA2Loc}/confirm-gps`, A.admin.token, { latitude: 18.11, longitude: -66.166, confirm: true });
     const sNear = await assignedShift(A.cg1, rA2, 7);
+    await soon(sNear.id);
     await q(`UPDATE shifts SET service_location_id=(SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1) WHERE id=$2`, [rA2, sNear.id]);
     const near = await call("POST", ARR(sNear.id), A.cg1.token, { latitude: 18.1105, longitude: -66.1655, accuracyM: 12 });
     check("A6 one reading near the address: NEAR, rounded distance, no review",
       near.status === 201 && near.body.arrival?.proximity === "NEAR" && near.body.arrival?.distanceM % 10 === 0 && near.body.arrival?.needsReview === false, JSON.stringify(near.body.arrival ?? near.body));
     const sFar = await assignedShift(A.cg1, rA2, 8);
+    await soon(sFar.id);
     await q(`UPDATE shifts SET service_location_id=(SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1) WHERE id=$2`, [rA2, sFar.id]);
     const far = await call("POST", ARR(sFar.id), A.cg1.token, { latitude: 18.2341, longitude: -66.0485, accuracyM: 20 });
     check("A7 a reading far from the address: FAR, flagged for review, not blocked", far.status === 201 && far.body.arrival?.proximity === "FAR" && far.body.arrival?.needsReview === true, JSON.stringify(far.body.arrival ?? far.body));
     const sGps = await assignedShift(A.cg1, rA2, 9);
+    await soon(sGps.id);
     const gps = await call("POST", ARR(sGps.id), A.cg1.token, {});
     check("A8 consent but GPS unavailable: UNAVAILABLE, review path", gps.status === 201 && gps.body.arrival?.proximity === "UNAVAILABLE" && gps.body.arrival?.needsReview === true, `status=${gps.status}`);
     const cols = (await q<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name='shift_arrivals'`)).rows.map((r) => r.column_name);
@@ -437,6 +444,7 @@ async function main() {
     check("A13 arrivals are isolated: other agency and other caregivers see none", bArr.length === 0 && cg2Arr.length === 0);
     await call("DELETE", `/organizations/${orgA}/me/location-consent`, A.cg1.token);
     const sRev = await assignedShift(A.cg1, rA2, 10);
+    await soon(sRev.id);
     const revoked = await call("POST", ARR(sRev.id), A.cg1.token, { latitude: 18.11, longitude: -66.166 });
     check("A14 after revoking consent, readings are refused again", revoked.status === 400, `status=${revoked.status}`);
     const race = await Promise.all([1, 2, 3, 4].map(() => call("POST", ARR(sRev.id), A.cg1.token, {})));

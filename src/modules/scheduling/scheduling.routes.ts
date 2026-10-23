@@ -15,6 +15,8 @@ import {
   InvalidShiftTimesError,
   ShiftCannotBeCancelledError,
   ShiftCancellationForbiddenError,
+  ShiftUpdateForbiddenError,
+  ShiftStateLockedError,
   RecipientNotInOrgError,
   RoomNotInOrgError,
   WorkerNotLinkedError,
@@ -67,6 +69,14 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof ShiftCannotBeCancelledError) {
     res.status(409).json({ error: "SHIFT_CANNOT_BE_CANCELLED" });
+    return true;
+  }
+  if (err instanceof ShiftUpdateForbiddenError) {
+    res.status(403).json({ error: "SHIFT_UPDATE_FORBIDDEN" });
+    return true;
+  }
+  if (err instanceof ShiftStateLockedError) {
+    res.status(409).json({ error: err.reason });
     return true;
   }
   if (err instanceof ShiftCancellationForbiddenError) {

@@ -2,6 +2,26 @@
 
 ## Current Status
 
+## 2026-10-23 — Security & production-readiness audit, SmartMatch Gates 4-7 (claude/smartmatch-gate1-rls)
+
+- Three independent reviews (RLS/permissions, integrity/concurrency, frontend/deps) + own checks of
+  production compatibility. Report: Project doc claude/smartmatch-audit-report.md.
+- 107 (narrows access, no data deleted): users writes own-row only (CRITICAL, pre-existing 014: any
+  member could overwrite another user's email/password at DB level); shifts worker policy SELECT +
+  status-only (HIGH: caregiver could move/re-point/delete their shift); cancelled shift final, completed
+  only re-opens via check-in; schedule locked once journey/arrival exist; family_relationships reads
+  scoped to people the reader is authorised for, inserts managers only (self-insert removed); Tower
+  restrictive deny on notifications (own only) and SmartMatch tables; cross-agency jobs refuse user
+  sessions; «Llegué» window (start-2h..end); upcoming shifts pinned to their address (backfill +
+  trigger); history append-only; alert dedupe/closing on cancel/rejection; batch journey states;
+  FILLED cancellable when its shift lost the caregiver.
+- Code: updateShift manager-only (HIGH, HTTP); legacy PUT location keeps unsent fields, locks, notifies;
+  arrival race → replay; review note hidden from caregivers; per-session write limit on new routes;
+  «Hoy en ruta» range predicate + overnight; proxy-addr 2.0.8; ARRIVAL_ERROR code-only log.
+- verifySecurityAudit 22/22 (negative control without 107: 9/22); CI replica 21/21; npm test 443/443.
+- Compatibility: production frontend (main) against this backend 5/5; main's verifiers on the new
+  schema pass except Phase 12.1 address save (rollback limitation: roll forward, backup first).
+
 ## 2026-10-23 — Gate 7 «ETNARA En Camino» (claude/smartmatch-gate1-rls)
 
 - Decisions (user): all active authorised relatives see the journey; declared delays shown as declared

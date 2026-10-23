@@ -180,6 +180,8 @@ router.put(
       );
       res.status(200).json({ location });
     } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code === "23505" || code === "23514") { res.status(409).json({ error: "LOCATION_CONFLICT" }); return; }
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
   }

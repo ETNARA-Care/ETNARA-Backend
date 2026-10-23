@@ -267,17 +267,43 @@ export async function upsertCareRecipientLocation(
     if (!recipient.rows[0]) throw new RecipientNotFoundError();
 
     // Gate 6 (migration 100): several addresses per person. This Phase 12.1
-    // endpoint keeps its contract and edits the PRIMARY address.
-    const updated = await sql<Record<string, unknown>>`
-      UPDATE care_recipient_locations SET
-        address_line = ${input.addressLine ?? null}, municipality = ${input.municipality ?? null},
-        access_notes = ${input.accessNotes ?? null}, latitude = ${input.latitude ?? null},
-        longitude = ${input.longitude ?? null}, updated_at = now(), updated_by_user_id = ${userId}
-      WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId}
-        AND is_primary AND archived_at IS NULL
-      RETURNING care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
-    `.execute(trx);
-    if (updated.rows[0]) return toLocation(updated.rows[0]);
+    // endpoint keeps its contract and edits the PRIMARY address, with the same
+    // guarantees as the Gate 6 routes (security audit M4): serialized per person,
+    // fields that are not sent are kept (an old form cannot wipe a confirmed
+    // GPS point), and caregivers of upcoming shifts are told the place changed.
+    await sql`SELECT pg_advisory_xact_lock(hashtextextended(${"crl:" + recipientId}, 0))`.execute(trx);
+    const keep = (v: unknown) => v === undefined;
+    const before = await sql<Record<string, unknown>>`
+      SELECT id, address_line, municipality, latitude, longitude, establishment_id FROM care_recipient_locations
+      WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId} AND is_primary AND archived_at IS NULL
+      FOR UPDATE`.execute(trx);
+    const prior = before.rows[0];
+    if (prior) {
+      const updated = await sql<Record<string, unknown>>`
+        UPDATE care_recipient_locations SET
+          address_line = ${keep(input.addressLine) ? (prior.address_line as string | null) : input.addressLine ?? null},
+          municipality = ${keep(input.municipality) ? (prior.municipality as string | null) : input.municipality ?? null},
+          access_notes = CASE WHEN ${keep(input.accessNotes)} THEN access_notes ELSE ${input.accessNotes ?? null} END,
+          latitude = ${keep(input.latitude) ? (prior.latitude as number | null) : input.latitude ?? null},
+          longitude = ${keep(input.longitude) ? (prior.longitude as number | null) : input.longitude ?? null},
+          establishment_id = CASE WHEN ${!keep(input.addressLine) || !keep(input.municipality)} THEN NULL ELSE establishment_id END,
+          updated_at = now(), updated_by_user_id = ${userId}
+        WHERE id = ${prior.id as string} AND organization_id = ${organizationId}
+        RETURNING care_recipient_id, address_line, municipality, access_notes, latitude, longitude, establishment_id, updated_at
+      `.execute(trx);
+      const row = updated.rows[0];
+      const moved = (["address_line", "municipality", "latitude", "longitude", "establishment_id"] as const)
+        .some((k) => String(row[k] ?? "") !== String(prior[k] ?? ""));
+      if (moved) {
+        const shifts = await sql<{ id: string }>`
+          SELECT s.id FROM shifts s
+          WHERE s.organization_id = ${organizationId} AND s.care_recipient_id = ${recipientId}
+            AND s.status IN ('unassigned', 'confirmed') AND s.scheduled_end > now()
+            AND COALESCE(s.service_location_id, ${prior.id as string}::uuid) = ${prior.id as string}::uuid`.execute(trx);
+        if (shifts.rows.length) await sql`SELECT app_notify_shift_location_changed(${shifts.rows.map((r) => r.id)}::uuid[])`.execute(trx);
+      }
+      return toLocation(row);
+    }
     const result = await sql<Record<string, unknown>>`
       INSERT INTO care_recipient_locations (
         care_recipient_id, organization_id, address_line, municipality, access_notes,

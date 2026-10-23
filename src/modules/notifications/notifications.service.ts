@@ -84,7 +84,7 @@ function summarizeType(notificationType: string): string {
     case "FAMILY_CAREGIVER_DELAYED":
       return "La cuidadora informó un retraso";
     case "FAMILY_CAREGIVER_ARRIVED":
-      return "La cuidadora llegó al domicilio";
+      return "Llegada registrada";
     case "SHIFT_NOT_EN_ROUTE":
       return "Aún no registra salida (turno en 30 min)";
     case "SHIFT_DELAY_REPORTED":

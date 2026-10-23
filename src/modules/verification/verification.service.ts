@@ -523,6 +523,8 @@ export async function getVerification(
       if (allClosed) status = "completed";
     }
 
+    // The review note is the agency's: caregivers see whether it was reviewed, not what was written.
+    const managerView = Boolean((await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok);
     const arrivals = (await sql<{ organization_worker_membership_id: string; occurred_at: string; proximity: string;
       distance_m: number | null; needs_review: boolean; reviewed_at: string | null; review_note: string | null; recorded_offline: boolean }>`
       SELECT organization_worker_membership_id, occurred_at, proximity, distance_m, needs_review, reviewed_at, review_note, recorded_offline
@@ -530,7 +532,7 @@ export async function getVerification(
       ORDER BY occurred_at
     `.execute(trx)).rows.map((a) => ({
       membershipId: a.organization_worker_membership_id, occurredAt: a.occurred_at, proximity: a.proximity,
-      distanceM: a.distance_m, needsReview: a.needs_review, reviewedAt: a.reviewed_at, reviewNote: a.review_note,
+      distanceM: a.distance_m, needsReview: a.needs_review, reviewedAt: a.reviewed_at, reviewNote: managerView ? a.review_note : null,
       recordedOffline: a.recorded_offline,
     }));
 

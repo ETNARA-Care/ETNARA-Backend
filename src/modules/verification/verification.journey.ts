@@ -69,6 +69,13 @@ export function toJourney(r: StateRow, includeReview: boolean): JourneyState {
   };
 }
 
+/** Same, for many shifts in one round trip (app_shift_journey_states, migration 107). */
+export async function journeyStates(trx: Trx, shiftIds: string[]): Promise<Map<string, StateRow>> {
+  if (!shiftIds.length) return new Map();
+  const r = await sql<StateRow & { shift_id: string }>`SELECT * FROM app_shift_journey_states(${shiftIds}::uuid[])`.execute(trx);
+  return new Map(r.rows.map((x) => [x.shift_id, x]));
+}
+
 /** Derived state for one shift, or null when the caller may not see it. */
 export async function journeyState(trx: Trx, shiftId: string): Promise<StateRow | null> {
   const r = await sql<StateRow>`SELECT * FROM app_shift_journey_state(${shiftId}::uuid)`.execute(trx);
@@ -219,12 +226,16 @@ export async function listTodayJourneys(userId: string, organizationId: string) 
               ORDER BY (a.response_status = 'accepted') DESC, a.created_at DESC LIMIT 1) AS caregiver
       FROM shifts s LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
       WHERE s.organization_id = ${organizationId}
-        AND (s.scheduled_start AT TIME ZONE 'America/Puerto_Rico')::date = (now() AT TIME ZONE 'America/Puerto_Rico')::date
-      ORDER BY s.scheduled_start`.execute(trx);
+        -- Puerto Rico «today» as a range (index-friendly); overnight visits still in progress included (audit M6/L11).
+        AND s.scheduled_start < (date_trunc('day', now() AT TIME ZONE 'America/Puerto_Rico') + interval '1 day') AT TIME ZONE 'America/Puerto_Rico'
+        AND s.scheduled_end > date_trunc('day', now() AT TIME ZONE 'America/Puerto_Rico') AT TIME ZONE 'America/Puerto_Rico'
+      ORDER BY s.scheduled_start
+      LIMIT 500`.execute(trx);
+    const states = await journeyStates(trx, shifts.rows.map((r) => r.id));
     const now = Date.now();
     const items = [];
     for (const s of shifts.rows) {
-      const st = await journeyState(trx, s.id);
+      const st = states.get(s.id);
       if (!st) continue;
       const j = toJourney(st, true);
       const start = new Date(s.scheduled_start).getTime();

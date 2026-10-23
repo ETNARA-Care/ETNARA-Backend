@@ -23,6 +23,8 @@ export class AlreadyArrivedError extends Error { constructor() { super("ALREADY_
 export class ArrivalAfterCheckInError extends Error { constructor() { super("ALREADY_CHECKED_IN"); } }
 export class LocationConsentRequiredError extends Error { constructor() { super("LOCATION_CONSENT_REQUIRED"); } }
 export class NoArrivalToReviewError extends Error { constructor() { super("NO_ARRIVAL_TO_REVIEW"); } }
+/** «Llegué» only around the visit: from 2 h before the start until its end (audit M3, enforced in 107). */
+export class ArrivalOutsideWindowError extends Error { constructor() { super("ARRIVAL_OUTSIDE_WINDOW"); } }
 
 export const consentSchema = z.object({ consentVersion: z.literal(LOCATION_CONSENT_VERSION) }).strict();
 export const arrivalSchema = z.object({
@@ -141,14 +143,26 @@ export async function recordArrival(userId: string, organizationId: string, shif
       }
     }
     const needsReview = proximity === "FAR" || proximity === "NO_CONSENT" || proximity === "UNAVAILABLE";
+    await sql`SAVEPOINT arrival_insert`.execute(trx);
     const row = (await sql<{ occurred_at: string; proximity: string; distance_m: number | null; needs_review: boolean }>`
       INSERT INTO shift_arrivals (organization_id, shift_id, organization_worker_membership_id, recorded_by_user_id, occurred_at,
         recorded_offline, client_event_id, proximity, distance_m, accuracy_m, needs_review)
       VALUES (${organizationId}, ${shiftId}, ${membership.id}, ${userId}, COALESCE(${when.at}::timestamptz, now()), ${when.offline},
         ${input.clientEventId ?? null}, ${proximity}, ${distanceM},
         ${hasReading && input.accuracyM !== undefined ? Math.round(input.accuracyM) : null}, ${needsReview})
-      RETURNING occurred_at, proximity, distance_m, needs_review`.execute(trx)).rows[0];
-    return toArrival(row);
+      RETURNING occurred_at, proximity, distance_m, needs_review`.execute(trx).catch(async (error: { code?: string; message?: string }) => {
+        await sql`ROLLBACK TO SAVEPOINT arrival_insert`.execute(trx);
+        // Two taps at once / an offline replay racing the first send: the stored arrival wins (audit L1).
+        if (error?.code === "23505") {
+          const stored = (await sql<{ occurred_at: string; proximity: string; distance_m: number | null; needs_review: boolean }>`
+            SELECT occurred_at, proximity, distance_m, needs_review FROM shift_arrivals
+            WHERE shift_id = ${shiftId} AND organization_id = ${organizationId} AND organization_worker_membership_id = ${membership.id}`.execute(trx)).rows[0];
+          if (stored) return { rows: [{ ...stored, replayed: true }] };
+        }
+        if (/ARRIVAL_OUTSIDE_WINDOW/.test(error?.message ?? "")) throw new ArrivalOutsideWindowError();
+        throw error;
+      })).rows[0] as { occurred_at: string; proximity: string; distance_m: number | null; needs_review: boolean; replayed?: boolean };
+    return row.replayed ? { ...toArrival(row), replayed: true as const } : toArrival(row);
   });
 }
 

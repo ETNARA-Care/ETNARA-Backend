@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { journeyState, toJourney, type JourneyState } from "../verification/verification.journey.js";
+import { journeyStates, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
 import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
 import { withTenantContext } from "../../context/tenantContext.js";
@@ -25,6 +25,14 @@ export class ShiftCannotBeCancelledError extends Error {
     this.name = "ShiftCannotBeCancelledError";
   }
 }
+/** Security audit: only agency managers change a shift's times or status by hand. */
+export class ShiftUpdateForbiddenError extends Error {
+  constructor() { super("SHIFT_UPDATE_FORBIDDEN"); this.name = "ShiftUpdateForbiddenError"; }
+}
+export class ShiftStateLockedError extends Error {
+  constructor(public readonly reason: string) { super(reason); this.name = "ShiftStateLockedError"; }
+}
+
 export class ShiftCancellationForbiddenError extends Error {
   constructor() {
     super("SHIFT_CANCELLATION_FORBIDDEN");
@@ -383,10 +391,7 @@ export async function listFamilyShifts(
       return t > Date.now() - 36 * 3600_000 && t < Date.now() + 48 * 3600_000;
     });
     const journeys = new Map<string, JourneyState>();
-    for (const r of nearby) {
-      const st = await journeyState(trx, r.id);
-      if (st) journeys.set(r.id, toJourney(st, false));
-    }
+    for (const [id, st] of await journeyStates(trx, nearby.map((r) => r.id))) journeys.set(id, toJourney(st, false));
     return result.rows.map((r) => ({
       id: r.id,
       careRecipientId,
@@ -426,6 +431,8 @@ export async function updateShift(
 ): Promise<ShiftRow> {
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    const managerCheck = await sql<{ is_manager: boolean }>`SELECT app_is_org_manager() AS is_manager`.execute(trx);
+    if (!managerCheck.rows[0]?.is_manager) throw new ShiftUpdateForbiddenError();
     if (input.scheduledStart !== undefined && input.scheduledEnd !== undefined) {
       if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
         throw new InvalidShiftTimesError();
@@ -448,12 +455,19 @@ export async function updateShift(
     if (input.requiredRole !== undefined) fragments.push(sql`required_role = ${input.requiredRole}`);
     fragments.push(sql`updated_at = now()`);
 
+    await sql`SAVEPOINT shift_update`.execute(trx);
     const result = await sql<ShiftRow>`
       UPDATE shifts
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
-    `.execute(trx);
+    `.execute(trx).catch(async (error: { message?: string }) => {
+      // Guards in migration 107: a cancelled shift never comes back; a visit whose
+      // journey/arrival started cannot be moved (cancel and create a new one instead).
+      const m = /SHIFT_[A-Z_]+_LOCKED|SHIFT_STATUS_[A-Z_]+/.exec(error?.message ?? "");
+      if (m) { await sql`ROLLBACK TO SAVEPOINT shift_update`.execute(trx); throw new ShiftStateLockedError(m[0]); }
+      throw error;
+    });
     if (!result.rows[0]) throw new ShiftNotFoundError();
     return result.rows[0];
   });
