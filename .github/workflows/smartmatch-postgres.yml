@@ -5,6 +5,8 @@ on:
       - 'migrations/**'
       - 'src/modules/smartmatch/**'
       - 'scripts/verifySmartMatchRls.ts'
+      - 'scripts/verifySmartMatchDecisions.ts'
+      - 'src/modules/eligibility/**'
       - 'scripts/smartmatch_*.sql'
       - '.github/workflows/smartmatch-postgres.yml'
       - 'scripts/check_smartmatch_migration_numbers.py'
@@ -50,3 +52,5 @@ jobs:
         run: npx tsx scripts/applyMigrationsOnly.ts
       - name: SmartMatch RLS attacks as app_runtime
         run: npx tsx scripts/verifySmartMatchRls.ts
+      - name: SmartMatch decisions over HTTP (concurrency, audit, isolation)
+        run: npx tsx scripts/verifySmartMatchDecisions.ts

@@ -2,6 +2,25 @@
 
 ## Current Status
 
+## 2026-10-22 — SmartMatch Gate 2: agency decisions, re-apply, history (claude/smartmatch-gate1-rls)
+
+- Migration 096: re-apply after withdrawal (partial unique index: one non-withdrawn
+  application per caregiver/opportunity; rejected/approved still block); deferred
+  constraint trigger rejects a submission that commits after the opportunity closed;
+  agency decision UPDATE policy (admin of own agency, PENDING only, never own
+  application, signed by session user); approval CHECK requires server checks (COALESCE:
+  a NULL CHECK would otherwise pass); append-only smartmatch_application_events written
+  only by trigger (not audit_log: every org member can read audit_log); opportunity
+  policy split so an admin other than the creator can mark FILLED (092's FOR ALL
+  WITH CHECK created_by = me blocked it); created_by/organization_id not updatable.
+- Service/routes (smartmatch.applications.*): apply (consent v1), withdraw, my-applications,
+  review queue, review with live checks, decision (lock opportunity -> application, fresh
+  credentials via evaluateWorkerEligibilityInTransaction, availability, consent; blocks when
+  unverifiable; FILLED, no assignment; closes other pending as OPPORTUNITY_FILLED), events.
+- scripts/verifySmartMatchDecisions.ts: 47 HTTP checks incl. concurrency (stress 15/15);
+  verifySmartMatchRls.ts now 63 checks. Both wired into CI.
+- Next step (Gate 3/4): integration hardening, then frontend-v23 UI.
+
 ## 2026-10-22 — SmartMatch Gate 1: real caregiver role, network lock, applications RLS (claude/smartmatch-gate1-rls)
 
 - Root cause of the RLS recursion seen in Gate 0: the SmartMatch branch predated main's

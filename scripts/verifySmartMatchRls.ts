@@ -28,6 +28,7 @@ const id = (prefix: string, n: number) => `${prefix}000000-0000-4000-8000-${Stri
 const ORG_A = id("a0", 1), ORG_B = id("b0", 1);
 const U = {
   adminA: id("a1", 1), workerA: id("a2", 1), workerA2: id("a2", 2), inactiveA: id("a2", 3),
+  adminA2: id("a1", 2), adminWorkerA: id("a5", 1),
   supervisorA: id("a3", 1), familyA: id("a4", 1), adminB: id("b1", 1), workerB: id("b2", 1), platform: id("c1", 1),
 };
 const OPP = { aPub: id("d1", 1), aDraft: id("d1", 2), aPast: id("d1", 3), bPub: id("d2", 1) };
@@ -95,6 +96,7 @@ async function seed() {
     [U.workerA, ORG_A, "WORKER", "active"],
     [U.workerA2, ORG_A, "WORKER", "active"],
     [U.inactiveA, ORG_A, "WORKER", "active"],
+    [U.adminA2, ORG_A, "ORGANIZATION_ADMIN", "active"],
     [U.supervisorA, ORG_A, "SUPERVISOR", "active"],
     [U.familyA, ORG_A, "FAMILY", "active"],
     [U.adminB, ORG_B, "ORGANIZATION_ADMIN", "active"],
@@ -109,6 +111,11 @@ async function seed() {
     const w = await q(`INSERT INTO workers (user_id) VALUES ($1) RETURNING id`, [user]);
     await q(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,$3,'caregiver')`, [w.rows[0].id, org, status]);
   }
+  // One user who is both agency administrator and caregiver (same membership).
+  const aw = await q(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [U.adminWorkerA, ORG_A]);
+  await q(`INSERT INTO user_roles (organization_membership_id,organization_id,role_id) SELECT $1,$2,id FROM roles WHERE code IN ('ORGANIZATION_ADMIN','WORKER')`, [aw.rows[0].id, ORG_A]);
+  const awWorker = await q(`INSERT INTO workers (user_id) VALUES ($1) RETURNING id`, [U.adminWorkerA]);
+  await q(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,'active','caregiver')`, [awWorker.rows[0].id, ORG_A]);
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [U.platform]);
   const opp = `INSERT INTO smartmatch_opportunities (id,organization_id,created_by_user_id,visibility,status,region_label,role_label,starts_at,ends_at)
                VALUES ($1,$2,$3,'INTERNAL',$4,'Caguas','Cuidador',now()+$5::interval,now()+$5::interval+interval '4 hours')`;
@@ -189,6 +196,38 @@ async function main() {
     await expectDenied("A4 nobody can DELETE applications", { user: U.adminA, org: ORG_A },
       `DELETE FROM smartmatch_applications WHERE id=$1`, [app]);
 
+    // Agency decision rules enforced by RLS/constraints (backend checks are tested over HTTP)
+    const CHECKS = JSON.stringify({ approvable: true, membershipActive: true, credentialsEligible: true, availabilityCovers: true, consentRecorded: true });
+    const adminA = { user: U.adminA, org: ORG_A };
+    await expectDenied("A5 approval signed as another administrator", adminA,
+      `UPDATE smartmatch_applications SET status='APPROVED', decided_by_user_id=$2, decided_at=now(), decision_reason='APPROVED_ELIGIBLE', decision_checks=$3::jsonb WHERE id=$1`, [app, U.adminA2, CHECKS]);
+    await expectDenied("A6 approval without recorded server checks", adminA,
+      `UPDATE smartmatch_applications SET status='APPROVED', decided_by_user_id=$2, decided_at=now(), decision_reason='APPROVED_ELIGIBLE' WHERE id=$1`, [app, U.adminA]);
+    await expectAllowed("A7 properly signed approval with checks accepted", adminA,
+      `UPDATE smartmatch_applications SET status='APPROVED', decided_by_user_id=$2, decided_at=now(), decision_reason='APPROVED_ELIGIBLE', decision_checks=$3::jsonb WHERE id=$1`, [app, U.adminA, CHECKS]);
+    await expectDenied("A8 admin of agency B cannot decide agency A application", { user: U.adminB, org: ORG_B },
+      `UPDATE smartmatch_applications SET status='REJECTED', decided_by_user_id=$2, decided_at=now(), decision_reason='AGENCY_REJECTED' WHERE id=$1`, [app, U.adminB]);
+    await expectAllowed("A9 admin other than the creator can update opportunity status", { user: U.adminA2, org: ORG_A },
+      `UPDATE smartmatch_opportunities SET status='FILLED' WHERE id=$1`, [OPP.aPub]);
+    await expectDenied("A10 opportunity creator cannot be rewritten", adminA,
+      `UPDATE smartmatch_opportunities SET created_by_user_id=$2 WHERE id=$1`, [OPP.aPub, U.adminA2]);
+    const ownApp = (await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version) VALUES ($1,$2,$3,now(),$4) RETURNING id`, [OPP.aPub, ORG_A, U.adminWorkerA, CONSENT])).rows[0].id as string;
+    await expectDenied("A11 admin who is also the applicant cannot decide own application", { user: U.adminWorkerA, org: ORG_A },
+      `UPDATE smartmatch_applications SET status='APPROVED', decided_by_user_id=$2, decided_at=now(), decision_reason='APPROVED_ELIGIBLE', decision_checks=$3::jsonb WHERE id=$1`, [ownApp, U.adminWorkerA, CHECKS]);
+
+    // Append-only history
+    const events = `SELECT id FROM smartmatch_application_events`;
+    await expectCount("V1 admin A reads agency A history", adminA, `${events} WHERE application_id=$1`, [app], 1);
+    await expectCount("V2 caregiver reads own history", wA, `${events} WHERE application_id=$1`, [app], 1);
+    await expectCount("V3 another caregiver cannot read it", { user: U.workerA2, org: ORG_A }, events, [], 0);
+    await expectCount("V4 admin of agency B cannot read it", { user: U.adminB, org: ORG_B }, `${events} WHERE application_id=$1`, [app], 0);
+    await expectCount("V5 supervisor cannot read it", { user: U.supervisorA, org: ORG_A }, events, [], 0);
+    await expectCount("V6 platform superadmin context cannot read it", { user: U.platform, org: ORG_A, superadmin: true }, events, [], 0);
+    await expectDenied("V7 app_runtime cannot forge history", adminA,
+      `INSERT INTO smartmatch_application_events (organization_id,application_id,opportunity_id,caregiver_user_id,event_type,new_status) VALUES ($1,$2,$3,$4,'APPROVED','APPROVED')`, [ORG_A, app, OPP.aPub, U.workerA]);
+    await expectDenied("V8 app_runtime cannot alter history", adminA, `UPDATE smartmatch_application_events SET event_type='APPROVED'`, []);
+    await expectDenied("V9 app_runtime cannot delete history", adminA, `DELETE FROM smartmatch_application_events`, []);
+
     // Withdrawal
     await expectAllowed("W1 worker A withdraws pending application", wA,
       `UPDATE smartmatch_applications SET status='WITHDRAWN', withdrawn_at=now() WHERE id=$1`, [app]);
@@ -223,10 +262,10 @@ async function main() {
       `UPDATE smartmatch_opportunities SET organization_id=$2 WHERE id=$1`, [OPP.aDraft, ORG_B]);
 
     // Single approval invariant (database last line of defense)
-    const a1 = (await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version,status,decided_by_user_id,decided_at) VALUES ($1,$2,$3,now(),$4,'APPROVED',$5,now()) RETURNING id`, [OPP.bPub, ORG_B, U.workerB, CONSENT, U.adminB])).rows[0].id;
+    const a1 = (await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version,status,decided_by_user_id,decided_at,decision_reason,decision_checks) VALUES ($1,$2,$3,now(),$4,'APPROVED',$5,now(),'APPROVED_ELIGIBLE','{"approvable":true,"membershipActive":true,"credentialsEligible":true,"availabilityCovers":true,"consentRecorded":true}') RETURNING id`, [OPP.bPub, ORG_B, U.workerB, CONSENT, U.adminB])).rows[0].id;
     try {
       await client.query("SAVEPOINT dup");
-      await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version,status,decided_by_user_id,decided_at) VALUES ($1,$2,$3,now(),$4,'APPROVED',$5,now())`, [OPP.bPub, ORG_B, U.adminB, CONSENT, U.adminB]);
+      await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version,status,decided_by_user_id,decided_at,decision_reason,decision_checks) VALUES ($1,$2,$3,now(),$4,'APPROVED',$5,now(),'APPROVED_ELIGIBLE','{"approvable":true,"membershipActive":true,"credentialsEligible":true,"availabilityCovers":true,"consentRecorded":true}')`, [OPP.bPub, ORG_B, U.adminB, CONSENT, U.adminB]);
       record("I1 second APPROVED on same opportunity blocked", false, "NOT DENIED");
     } catch (e) {
       record("I1 second APPROVED on same opportunity blocked", (e as { code?: string }).code === "23505", `${(e as Error).message} (first=${a1})`);

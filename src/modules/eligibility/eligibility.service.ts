@@ -96,7 +96,23 @@ export async function evaluateWorkerEligibility(
   membershipId: string
 ): Promise<EligibilityResult> {
   assertUuid(membershipId, "organizationWorkerMembershipId");
-  return withTenantContext({ userId, organizationId }, async (trx) => {
+  return withTenantContext({ userId, organizationId }, (trx) =>
+    evaluateWorkerEligibilityInTransaction(trx, organizationId, membershipId));
+}
+
+/**
+ * Same evaluation as evaluateWorkerEligibility(), on a transaction the
+ * caller already opened with withTenantContext(). Lets a caller (SmartMatch
+ * approval) compute credentials fresh inside the same transaction that holds
+ * its row locks, instead of trusting a stored snapshot.
+ */
+export async function evaluateWorkerEligibilityInTransaction(
+  trx: Parameters<Parameters<typeof withTenantContext>[1]>[0],
+  organizationId: string,
+  membershipId: string
+): Promise<EligibilityResult> {
+  assertUuid(membershipId, "organizationWorkerMembershipId");
+  {
     const membershipRow = await sql<{ id: string; worker_id: string; status: string; internal_role: string }>`
       SELECT id, worker_id, status, internal_role FROM organization_worker_memberships
       WHERE id = ${membershipId} AND organization_id = ${organizationId}
@@ -215,7 +231,7 @@ export async function evaluateWorkerEligibility(
     await persistEligibility(trx, membershipId, organizationId, requirementSetId, eligibilityStatus);
 
     return { eligibilityStatus, requirementSetId, requirements: requirementResults };
-  });
+  }
 }
 
 async function persistEligibility(
