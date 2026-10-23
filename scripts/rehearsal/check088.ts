@@ -67,8 +67,34 @@ export async function check088(url: string, allowHost?: string): Promise<Result[
     check("F2 own password still updatable (reset flow)", p2.rows.length === 1, p2.error ?? `rows=${p2.rows.length}`);
     const p3 = await asRuntime(worker.user_id, worker.org, `UPDATE shifts SET scheduled_end = scheduled_end + interval '1 day' WHERE id = $1 RETURNING 1`, [worker.shift_id]);
     check("F3 a caregiver cannot move the hours of their shift", p3.rows.length === 0, p3.error ? p3.error.slice(0, 60) : `rows=${p3.rows.length}`);
-    const p4 = await asRuntime(worker.user_id, worker.org, `SELECT 1 FROM shifts WHERE id = $1`, [worker.shift_id]);
-    check("F4 the caregiver still reads their assigned shift", p4.rows.length === 1, p4.error ?? "");
+    // F4 must probe an assignment that the pre-088 rules (migration 076) already
+    // grant: pending/accepted, active membership, live shift (not ended, or in
+    // progress with a check-in). Real data is mostly past/completed visits, which
+    // 076 hides on purpose. The probe's row facts are printed as booleans only.
+    const facts = (await q<Record<string, boolean | string>>(`
+      SELECT a.response_status, s.status shift_status, owm.status = 'active' membership_active,
+             s.scheduled_end > now() not_ended
+      FROM assignments a JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id
+      JOIN shifts s ON s.id = a.shift_id WHERE a.shift_id = $1 AND owm.worker_id = (SELECT id FROM workers WHERE user_id = $2 LIMIT 1)`,
+      [worker.shift_id, worker.user_id]))[0];
+    console.log(`INFO  F4 first probed assignment: ${JSON.stringify(facts)}`);
+    const live = (await q<{ user_id: string; org: string; shift_id: string }>(`
+      SELECT w.user_id, a.organization_id org, a.shift_id FROM assignments a
+      JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id JOIN workers w ON w.id = m.worker_id
+      JOIN shifts s ON s.id = a.shift_id
+      WHERE m.status = 'active' AND a.response_status IN ('pending','accepted')
+        AND s.status IN ('unassigned','confirmed','in_progress') AND s.scheduled_end > now() LIMIT 1`))[0];
+    if (live) {
+      const p4 = await asRuntime(live.user_id, live.org, `SELECT 1 FROM shifts WHERE id = $1`, [live.shift_id]);
+      check("F4 the caregiver still reads their live assigned shift", p4.rows.length === 1, p4.error ?? `rows=${p4.rows.length}`);
+    } else {
+      // No live assignment in this data: prove the deny is 076's rule, not 088's,
+      // by asking the 076 helper directly for the probed row.
+      const r = await asRuntime(worker.user_id, worker.org, `SELECT app_worker_has_shift_assignment($1) ok`, [worker.shift_id]);
+      const helper = (r.rows[0] as { ok?: boolean } | undefined)?.ok;
+      check("F4 no live assignment in this data: the probed row is hidden by migration 076's rule (helper=false), as before 088",
+        helper === false && !r.error, r.error ?? `helper=${helper}`);
+    }
     if (fam) {
       const p5 = await asRuntime(fam.user_id, fam.org, `UPDATE family_relationships SET can_view_photos = NOT can_view_photos WHERE id = $1 RETURNING 1`, [fam.id]);
       check("F5 a relative cannot change their own permissions", p5.rows.length === 0, p5.error ? p5.error.slice(0, 60) : `rows=${p5.rows.length}`);
