@@ -6,7 +6,9 @@
  * the same transaction before approving and creating an assignment.
  */
 export type SmartMatchApplicationStatus =
-  | "PENDING" | "APPROVED" | "REJECTED" | "WITHDRAWN";
+  | "PENDING" | "APPROVED" | "REJECTED" | "WITHDRAWN"
+  /** Opportunity cancelled or expired (migration 109); set by the database, never by an action. */
+  | "CLOSED";
 
 export type SmartMatchApplicationAction =
   | "APPROVE" | "REJECT" | "WITHDRAW";

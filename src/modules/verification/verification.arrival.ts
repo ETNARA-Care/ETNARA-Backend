@@ -193,6 +193,11 @@ export async function notifyLateShiftArrivals(): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
+export async function expireSmartMatchOpportunities(): Promise<number> {
+  const r = await sql<{ n: number }>`SELECT app_smartmatch_expire_opportunities() AS n`.execute(db);
+  return Number(r.rows[0]?.n ?? 0);
+}
+
 /** Same pattern as the coverage escalation worker: counts only, no tenant data in logs. */
 export function startLateArrivalWorker(): () => void {
   const tick = async () => {
@@ -204,6 +209,13 @@ export function startLateArrivalWorker(): () => void {
     catch (error) {
       const failure = error as { name?: string; code?: string };
       console.error("Late arrival worker failed", { name: failure.name ?? "Error", code: failure.code ?? "UNKNOWN" });
+    }
+    // SmartMatch (migration 109): PUBLISHED opportunities whose start has passed
+    // become EXPIRED; pending applicants are closed and notified once.
+    try { await expireSmartMatchOpportunities(); }
+    catch (error) {
+      const failure = error as { name?: string; code?: string };
+      console.error("SmartMatch expiry worker failed", { name: failure.name ?? "Error", code: failure.code ?? "UNKNOWN" });
     }
   };
   void tick();

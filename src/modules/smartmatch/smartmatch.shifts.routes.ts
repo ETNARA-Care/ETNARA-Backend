@@ -5,7 +5,7 @@ import { MembershipNotActiveError } from "../../context/errors.js";
 import { SmartMatchForbiddenError } from "./smartmatch.service.js";
 import { SmartMatchApplicationNotFoundError, SmartMatchConflictError } from "./smartmatch.applications.service.js";
 import {
-  createShiftFromSmartMatch, getSmartMatchShiftDraft, cancelFilledOpportunity, smartMatchCancelSchema, getShiftPrivateInstructions, saveShiftPrivateInstructions,
+  createShiftFromSmartMatch, getSmartMatchShiftDraft, cancelSmartMatchOpportunity, listSmartMatchOpportunityHistory, smartMatchCancelSchema, getShiftPrivateInstructions, saveShiftPrivateInstructions,
   smartMatchCreateShiftSchema, shiftPrivateInstructionsSchema,
 } from "./smartmatch.shifts.service.js";
 import { RecipientNotInOrgError, InvalidShiftTimesError } from "../scheduling/scheduling.service.js";
@@ -92,7 +92,14 @@ router.post("/organizations/:organizationId/smartmatch/opportunities/:opportunit
     const p = ids(req, res, "opportunityId"); if (!p) return;
     const body = smartMatchCancelSchema.safeParse(req.body);
     if (!body.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
-    try { res.json(await cancelFilledOpportunity(req.auth!.userId, p[0], p[1], body.data)); }
+    try { res.json(await cancelSmartMatchOpportunity(req.auth!.userId, p[0], p[1], body.data)); }
+    catch (e) { fail(res, e); }
+  });
+
+router.get("/organizations/:organizationId/smartmatch/opportunities/:opportunityId/history", requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const p = ids(req, res, "opportunityId"); if (!p) return;
+    try { res.json({ history: await listSmartMatchOpportunityHistory(req.auth!.userId, p[0], p[1]) }); }
     catch (e) { fail(res, e); }
   });
 

@@ -260,8 +260,12 @@ async function main() {
       `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.aDraft]);
     await expectDenied("G7 caregiver cannot publish a draft", wA,
       `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.aDraft]);
-    await expectAllowed("G8 PUBLISHED -> CANCELLED allowed", adminA,
+    // Migration 109: cancelling a PUBLISHED opportunity needs reason, actor and time.
+    await expectDenied("G8a PUBLISHED -> CANCELLED without a reason is refused", adminA,
       `UPDATE smartmatch_opportunities SET status='CANCELLED' WHERE id=$1 AND status='PUBLISHED'`, [OPP.aPast]);
+    await expectAllowed("G8 PUBLISHED -> CANCELLED allowed with reason, actor and time", adminA,
+      `UPDATE smartmatch_opportunities SET status='CANCELLED', cancellation_reason='NO_LONGER_NEEDED', cancelled_at=now(), cancelled_by_user_id=$2
+       WHERE id=$1 AND status='PUBLISHED'`, [OPP.aPast, U.adminA]);
     await expectDenied("G9 schedule cannot change after publishing", adminA,
       `UPDATE smartmatch_opportunities SET starts_at=starts_at+interval '1 day', ends_at=ends_at+interval '1 day' WHERE id=$1`, [OPP.aPub]);
     await expectDenied("G10 municipality/role cannot change after publishing", adminA,

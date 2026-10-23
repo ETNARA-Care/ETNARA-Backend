@@ -219,14 +219,22 @@ export const smartMatchCancelSchema = z.object({
  *    real shift in Turnos first (SmartMatch never cancels or reassigns shifts);
  *  - the approved caregiver is notified by trigger (reason category only).
  */
-export async function cancelFilledOpportunity(
+/**
+ * Cancel an opportunity (agency administrator, reason category required).
+ *   PUBLISHED: always; every PENDING application is closed (CLOSED /
+ *     OPPORTUNITY_CANCELLED) and each applicant notified once (migration 109).
+ *   FILLED: only when the linked shift no longer has an active caregiver (107).
+ * The opportunity row is locked first, so a concurrent submission or decision
+ * is serialized with the cancellation.
+ */
+export async function cancelSmartMatchOpportunity(
   userId: string, organizationId: string, opportunityId: string, input: z.infer<typeof smartMatchCancelSchema>,
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await requireOrgAdmin(trx);
     const opp = await loadOpportunity(trx, organizationId, opportunityId, true);
-    if (opp.status !== "FILLED") throw new SmartMatchConflictError("OPPORTUNITY_NOT_FILLED");
-    if (opp.shift_id) {
+    if (opp.status !== "FILLED" && opp.status !== "PUBLISHED") throw new SmartMatchConflictError("OPPORTUNITY_NOT_CANCELLABLE");
+    if (opp.status === "FILLED" && opp.shift_id) {
       const shift = (await sql<{ status: string }>`
         SELECT status::text AS status FROM shifts WHERE id = ${opp.shift_id} AND organization_id = ${organizationId}`.execute(trx)).rows[0];
       // Active = not cancelled AND (started/finished or still has a caregiver). A shift
@@ -240,9 +248,38 @@ export async function cancelFilledOpportunity(
     const r = await sql<{ id: string; status: string; cancelled_at: string }>`
       UPDATE smartmatch_opportunities SET status = 'CANCELLED', cancellation_reason = ${input.reason},
         cancellation_note = ${input.note?.trim() || null}, cancelled_at = now(), cancelled_by_user_id = ${userId}, updated_at = now()
-      WHERE id = ${opportunityId} AND organization_id = ${organizationId} AND status = 'FILLED'
+      WHERE id = ${opportunityId} AND organization_id = ${organizationId} AND status = ${opp.status}
       RETURNING id, status, cancelled_at`.execute(trx);
-    if (!r.rows[0]) throw new SmartMatchConflictError("OPPORTUNITY_NOT_FILLED");
-    return { opportunity: r.rows[0] };
+    if (!r.rows[0]) throw new SmartMatchConflictError("OPPORTUNITY_NOT_CANCELLABLE");
+    const closed = await sql<{ n: number }>`
+      SELECT closed_applications AS n FROM smartmatch_opportunity_events
+      WHERE opportunity_id = ${opportunityId} AND organization_id = ${organizationId} AND event_type = 'CANCELLED'
+      ORDER BY occurred_at DESC LIMIT 1`.execute(trx);
+    return { opportunity: r.rows[0], previousStatus: opp.status, closedApplications: closed.rows[0]?.n ?? 0 };
+  });
+}
+
+/** Agency administrators: append-only status history of one opportunity (migration 109). */
+export async function listSmartMatchOpportunityHistory(userId: string, organizationId: string, opportunityId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireOrgAdmin(trx);
+    await loadOpportunity(trx, organizationId, opportunityId, false);
+    const rows = await sql<{
+      event_type: string; previous_status: string | null; new_status: string; actor_name: string | null;
+      automatic: boolean; reason: string | null; closed_applications: number; occurred_at: string;
+    }>`
+      SELECT e.event_type, e.previous_status, e.new_status,
+             COALESCE(w.display_name, u.email) AS actor_name, e.actor_user_id IS NULL AS automatic,
+             e.reason, e.closed_applications, e.occurred_at
+      FROM smartmatch_opportunity_events e
+      LEFT JOIN users u ON u.id = e.actor_user_id
+      LEFT JOIN workers w ON w.user_id = e.actor_user_id
+      WHERE e.opportunity_id = ${opportunityId} AND e.organization_id = ${organizationId}
+      ORDER BY e.occurred_at, e.id`.execute(trx);
+    return rows.rows.map((r) => ({
+      eventType: r.event_type, previousStatus: r.previous_status, newStatus: r.new_status,
+      actorName: r.automatic ? null : r.actor_name, automatic: r.automatic, reason: r.reason,
+      closedApplications: r.closed_applications, occurredAt: r.occurred_at,
+    }));
   });
 }

@@ -78,6 +78,10 @@ function summarizeType(notificationType: string): string {
       return "La oportunidad se cubrió con otra persona";
     case "SMARTMATCH_OPPORTUNITY_CANCELLED":
       return "La agencia canceló una oportunidad que tenías aprobada";
+    case "SMARTMATCH_APPLICATION_OPPORTUNITY_CANCELLED":
+      return "La agencia canceló una oportunidad a la que te postulaste";
+    case "SMARTMATCH_APPLICATION_OPPORTUNITY_EXPIRED":
+      return "Venció una oportunidad a la que te postulaste";
     // Gate 7 «En camino»: never an address, a location or an estimated time.
     case "FAMILY_CAREGIVER_EN_ROUTE":
       return "La cuidadora va en camino";
