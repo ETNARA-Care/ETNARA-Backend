@@ -26,7 +26,9 @@ export async function check088(url: string, allowHost?: string): Promise<Result[
 
     // ---------------------------------------------------------- catalog
     const last = (await q<{ f: string }>(`SELECT max(filename) f FROM schema_migrations`))[0].f;
-    check("C1 088 is the last applied migration", last === "088_production_security_hotfix.sql", last);
+    const expectLast = process.env.CHECK088_EXPECT_LAST ?? "088_production_security_hotfix.sql";
+    const has088 = (await q<{ n: number }>(`SELECT count(*)::int n FROM schema_migrations WHERE filename = '088_production_security_hotfix.sql'`))[0].n === 1;
+    check(`C1 088 applied; last migration is ${expectLast}`, has088 && last === expectLast, last);
     const pol = new Set((await q<{ p: string }>(`SELECT tablename||'.'||policyname p FROM pg_policies WHERE schemaname='public'`)).map((r) => r.p));
     const want = ["users.users_read_self_or_shared_org", "users.users_update_self", "shifts.shifts_worker_assigned_read", "shifts.shifts_worker_assigned_status",
       "family_relationships.family_relationships_read", "family_relationships.family_relationships_insert", "family_relationships.family_relationships_manager_update",
