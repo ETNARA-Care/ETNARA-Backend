@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isPuertoRicoMunicipality, isSafeRoleLabel } from "./smartmatch.privacy.js";
 
 /** Sanitized data only: never include patient identifiers or exact service addresses. */
 export const smartMatchVisibilitySchema = z.enum(["INTERNAL", "NETWORK"]);
@@ -15,8 +16,10 @@ export const smartMatchPublishSchema = z.object({
   visibility: smartMatchVisibilitySchema,
   startsAt: z.string().datetime(),
   endsAt: z.string().datetime(),
-  roleLabel: z.string().trim().min(1).max(100),
-  regionLabel: z.string().trim().min(1).max(100),
+  // Gate 5: a job title only (predefined or safe free text) and one of the
+  // 78 municipalities -- never a name, phone number or address.
+  roleLabel: z.string().trim().min(1).max(60).refine(isSafeRoleLabel, { message: "ROLE_LABEL_NOT_ALLOWED" }),
+  regionLabel: z.string().trim().min(1).max(100).refine(isPuertoRicoMunicipality, { message: "REGION_NOT_A_MUNICIPALITY" }),
 }).strict().refine(v => Date.parse(v.startsAt) < Date.parse(v.endsAt), {
   message: "Service end must follow start",
 });

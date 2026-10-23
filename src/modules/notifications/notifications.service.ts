@@ -68,6 +68,14 @@ function summarizeType(notificationType: string): string {
       return "Credencial aprobada";
     case "CREDENTIAL_REVIEW_REJECTED":
       return "Credencial rechazada";
+    case "SMARTMATCH_APPLICATION_SUBMITTED":
+      return "Nueva solicitud en SmartMatch";
+    case "SMARTMATCH_APPLICATION_APPROVED":
+      return "Tu solicitud fue aprobada";
+    case "SMARTMATCH_APPLICATION_REJECTED":
+      return "Tu solicitud no fue aprobada";
+    case "SMARTMATCH_APPLICATION_CLOSED":
+      return "La oportunidad se cubrió con otra persona";
     default:
       return "Notificación";
   }

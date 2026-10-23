@@ -409,8 +409,10 @@ export async function listSmartMatchApplicationEvents(
     const rows = await sql<{
       event_type: string; previous_status: string | null; new_status: string;
       actor_user_id: string | null; decision_reason: string | null; occurred_at: string;
+      consent_version: string | null;
     }>`
-      SELECT event_type, previous_status, new_status, actor_user_id, decision_reason, occurred_at
+      SELECT event_type, previous_status, new_status, actor_user_id, decision_reason, occurred_at,
+             CASE WHEN event_type = 'SUBMITTED' THEN consent_version END AS consent_version
       FROM smartmatch_application_events
       WHERE application_id = ${applicationId} AND organization_id = ${organizationId}
       ORDER BY occurred_at, id

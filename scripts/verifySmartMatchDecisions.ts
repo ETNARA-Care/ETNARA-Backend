@@ -271,6 +271,25 @@ async function main() {
     const o6Status = (await q<{ status: string }>(`SELECT status FROM smartmatch_opportunities WHERE id=$1`, [o6.id])).rows[0].status;
     check("D9 an admin other than the creator can approve (opportunity -> FILLED)", byOtherAdmin.status === 200 && o6Status === "FILLED", `status=${byOtherAdmin.status} opp=${o6Status}`);
 
+    // Server re-validates eligibility at approval time (not trusting the review screen).
+    const o8 = await opportunity(orgA, P.admin1.userId, 9);
+    const rv = (await apply(P.w2, o8.id)).body.application as { id: string };
+    const before = await call("GET", `${A}/applications/${rv.id}/review`, P.admin1.token);
+    await q(`UPDATE credentials SET status='revoked' WHERE worker_id=$1`, [P.w2.workerId]);
+    const after = await decide(P.admin1, rv.id, { decision: "APPROVE", confirm: true });
+    check("E7 credential revoked after review -> server re-checks and blocks approval",
+      (before.body.checks as Json)?.approvable === true && after.status === 409 && (after.body.checks as Json)?.credentialsEligible === false && (await appStatus(rv.id)) === "PENDING",
+      `before=${(before.body.checks as Json)?.approvable} after=${after.status}`);
+    await q(`UPDATE credentials SET status='active' WHERE worker_id=$1`, [P.w2.workerId]);
+
+    // Consent is stored with its text version and is auditable by the agency.
+    const consentRow = (await q<{ consented_at: Date | null; consent_version: string | null }>(`SELECT consented_at, consent_version FROM smartmatch_applications WHERE id=$1`, [rv.id])).rows[0];
+    const auditEv = await call("GET", `${A}/applications/${rv.id}/events`, P.admin1.token);
+    const submitted = ((auditEv.body.events ?? []) as Json[]).find((e) => e.event_type === "SUBMITTED");
+    check("H6 consent recorded (timestamp + text version) and visible in the agency audit history",
+      consentRow.consented_at instanceof Date && consentRow.consent_version === "smartmatch-consent-v1" && submitted?.consent_version === "smartmatch-consent-v1",
+      `version=${consentRow.consent_version} audit=${submitted?.consent_version}`);
+
     // ------------------------------------------------ concurrency
     // Two admins approve two different eligible applications at the same time.
     const x1 = (await apply(P.w1, o3.id)).body.application as { id: string };

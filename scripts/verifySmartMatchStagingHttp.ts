@@ -53,6 +53,11 @@ async function waitForHealth() {
   }
 }
 
+async function smartmatchNotifications(token: string, appId: string) {
+  const r = await call("GET", "/me/notifications?limit=100", token);
+  return ((r.body.items ?? []) as Json[]).filter((n) => n.relatedEntityType === "smartmatch_application" && n.relatedEntityId === appId);
+}
+
 async function main() {
   await waitForHealth();
   const health = await call("GET", "/health");
@@ -94,6 +99,10 @@ async function main() {
   check("A4 supervisor has no SmartMatch access", supList.status === 403, `status=${supList.status}`);
   const net = await call("POST", `${S}/opportunities`, a1.token, { visibility: "NETWORK", regionLabel: "Caguas", roleLabel: "x", ...window });
   check("A5 NETWORK opportunities disabled", net.status === 409, `status=${net.status}`);
+  const addr = await call("POST", `${S}/opportunities`, a1.token, { visibility: "INTERNAL", regionLabel: "Calle Luna 123, Caguas", roleLabel: "Cuidador/a", ...window });
+  check("P1 address instead of municipality rejected", addr.status === 400, `status=${addr.status}`);
+  const named = await call("POST", `${S}/opportunities`, a1.token, { visibility: "INTERNAL", regionLabel: "Caguas", roleLabel: "Cuidar a Sra. Rivera", ...window });
+  check("P2 patient name in the role rejected", named.status === 400, `status=${named.status}`);
 
   // Caregiver portal
   const disc = await call("GET", `${S}/available-opportunities`, c1.token);
@@ -111,6 +120,11 @@ async function main() {
   const re = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, consent);
   check("C7 caregiver re-applies with renewed consent", re.status === 201, `status=${re.status}`);
   const appId = re.body.application?.id as string;
+  const sub1 = await smartmatchNotifications(a1.token, appId);
+  const sub2 = await smartmatchNotifications(a2.token, appId);
+  check("N1 both agency admins notified of the new application", sub1.length === 1 && sub2.length === 1 && sub1[0].type === "SMARTMATCH_APPLICATION_SUBMITTED", `${sub1.length},${sub2.length}`);
+  check("N2 agency B admin not notified", (await smartmatchNotifications(bAdmin.token, appId)).length === 0);
+  check("N3 supervisor not notified", (await smartmatchNotifications(sup.token, appId)).length === 0);
   const ap2 = await call("POST", `${S}/opportunities/${oppId}/applications`, c2.token, consent);
   check("C8 second caregiver applies", ap2.status === 201, `status=${ap2.status}`);
   const crossApply = await call("POST", `/organizations/${bCg.orgId}/smartmatch/opportunities/${oppId}/applications`, bCg.token, consent);
@@ -138,6 +152,11 @@ async function main() {
   const mine1 = await call("GET", `${S}/my-applications`, c1.token);
   check("D9 caregiver 1 sees APPROVED", (mine1.body.applications ?? []).some((a: Json) => a.id === appId && a.status === "APPROVED"), "");
   const mine2 = await call("GET", `${S}/my-applications`, c2.token);
+  const appr = await smartmatchNotifications(c1.token, appId);
+  check("N4 caregiver notified of the approval", appr.length === 1 && appr[0].type === "SMARTMATCH_APPLICATION_APPROVED", appr.map((n) => n.type).join(","));
+  const closed = await smartmatchNotifications(c2.token, ap2.body.application?.id);
+  check("N5 other caregiver notified that the opportunity was covered", closed.length === 1 && closed[0].type === "SMARTMATCH_APPLICATION_CLOSED", closed.map((n) => n.type).join(","));
+  check("N6 admins' request resolved after the decision", (await smartmatchNotifications(a2.token, appId)).every((n) => n.readAt));
   check("D10 caregiver 2 sees REJECTED / OPPORTUNITY_FILLED", (mine2.body.applications ?? []).some((a: Json) => a.opportunity_id === oppId && a.status === "REJECTED" && a.decision_reason === "OPPORTUNITY_FILLED"), "");
 
   // Reject path
