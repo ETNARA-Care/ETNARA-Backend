@@ -76,6 +76,7 @@ async function main() {
   const c2 = await session("cuidadora2@agencia-a.invalid");
   const bAdmin = await session("admin@agencia-b.invalid");
   const bCg = await session("cuidadora@agencia-b.invalid");
+  const fam = await session("familia@agencia-a.invalid");
   const S = `/organizations/${a1.orgId}/smartmatch`;
   const bad = await call("POST", "/auth/login", undefined, { email: "admin1@agencia-a.invalid", password: "wrong-password-123" });
   check("L wrong password rejected", bad.status === 401 || bad.status === 400, `status=${bad.status}`);
@@ -170,7 +171,16 @@ async function main() {
   check("T2 agency B cannot create a shift for agency A", bShift.status === 404, `status=${bShift.status}`);
   const shiftDraft = await call("GET", `${S}/opportunities/${oppId}/shift-draft`, a1.token);
   check("T3 draft shows the approved caregiver and allows creation", shiftDraft.body.canCreate === true && shiftDraft.body.caregiver?.displayName === "Cuidadora Uno A", `status=${shiftDraft.status}`);
-  const made = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id, instructions: "Instrucción sintética de staging." });
+  // Gate 6: the person has a registered address, so the admin must confirm one.
+  const R = `/organizations/${a1.orgId}/care-recipients/${synthetic?.id}`;
+  const noLoc = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id });
+  check("G1 SmartMatch shift requires confirming the service address", noLoc.status === 409 && noLoc.body.error === "SERVICE_LOCATION_REQUIRED", `status=${noLoc.status}`);
+  const options = await call("GET", `${R}/service-location-options`, a1.token);
+  const primaryLoc = ((options.body.options ?? []) as Json[]).find((o) => o.isPrimary);
+  check("G2 the agency gets the person's addresses to choose from", options.status === 200 && !!primaryLoc, `status=${options.status}`);
+  const bLoc = await call("GET", `/organizations/${bAdmin.orgId}/care-recipients/${synthetic?.id}/service-locations`, bAdmin.token);
+  check("G3 agency B cannot reach agency A's addresses", [403, 404].includes(bLoc.status), `status=${bLoc.status}`);
+  const made = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id, serviceLocationId: primaryLoc?.id, instructions: "Instrucción sintética de staging." });
   const shiftId = made.body.shift?.id as string | undefined;
   check("T4 admin creates the shift for the approved caregiver", made.status === 201 && !!shiftId, `status=${made.status} ${made.body.error ?? ""}`);
   const dupShift = await call("POST", `${S}/opportunities/${oppId}/shift`, a2.token, { careRecipientId: synthetic?.id });
@@ -183,10 +193,31 @@ async function main() {
   const linkedList = await call("GET", `${S}/opportunities`, a1.token);
   const linkedOpp = ((linkedList.body.opportunities ?? []) as Json[]).find((o) => o.id === oppId);
   check("T8 opportunity shows the created shift", linkedOpp?.shift_id === shiftId && linkedOpp?.shift_assignment_status === "pending", JSON.stringify(linkedOpp?.shift_assignment_status ?? null));
+  // Gate 6: caregiver navigation, arrival without consent, family view and correction request.
+  const nav = await call("GET", `/organizations/${c1.orgId}/shifts/${shiftId}/service-location`, c1.token);
+  const navOther = await call("GET", `/organizations/${c2.orgId}/shifts/${shiftId}/service-location`, c2.token);
+  check("G4 assigned caregiver gets the confirmed address; another caregiver does not",
+    nav.status === 200 && nav.body.location?.id === primaryLoc?.id && navOther.status === 404, `${nav.status},${navOther.status}`);
+  await call("POST", `/organizations/${c1.orgId}/me/shifts/${shiftId}/respond`, c1.token, { decision: "accepted" });
+  await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
+  const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});
+  check("G5 arrival without location consent is recorded and flagged for review (not blocked)",
+    arrival.status === 201 && arrival.body.arrival?.proximity === "NO_CONSENT" && arrival.body.arrival?.needsReview === true, `status=${arrival.status}`);
+  const famLoc = await call("GET", `/me/care-recipients/${synthetic?.id}/service-location`, fam.token);
+  check("G6 relative without permission sees no address", famLoc.status === 200 && famLoc.body.canView === false && famLoc.body.location === null, `status=${famLoc.status}`);
+  const famReq = await call("POST", `/me/care-recipients/${synthetic?.id}/location-change-requests`, fam.token, { message: "Prueba sintética de staging" });
+  const famReqId = famReq.body.request?.id as string | undefined;
+  const reject = famReqId ? await call("POST", `${R}/location-change-requests/${famReqId}/resolve`, a1.token, { decision: "REJECT", note: "Verificación automática" }) : { status: 0 };
+  check("G7 relative requests a correction; the agency resolves it", famReq.status === 201 && reject.status === 200, `${famReq.status},${reject.status}`);
+
   // Cleanup: cancel through Turnos so the next run's random schedule never conflicts.
   if (shiftId) {
     const cancel = await call("POST", `/organizations/${a1.orgId}/shifts/${shiftId}/cancel`, a1.token, { reason: "Verificación automática de staging" });
     check("T9 verification shift cancelled through Turnos (cleanup)", cancel.status === 200, `status=${cancel.status}`);
+    const cancelOpp = await call("POST", `${S}/opportunities/${oppId}/cancel`, a1.token, { reason: "SCHEDULE_CHANGED", note: "Verificación automática" });
+    const mineAfter = ((await call("GET", `${S}/my-applications`, c1.token)).body.applications ?? [] as Json[]).find((a: Json) => a.opportunity_id === oppId);
+    check("G8 FILLED opportunity cancelled with a reason after its shift was cancelled in Turnos",
+      cancelOpp.status === 200 && mineAfter?.opportunity_status === "CANCELLED" && mineAfter?.opportunity_cancellation_reason === "SCHEDULE_CHANGED", `status=${cancelOpp.status}`);
   }
 
   // Reject path

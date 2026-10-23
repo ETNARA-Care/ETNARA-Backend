@@ -2,6 +2,23 @@
 
 ## Current Status
 
+## 2026-10-23 — Gate 6: service location, arrival, FILLED cancellation (claude/smartmatch-gate1-rls)
+
+- User decisions: OpenStreetMap map without geocoding; proximity computed on the server and
+  discarded (result + rounded distance only, radius 200 m); "Llegué" + "Iniciar" + "Finalizar";
+  family address permission per relative, off by default.
+- 100: care_recipient_locations (084) extended, not replaced: several addresses (primary/alternates),
+  ZIP, verification (cleared on edit), establishment reuse without copy, history trigger, worker
+  access log, shifts.service_location_id + audited changes, worker reads only the address of a shift
+  assigned now, family read behind can_view_service_location (manager-only trigger), family
+  correction requests with notifications. FORCE RLS + platform_phi_deny on every new table.
+- 101: worker_location_consents (versioned, revocable), shift_arrivals (no coordinate columns,
+  review path), SHIFT_LATE_ARRIVAL notices (app_notify_late_shift_arrivals + API background worker).
+  Check-in/out no longer store device coordinates.
+- 102: FILLED -> CANCELLED with reason category; blocked while a linked shift is active.
+- verifyGate6ServiceLocations.ts 70/70 (negative control 66/70); staging verifier 61 checks; seed adds
+  a synthetic address and familia@agencia-a.invalid. Full CI PostgreSQL replica 19/19.
+
 ## 2026-10-23 — SmartMatch Gate 5: Crear turno con esta cuidadora (claude/smartmatch-gate1-rls)
 
 - Decision (user, option A): approval keeps meaning FILLED, no assignment. A separate admin action

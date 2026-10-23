@@ -27,6 +27,8 @@ export const STAGING_AGENCIES = [
       { email: "supervisor@agencia-a.invalid", roles: ["SUPERVISOR"], name: "Supervisora A" },
       { email: "cuidadora1@agencia-a.invalid", roles: ["WORKER"], name: "Cuidadora Uno A", worker: true },
       { email: "cuidadora2@agencia-a.invalid", roles: ["WORKER"], name: "Cuidadora Dos A", worker: true },
+      // Gate 6: synthetic relative of the synthetic person (address permission off by default).
+      { email: "familia@agencia-a.invalid", roles: ["FAMILY"], name: "Familiar A", family: true },
     ],
   },
   {
@@ -83,6 +85,14 @@ async function main() {
                SELECT $1, 'Persona', $2::text
                WHERE NOT EXISTS (SELECT 1 FROM care_recipients WHERE organization_id = $1 AND last_name = $2::text)`,
         [orgId, recipientLast]);
+      const recipientId = (await q<{ id: string }>(`SELECT id FROM care_recipients WHERE organization_id = $1 AND last_name = $2`,
+        [orgId, recipientLast])).rows[0].id;
+      // Gate 6: a synthetic primary service address (fictional street, town-center coordinates).
+      await q(`INSERT INTO care_recipient_locations (care_recipient_id, organization_id, label, address_line, municipality,
+                 postal_code, access_notes, latitude, longitude, is_primary)
+               SELECT $1, $2, 'Principal', 'Calle Sintética 100 (staging)', $3, $4, 'Dato sintético de prueba.', $5, $6, true
+               WHERE NOT EXISTS (SELECT 1 FROM care_recipient_locations WHERE care_recipient_id = $1)`,
+        agency.key === "a" ? [recipientId, orgId, "Caguas", "00725", 18.2341, -66.0485] : [recipientId, orgId, "Cayey", "00736", 18.1119, -66.1660]);
       for (const person of agency.people) {
         let userId = (await q<{ id: string }>(`SELECT id FROM users WHERE lower(email) = lower($1)`, [person.email])).rows[0]?.id;
         if (userId) {
@@ -96,6 +106,10 @@ async function main() {
           [userId, orgId])).rows[0].id;
         await q(`INSERT INTO user_roles (organization_membership_id, organization_id, role_id)
                  SELECT $1, $2, id FROM roles WHERE code = ANY($3)`, [m, orgId, [...person.roles]]);
+        if ("family" in person && person.family) {
+          await q(`INSERT INTO family_relationships (user_id, organization_id, care_recipient_id, relationship_type, status)
+                   VALUES ($1, $2, $3, 'familiar', 'active') ON CONFLICT DO NOTHING`, [userId, orgId, recipientId]);
+        }
         if ("worker" in person && person.worker) {
           const w = (await q<{ id: string }>(`INSERT INTO workers (user_id, display_name) VALUES ($1, $2) RETURNING id`, [userId, person.name])).rows[0].id;
           const owm = (await q<{ id: string }>(
