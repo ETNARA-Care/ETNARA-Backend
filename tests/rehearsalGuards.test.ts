@@ -19,6 +19,10 @@ describe("migration rehearsal guards (before any connection)", () => {
     await expect(assertSafePair("postgres://x@etnara-care-staging-db.railway.internal:5432/railway", "postgres://x@iso.example.invalid/db",
       { ...ok, REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION: "true" })).rejects.toThrow(/source host .* is production/);
   });
+  it("PITR mode: refuses a source that is an alias of production (same address over DNS)", async () => {
+    await expect(assertSafePair("postgres://x@localhost:5432/copy", "postgres://x@iso.example.invalid/db",
+      { ...ok, REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION: "true", PRODUCTION_DB_HOSTS: "127.0.0.1" })).rejects.toThrow(/resolves to the production address/);
+  });
   it("refuses target = source", async () => {
     await expect(assertSafePair(src, src, ok)).rejects.toThrow(/target is the source/);
   });
