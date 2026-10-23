@@ -128,6 +128,10 @@ async function main() {
     check("The agency sees both records marked 'sin conexión'", events.length === 2 && events.every((e) => e.recordedOffline === true) && visit.body.status === "completed",
       `${visit.status} ${events.map((e) => `${e.eventType}:${e.recordedOffline}`).join(" ")} ${String(visit.body.status)}`);
 
+    const sheets = await call("GET", `/organizations/${org}/timesheets?dateFrom=${new Date(Date.now() - 48 * HOUR).toISOString().slice(0, 10)}&dateTo=${new Date(Date.now() + 24 * HOUR).toISOString().slice(0, 10)}`, adminToken);
+    const row = ((sheets.body.timesheets as Array<{ shift_id: string; recorded_offline: boolean }> | undefined) ?? []).find((t) => t.shift_id === shiftId);
+    check("Agency hours show the visit as recorded without signal", row?.recorded_offline === true, `${sheets.status} ${String(row?.recorded_offline)}`);
+
     // Online behaviour unchanged.
     const shift2 = await call("POST", `/organizations/${org}/shifts`, adminToken, { careRecipientId: recipientId, scheduledStart: new Date(new Date(start).getTime() + 5 * HOUR).toISOString(), scheduledEnd: new Date(new Date(start).getTime() + 7 * HOUR).toISOString() });
     const shift2Id = (shift2.body.shift as { id: string }).id;
