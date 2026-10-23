@@ -51,6 +51,25 @@
   Negative control without 095: 37/47 (detects role and NETWORK bugs).
 - Next step (Gate 2): transactional decision function + endpoints (apply, withdraw,
   my-applications, eligibility, approve/reject → FILLED, no assignment).
+## 2026-10-22 — Phase 12.4 offline check-in/out + caregiver session (gate/12.4-offline-mode)
+
+- Migration 087 (additive): verification_events.client_event_id (unique per
+  org + worker membership) and recorded_offline. Definer
+  app_find_own_verification_event() answers a late retry for the caller's own
+  record after the visit closed (076 hides it otherwise).
+- check-in/out accept clientEventId, occurredAt, recordedOffline. occurredAt:
+  not in the future (2 min skew), not older than 7 days, check-out after its
+  check-in. A retry returns the stored row (200, replayed); concurrent
+  retries are safe (ON CONFLICT). recorded_offline = device waited for
+  signal OR arrived > 2 min late. Timesheet hours use the real times.
+- getVerification exposes recordedOffline; agency timesheets expose
+  recorded_offline.
+- Login: caregiver-only accounts (only WORKER, active) get
+  WORKER_SESSION_DURATION_HOURS (default 168, max 168) and keepSignedIn=true.
+  Staff, family and platform keep SESSION_DURATION_HOURS.
+- scripts/verifyOfflineCheckInOut.ts (17 checks, in CI). Full regression on
+  a fresh DB: all verify scripts PASS; 338 unit tests.
+
 ## 2026-10-22 — Phase 12.4a close open tenant policies (gate/12.4a-close-open-tenant-policies)
 
 - Migration 086: the PERMISSIVE FOR ALL "<table>_tenant_isolation" policy on 12

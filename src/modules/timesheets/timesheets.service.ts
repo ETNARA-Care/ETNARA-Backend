@@ -96,6 +96,7 @@ interface TimesheetRow {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+  recorded_offline?: boolean;
 }
 
 /** Hours, rates and pay periods are for organization administrators only (085). */
@@ -247,7 +248,16 @@ export async function listTimesheets(
         timesheet.review_note,
         timesheet.reviewed_at,
         timesheet.created_at,
-        timesheet.updated_at
+        timesheet.updated_at,
+        -- Phase 12.4: the check-in or check-out of this visit was sent
+        -- later because the caregiver had no signal.
+        EXISTS (
+          SELECT 1 FROM verification_events ve
+          WHERE ve.shift_id = timesheet.shift_id
+            AND ve.organization_worker_membership_id = timesheet.organization_worker_membership_id
+            AND ve.recorded_offline
+            AND ve.occurred_at IN (timesheet.check_in_at, timesheet.check_out_at)
+        ) AS recorded_offline
       FROM timesheets timesheet
       JOIN organization_worker_memberships membership
         ON membership.id = timesheet.organization_worker_membership_id

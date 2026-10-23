@@ -143,8 +143,10 @@ async function main() {
     const supWorkerRole = await as(supervisorUser, org, (c) => c.query("UPDATE user_roles SET role_id = role_id WHERE organization_id = $1 AND role_id = $2", [org, workerRoleId]));
     check("Supervisors still manage caregivers; changing roles stays administrator-only (085)", changed(supOwm) === 1 && changed(supWorkerRole) === 0,
       `owm=${changed(supOwm)} role-update=${changed(supWorkerRole)}`);
-    const cgOwnReads = await as(carlosUser, org, (c) => count(c, "SELECT count(*) AS n FROM verification_events WHERE organization_worker_membership_id = $1", [carlosOwm]));
-    const cgOwnTotal = await count(admin, "SELECT count(*) AS n FROM verification_events WHERE organization_worker_membership_id = $1", [carlosOwm]);
+    // Own records of visits not yet closed (a closed visit is hidden from the caregiver by 076).
+    const ownOpen = "SELECT count(*) AS n FROM verification_events ve JOIN shifts s ON s.id = ve.shift_id WHERE ve.organization_worker_membership_id = $1 AND s.status <> 'completed'";
+    const cgOwnReads = await as(carlosUser, org, (c) => count(c, ownOpen, [carlosOwm]));
+    const cgOwnTotal = await count(admin, ownOpen, [carlosOwm]);
     check("A caregiver still reads its own check-ins", cgOwnReads === cgOwnTotal, `${String(cgOwnReads)}/${cgOwnTotal}`);
     const famAssignments = await as(familyUser, org, (c) => count(c, "SELECT count(*) AS n FROM assignments"));
     const famRolesRead = await as(familyUser, org, (c) => count(c, "SELECT count(*) AS n FROM user_roles"));

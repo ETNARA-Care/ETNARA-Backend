@@ -52,6 +52,26 @@ export interface LoginResult {
   token: string;
   userId: string;
   expiresAt: Date;
+  /** Caregiver-only account: the app may keep the session on the device. */
+  keepSignedIn: boolean;
+}
+
+/**
+ * True when every active role of the user, in every organization, is WORKER.
+ * Staff, family and platform accounts keep the short session.
+ */
+async function isCaregiverOnly(trx: unknown, userId: string): Promise<boolean> {
+  const result = await sql<{ codes: string[] | null }>`
+    SELECT array_agg(DISTINCT r.code) AS codes
+    FROM organization_memberships om
+    JOIN user_roles ur ON ur.organization_membership_id = om.id
+    JOIN roles r ON r.id = ur.role_id
+    WHERE om.user_id = ${userId} AND om.status = 'active'
+  `.execute(trx as never);
+  const codes = result.rows[0]?.codes ?? [];
+  // Platform administrators have no organization memberships (078), so they
+  // never match here.
+  return codes.length === 1 && codes[0] === "WORKER";
 }
 
 export async function login(
@@ -74,9 +94,12 @@ export async function login(
   if (user.status !== "active") throw new InvalidCredentialsError();
 
   const { rawToken, tokenHash } = generateSessionToken();
-  const expiresAt = new Date(Date.now() + env.SESSION_DURATION_HOURS * 3600 * 1000);
+  let keepSignedIn = false;
+  let expiresAt = new Date(Date.now() + env.SESSION_DURATION_HOURS * 3600 * 1000);
 
   await withUserContext(user.id, async (trx) => {
+    keepSignedIn = await isCaregiverOnly(trx, user.id);
+    if (keepSignedIn) expiresAt = new Date(Date.now() + env.WORKER_SESSION_DURATION_HOURS * 3600 * 1000);
     await sql`
       INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, device_metadata)
       VALUES (
@@ -89,7 +112,7 @@ export async function login(
     `.execute(trx);
   });
 
-  return { token: rawToken, userId: user.id, expiresAt };
+  return { token: rawToken, userId: user.id, expiresAt, keepSignedIn };
 }
 
 interface SessionRow {
