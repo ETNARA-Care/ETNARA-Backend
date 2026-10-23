@@ -2,6 +2,176 @@
 
 ## Current Status
 
+## 2026-10-23 — Security & production-readiness audit, SmartMatch Gates 4-7 (claude/smartmatch-gate1-rls)
+
+- Three independent reviews (RLS/permissions, integrity/concurrency, frontend/deps) + own checks of
+  production compatibility. Report: Project doc claude/smartmatch-audit-report.md.
+- 107 (narrows access, no data deleted): users writes own-row only (CRITICAL, pre-existing 014: any
+  member could overwrite another user's email/password at DB level); shifts worker policy SELECT +
+  status-only (HIGH: caregiver could move/re-point/delete their shift); cancelled shift final, completed
+  only re-opens via check-in; schedule locked once journey/arrival exist; family_relationships reads
+  scoped to people the reader is authorised for, inserts managers only (self-insert removed); Tower
+  restrictive deny on notifications (own only) and SmartMatch tables; cross-agency jobs refuse user
+  sessions; «Llegué» window (start-2h..end); upcoming shifts pinned to their address (backfill +
+  trigger); history append-only; alert dedupe/closing on cancel/rejection; batch journey states;
+  FILLED cancellable when its shift lost the caregiver.
+- Code: updateShift manager-only (HIGH, HTTP); legacy PUT location keeps unsent fields, locks, notifies;
+  arrival race → replay; review note hidden from caregivers; per-session write limit on new routes;
+  «Hoy en ruta» range predicate + overnight; proxy-addr 2.0.8; ARRIVAL_ERROR code-only log.
+- verifySecurityAudit 22/22 (negative control without 107: 9/22); CI replica 21/21; npm test 443/443.
+- Compatibility: production frontend (main) against this backend 5/5; main's verifiers on the new
+  schema pass except Phase 12.1 address save (rollback limitation: roll forward, backup first).
+
+## 2026-10-23 — Gate 7 «ETNARA En Camino» (claude/smartmatch-gate1-rls)
+
+- Decisions (user): all active authorised relatives see the journey; declared delays shown as declared
+  (never an ETA); «Voy en camino» from start-2h to start+1h; agency alerts: no departure 30 min before
+  (preventive), no arrival start+15 (existing 101), declared delay >= 30; family notices en camino,
+  llegó, retraso, iniciado, finalizado; arrival under review shown to family only as «Llegada
+  registrada»; delay reasons are categories (no free text). No GPS, no tracking, no routes, no ETA.
+- 106: shift_journey_events (append-only, no coordinate columns, FORCE RLS + platform_phi_deny; insert
+  by the assigned caregiver only; BEFORE INSERT validation in the DB: accepted assignment, confirmed
+  shift, window, before arrival/check-in, delays <= 3 and not repeated, advisory lock per shift);
+  app_shift_journey_state (derived: UNASSIGNED..CANCELLED; family gets no review flag); family notices
+  via app_notify_shift_family (accepted assignment, not cancelled, can_receive_notifications,
+  deduplicated); SHIFT_NOT_EN_ROUTE (worker tick) and SHIFT_DELAY_REPORTED (>= 30) to managers,
+  resolved by departure / arrival / check-in.
+- Reused: shift_arrivals, verification_events, SHIFT_STARTED / SHIFT_COMPLETED (no duplicate family
+  notices), family-shifts endpoint (+journey), 60 s worker.
+- Fixed (pre-existing): SHIFT_COMPLETED was never sent (status set to completed before notifying; 076
+  hides completed shifts from the caregiver). Now notified first, same transaction.
+- API: GET/POST .../shifts/:id/journey[/en-route|/delay] (idempotent, clientEventId, 404 when not the
+  caller's shift), GET .../operations/journeys (managers). verifyGate7Journey 36/36 (added to both CI
+  workflows); staging verifier G13-G15; npm test 437/437; CI replica 20/20.
+
+## 2026-10-23 — Gate 6 close: family write authority, approvals vs shifts (claude/smartmatch-gate1-rls)
+
+- Finding (wider than reported): family_relationships_own_or_staff (014, FOR ALL, no WITH CHECK) let any
+  active member -- relatives (they hold an active membership) and caregivers -- update/insert/delete
+  relationships in their org at DB level: own can_view_photos / can_participate_in_verification,
+  re-point to another person, self-insert, revoke/delete others. HTTP: POST .../family/:id/revoke had no
+  role check (any member could revoke another family's access).
+- 104: reads unchanged (family_relationships_read = 014 USING); UPDATE/DELETE managers only; INSERT
+  managers, or self-insert from own pending unexpired family invitation with default permissions
+  (SECURITY DEFINER app_family_invitation_allows_self_insert); subject immutable trigger. Revoke route
+  manager-only (403 FAMILY_MANAGER_ONLY). Secure access activation (SECURITY DEFINER) unaffected.
+- 105: street / municipality / establishment change also clears the GPS confirmation (ZIP alone does not).
+- Approving a family correction that changes the address used by upcoming shifts needs
+  confirmUpcomingShifts:true (409 UPCOMING_SHIFTS_NEED_CONFIRMATION); shifts are never rewritten;
+  assigned caregivers get SHIFT_LOCATION_CHANGED (also on the admin's own place edit).
+- Noted, not fixed: legacy POST /family-invitations/accept fails since 086 (invitee cannot re-read the
+  invitation); the product uses /access-invitations.
+- Verifier 93/93 (control without 104: 4 FP checks fail); staging verifier 67; npm test 428/428; CI replica 19/19.
+
+## 2026-10-23 — Gate 6 fix: GPS confirmation separate from address verification (claude/smartmatch-gate1-rls)
+
+- iPhone finding: «Verificada» appeared without an exact point and navigation went to a street
+  approximation. Two independent states now: verified_at (written address checked) and
+  gps_confirmed_at/gps_confirmed_by_user_id (an admin explicitly confirmed the map point).
+- 103 (additive): the two columns + CHECKs (pair; confirmed requires lat/lng); reverify trigger now
+  clears verified_at on written-address edits and gps_confirmed_* on lat/lng edits; history kinds
+  GPS_CONFIRMED / GPS_CHANGED. Existing rows keep verified_at; legacy coordinates stay unconfirmed.
+- POST .../service-locations/:id/confirm-gps (managers; {latitude, longitude, confirm:true}; PR bounds).
+  Shift service-location returns coordinates only when GPS is confirmed (+ gpsConfirmed); options
+  carry gpsConfirmed; arrival proximity uses only confirmed coordinates (else NO_REFERENCE).
+- verifyGate6ServiceLocations 82/82 (negative control 78/82); staging verifier +G9..G11 (66 checks,
+  read-only probes); npm test 423/423; CI PostgreSQL replica 19/19.
+
+## 2026-10-23 — Gate 6: service location, arrival, FILLED cancellation (claude/smartmatch-gate1-rls)
+
+- User decisions: OpenStreetMap map without geocoding; proximity computed on the server and
+  discarded (result + rounded distance only, radius 200 m); "Llegué" + "Iniciar" + "Finalizar";
+  family address permission per relative, off by default.
+- 100: care_recipient_locations (084) extended, not replaced: several addresses (primary/alternates),
+  ZIP, verification (cleared on edit), establishment reuse without copy, history trigger, worker
+  access log, shifts.service_location_id + audited changes, worker reads only the address of a shift
+  assigned now, family read behind can_view_service_location (manager-only trigger), family
+  correction requests with notifications. FORCE RLS + platform_phi_deny on every new table.
+- 101: worker_location_consents (versioned, revocable), shift_arrivals (no coordinate columns,
+  review path), SHIFT_LATE_ARRIVAL notices (app_notify_late_shift_arrivals + API background worker).
+  Check-in/out no longer store device coordinates.
+- 102: FILLED -> CANCELLED with reason category; blocked while a linked shift is active.
+- verifyGate6ServiceLocations.ts 70/70 (negative control 66/70); staging verifier 61 checks; seed adds
+  a synthetic address and familia@agencia-a.invalid. Full CI PostgreSQL replica 19/19.
+
+## 2026-10-23 — SmartMatch Gate 5: Crear turno con esta cuidadora (claude/smartmatch-gate1-rls)
+
+- Decision (user, option A): approval keeps meaning FILLED, no assignment. A separate admin action
+  creates ONE real shift in the existing Turnos module, schedule/role fixed to the opportunity.
+- Migration 099 (additive): smartmatch_opportunities.shift_id (unique, composite FK same agency,
+  only FILLED, write-once trigger); shift_private_instructions (FORCE RLS: agency managers + the
+  assigned worker via app_worker_has_shift_assignment; no family policy; platform_phi_deny).
+  Reason: shifts rows are readable by family (shifts_family_read) -- instructions never go there.
+- Turnos services: extracted insertShiftInTransaction / assignWorkerToShiftInTransaction (existing
+  endpoints call them; behavior unchanged). POST .../smartmatch/opportunities/:id/shift does lock,
+  re-validation (membership, credentials, availability, active recipient of the agency), shift,
+  assignment (eligibility, duplicates, overlaps, SHIFT_ASSIGNMENT_PENDING), instructions, link in
+  ONE transaction. GET .../shift-draft; GET/PUT .../shifts/:id/private-instructions.
+- verifySmartMatchShifts.ts 30/30 (CI); staging verifier now 52 checks (T0-T9, cancels its shift).
+- Gate 1 guard test tightened: only the RESTRICTIVE platform_phi_deny may mention app_is_superadmin().
+
+## 2026-10-23 — SmartMatch Gate 5: notifications + privacy validation (claude/smartmatch-gate1-rls)
+
+- Migration 098: AFTER INSERT trigger on smartmatch_application_events writes into the existing
+  `notifications` table (in_app, no care_recipient_id). SUBMITTED -> every active admin of the
+  same agency (not the applicant); APPROVED/REJECTED/CLOSED(OPPORTUNITY_FILLED) -> the caregiver,
+  and the admins' SUBMITTED notification is marked read. Partial unique index makes it idempotent.
+- Role label: predefined options or validated free text (no digits, honorifics, clinical or
+  address words, max 60). Region must be one of the 78 Puerto Rico municipalities.
+- Event history exposes consent_version on SUBMITTED (auditable consent).
+- verifySmartMatchNotifications.ts 25/25 (12/25 without 098); verifySmartMatchDecisions.ts 49/49
+  (E7 credential revoked after review -> blocked, H6 consent); staging HTTP verifier 44 checks.
+- Next: Turnos integration ("Crear turno con esta cuidadora"), architecture review first.
+
+## 2026-10-22 — SmartMatch Gate 3: integration hardening, two-agency flow (claude/smartmatch-gate1-rls)
+
+- Catalog audit of every SmartMatch policy/grant/trigger found 4 gaps, each confirmed as
+  app_runtime: FILLED could be reopened; schedule/place/role editable after publishing;
+  opportunities insertable as PUBLISHED/FILLED; withdrawals could carry decision data.
+  Migration 097 closes them (status-machine trigger binding every writer, terms locked
+  after publish, INTERNAL DRAFT-only insert with server ids/timestamps, clean withdrawal).
+- Publishing: any administrator of the agency may publish its drafts (was creator-only).
+- scripts/verifySmartMatchTwoAgencyFlow.ts: 66 HTTP checks, two agencies in parallel,
+  cross-agency/family/supervisor/platform attacks, history privacy, zero assignments.
+  Negative controls: without 097 -> 69/77 RLS; old publish rule -> 58/64 flow.
+- Railway etnara-smartmatch-staging: DATABASE_URL references its own Postgres (isolated)
+  but as the superuser, i.e. RLS would be bypassed; NODE_ENV invalid. See Gate 3 report.
+
+## 2026-10-22 — SmartMatch Gate 2: agency decisions, re-apply, history (claude/smartmatch-gate1-rls)
+
+- Migration 096: re-apply after withdrawal (partial unique index: one non-withdrawn
+  application per caregiver/opportunity; rejected/approved still block); deferred
+  constraint trigger rejects a submission that commits after the opportunity closed;
+  agency decision UPDATE policy (admin of own agency, PENDING only, never own
+  application, signed by session user); approval CHECK requires server checks (COALESCE:
+  a NULL CHECK would otherwise pass); append-only smartmatch_application_events written
+  only by trigger (not audit_log: every org member can read audit_log); opportunity
+  policy split so an admin other than the creator can mark FILLED (092's FOR ALL
+  WITH CHECK created_by = me blocked it); created_by/organization_id not updatable.
+- Service/routes (smartmatch.applications.*): apply (consent v1), withdraw, my-applications,
+  review queue, review with live checks, decision (lock opportunity -> application, fresh
+  credentials via evaluateWorkerEligibilityInTransaction, availability, consent; blocks when
+  unverifiable; FILLED, no assignment; closes other pending as OPPORTUNITY_FILLED), events.
+- scripts/verifySmartMatchDecisions.ts: 47 HTTP checks incl. concurrency (stress 15/15);
+  verifySmartMatchRls.ts now 63 checks. Both wired into CI.
+- Next step (Gate 3/4): integration hardening, then frontend-v23 UI.
+
+## 2026-10-22 — SmartMatch Gate 1: real caregiver role, network lock, applications RLS (claude/smartmatch-gate1-rls)
+
+- Root cause of the RLS recursion seen in Gate 0: the SmartMatch branch predated main's
+  079/081 recursion fixes. Not schema drift: confirmed read-only via the live deploy log
+  (079/081 registered; no SmartMatch migrations applied there). Main merged into this branch.
+- Migration 095: caregiver access = WORKER role + active worker membership (094 required a
+  non-existent CAREGIVER role, so discovery always returned 0 rows); NETWORK blocked by a
+  CHECK constraint (applies to every writer); caregiver submit/read/withdraw policies with
+  required consent (consented_at + consent_version); organization_id denormalized onto
+  applications with a composite FK so policies are acyclic under FORCE RLS; agency
+  policies moved onto app_is_org_admin(). No approve/reject privilege for app_runtime.
+- scripts/verifySmartMatchRls.ts: 47 attacks as app_runtime on the real migration chain
+  (wired into etnara-ci.yml and smartmatch-postgres.yml, which no longer uses a fake schema).
+  Negative control without 095: 37/47 (detects role and NETWORK bugs).
+- Next step (Gate 2): transactional decision function + endpoints (apply, withdraw,
+  my-applications, eligibility, approve/reject → FILLED, no assignment).
 ## 2026-10-22 — Phase 12.4 offline check-in/out + caregiver session (gate/12.4-offline-mode)
 
 - Migration 087 (additive): verification_events.client_event_id (unique per

@@ -1,0 +1,302 @@
+/**
+ * Black-box verification of a DEPLOYED SmartMatch staging API over HTTPS,
+ * using only the synthetic users created by seedSmartMatchStaging.ts.
+ * No database access: everything goes through the public API, exactly as
+ * the two portals do. Creates synthetic opportunities/applications only.
+ *
+ * Env:
+ *   SMARTMATCH_STAGING_BASE_URL     e.g. https://<api>.up.railway.app (or http://127.0.0.1:PORT locally)
+ *   SMARTMATCH_STAGING_WEB_ORIGIN   staging frontend origin, for the CORS check (optional)
+ *   SMARTMATCH_STAGING_DEMO_PASSWORD
+ */
+const base = (process.env.SMARTMATCH_STAGING_BASE_URL ?? "").replace(/\/+$/, "");
+const origin = process.env.SMARTMATCH_STAGING_WEB_ORIGIN ?? "";
+const password = process.env.SMARTMATCH_STAGING_DEMO_PASSWORD ?? "";
+if (!/^https:\/\/[a-z0-9-]+\.up\.railway\.app$/.test(base) && !/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) {
+  throw new Error("SMARTMATCH_STAGING_BASE_URL must be a Railway staging domain or a local address");
+}
+if (/app\.etnaracare\.com|etnara\.care/i.test(base)) throw new Error("Production refused");
+if (password.length < 16) throw new Error("SMARTMATCH_STAGING_DEMO_PASSWORD is required");
+
+type Json = Record<string, any>;
+const results: { name: string; pass: boolean; detail: string }[] = [];
+const check = (name: string, pass: boolean, detail = "") => results.push({ name, pass, detail });
+
+async function call(method: string, path: string, token?: string, body?: Json) {
+  const res = await fetch(base + path, {
+    method,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(origin ? { Origin: origin } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let parsed: Json = {};
+  try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = {}; }
+  return { status: res.status, body: parsed, headers: res.headers };
+}
+
+async function session(email: string) {
+  const login = await call("POST", "/auth/login", undefined, { email, password });
+  check(`L login ${email}`, login.status === 200 && typeof login.body.token === "string", `status=${login.status}`);
+  const token = login.body.token as string;
+  const me = await call("GET", "/me", token);
+  const orgId = (me.body.organizations ?? [])[0]?.id as string;
+  await call("POST", "/me/active-organization", token, { organizationId: orgId });
+  return { token, orgId, userId: me.body.user?.id as string };
+}
+
+/** Optionally wait for a fresh deployment to come up (SMARTMATCH_STAGING_WAIT_SECONDS). */
+async function waitForHealth() {
+  const deadline = Date.now() + Number(process.env.SMARTMATCH_STAGING_WAIT_SECONDS ?? 0) * 1000;
+  while (Date.now() < deadline) {
+    try { if ((await fetch(base + "/health")).ok) return; } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+
+async function smartmatchNotifications(token: string, appId: string) {
+  const r = await call("GET", "/me/notifications?limit=100", token);
+  return ((r.body.items ?? []) as Json[]).filter((n) => n.relatedEntityType === "smartmatch_application" && n.relatedEntityId === appId);
+}
+
+async function main() {
+  await waitForHealth();
+  const health = await call("GET", "/health");
+  check("H1 /health responds", health.status === 200 && health.body.status === "ok", `status=${health.status}`);
+  if (origin) {
+    const allow = health.headers.get("access-control-allow-origin");
+    check("H2 CORS allows the staging frontend origin", allow === origin, `allow-origin=${allow}`);
+    const evil = await fetch(base + "/health", { headers: { Origin: "https://evil.example" } });
+    check("H3 CORS does not allow an unknown origin", evil.headers.get("access-control-allow-origin") === null, `allow-origin=${evil.headers.get("access-control-allow-origin")}`);
+  }
+
+  const a1 = await session("admin1@agencia-a.invalid");
+  const a2 = await session("admin2@agencia-a.invalid");
+  const sup = await session("supervisor@agencia-a.invalid");
+  const c1 = await session("cuidadora1@agencia-a.invalid");
+  const c2 = await session("cuidadora2@agencia-a.invalid");
+  const bAdmin = await session("admin@agencia-b.invalid");
+  const bCg = await session("cuidadora@agencia-b.invalid");
+  const fam = await session("familia@agencia-a.invalid");
+  const S = `/organizations/${a1.orgId}/smartmatch`;
+  const bad = await call("POST", "/auth/login", undefined, { email: "admin1@agencia-a.invalid", password: "wrong-password-123" });
+  check("L wrong password rejected", bad.status === 401 || bad.status === 400, `status=${bad.status}`);
+
+  // Leftovers of an earlier run that crashed before its own cleanup (e.g. it raced an
+  // API redeploy): cancel ONLY what this verifier created -- shifts linked to its
+  // «Cuidador/a (staging)» opportunities -- exactly like its T9/G8 cleanup does.
+  const own = await call("GET", `${S}/opportunities`, a1.token);
+  let leftovers = 0;
+  for (const o of (own.body.opportunities ?? []) as Json[]) {
+    if (o.role_label !== "Cuidador/a (staging)" || o.status !== "FILLED") continue;
+    if (o.shift_id && o.shift_status !== "cancelled") {
+      await call("POST", `/organizations/${a1.orgId}/shifts/${o.shift_id}/cancel`, a1.token, { reason: "Verificación automática de staging (limpieza)" });
+    }
+    await call("POST", `${S}/opportunities/${o.id}/cancel`, a1.token, { reason: "SCHEDULE_CHANGED", note: "Limpieza de verificación anterior" });
+    leftovers++;
+  }
+  if (leftovers) console.log(`cleaned ${leftovers} leftover verification opportunit${leftovers === 1 ? "y" : "ies"}`);
+
+  // Unique schedule per run: +3..+60 days, 10:00-14:00 Puerto Rico (UTC-4).
+  const days = 3 + Math.floor(Math.random() * 58);
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + days, 14, Math.floor(Math.random() * 50)));
+  const window = { startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 4 * 3600e3).toISOString() };
+  const consent = { consent: true, consentVersion: "smartmatch-consent-v1" };
+
+  // Agency portal
+  const draft = await call("POST", `${S}/opportunities`, a1.token, { visibility: "INTERNAL", regionLabel: "Caguas", roleLabel: "Cuidador/a (staging)", ...window });
+  check("A1 admin creates draft", draft.status === 201, `status=${draft.status}`);
+  const oppId = draft.body.opportunity?.id as string;
+  const pubB = await call("POST", `/organizations/${bAdmin.orgId}/smartmatch/opportunities/${oppId}/publish`, bAdmin.token);
+  check("A2 agency B admin cannot publish agency A draft", pubB.status === 404, `status=${pubB.status}`);
+  const pub = await call("POST", `${S}/opportunities/${oppId}/publish`, a2.token);
+  check("A3 second admin (not the creator) publishes", pub.status === 200, `status=${pub.status}`);
+  const supList = await call("GET", `${S}/opportunities`, sup.token);
+  check("A4 supervisor has no SmartMatch access", supList.status === 403, `status=${supList.status}`);
+  const net = await call("POST", `${S}/opportunities`, a1.token, { visibility: "NETWORK", regionLabel: "Caguas", roleLabel: "x", ...window });
+  check("A5 NETWORK opportunities disabled", net.status === 409, `status=${net.status}`);
+  const addr = await call("POST", `${S}/opportunities`, a1.token, { visibility: "INTERNAL", regionLabel: "Calle Luna 123, Caguas", roleLabel: "Cuidador/a", ...window });
+  check("P1 address instead of municipality rejected", addr.status === 400, `status=${addr.status}`);
+  const named = await call("POST", `${S}/opportunities`, a1.token, { visibility: "INTERNAL", regionLabel: "Caguas", roleLabel: "Cuidar a Sra. Rivera", ...window });
+  check("P2 patient name in the role rejected", named.status === 400, `status=${named.status}`);
+
+  // Caregiver portal
+  const disc = await call("GET", `${S}/available-opportunities`, c1.token);
+  check("C1 caregiver sees the published opportunity", disc.status === 200 && (disc.body.opportunities ?? []).some((o: Json) => o.id === oppId), `status=${disc.status}`);
+  const discB = await call("GET", `/organizations/${bCg.orgId}/smartmatch/available-opportunities`, bCg.token);
+  check("C2 agency B caregiver does not see it", !(discB.body.opportunities ?? []).some((o: Json) => o.id === oppId), `status=${discB.status}`);
+  // Pilot switches (migration 108): Agency A is the pilot, Agency B has nothing enabled.
+  const meA = await call("GET", "/me", a1.token);
+  const meB = await call("GET", "/me", bAdmin.token);
+  const featA = (meA.body.organizations ?? []).find((o: Json) => o.id === a1.orgId)?.features ?? [];
+  const featB = (meB.body.organizations ?? []).find((o: Json) => o.id === bAdmin.orgId)?.features ?? null;
+  check("F1 /me: pilot agency A has SMARTMATCH and EN_CAMINO; agency B has none",
+    featA.includes("SMARTMATCH") && featA.includes("EN_CAMINO") && Array.isArray(featB) && featB.length === 0, `${JSON.stringify(featA)} ${JSON.stringify(featB)}`);
+  const bOpps = await call("GET", `/organizations/${bAdmin.orgId}/smartmatch/opportunities`, bAdmin.token);
+  const bJourneys = await call("GET", `/organizations/${bAdmin.orgId}/operations/journeys`, bAdmin.token);
+  const bConsent = await call("GET", `/organizations/${bCg.orgId}/me/location-consent`, bCg.token);
+  check("F2 agency B gets 404 FEATURE_NOT_ENABLED on SmartMatch, «En camino» and «Llegué»",
+    discB.status === 404 && discB.body.error === "FEATURE_NOT_ENABLED" && bOpps.status === 404 && bJourneys.status === 404 && bConsent.status === 404,
+    `${discB.status},${bOpps.status},${bJourneys.status},${bConsent.status}`);
+  const noConsent = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, {});
+  check("C3 application without consent rejected", noConsent.status === 400, `status=${noConsent.status}`);
+  const ap = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, consent);
+  check("C4 caregiver applies with consent", ap.status === 201, `status=${ap.status}`);
+  const dup = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, consent);
+  check("C5 duplicate application rejected", dup.status === 409, `status=${dup.status}`);
+  const wd = await call("POST", `${S}/applications/${ap.body.application?.id}/withdraw`, c1.token);
+  check("C6 caregiver withdraws", wd.status === 200, `status=${wd.status}`);
+  const re = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, consent);
+  check("C7 caregiver re-applies with renewed consent", re.status === 201, `status=${re.status}`);
+  const appId = re.body.application?.id as string;
+  const sub1 = await smartmatchNotifications(a1.token, appId);
+  const sub2 = await smartmatchNotifications(a2.token, appId);
+  check("N1 both agency admins notified of the new application", sub1.length === 1 && sub2.length === 1 && sub1[0].type === "SMARTMATCH_APPLICATION_SUBMITTED", `${sub1.length},${sub2.length}`);
+  check("N2 agency B admin not notified", (await smartmatchNotifications(bAdmin.token, appId)).length === 0);
+  check("N3 supervisor not notified", (await smartmatchNotifications(sup.token, appId)).length === 0);
+  const ap2 = await call("POST", `${S}/opportunities/${oppId}/applications`, c2.token, consent);
+  check("C8 second caregiver applies", ap2.status === 201, `status=${ap2.status}`);
+  const crossApply = await call("POST", `/organizations/${bCg.orgId}/smartmatch/opportunities/${oppId}/applications`, bCg.token, consent);
+  check("C9 agency B caregiver cannot apply", crossApply.status === 404, `status=${crossApply.status}`);
+
+  // Agency review and decision
+  const queue = await call("GET", `${S}/opportunities/${oppId}/review-queue`, a1.token);
+  check("D1 review queue lists 3 applications (incl. withdrawn)", queue.status === 200 && (queue.body.applications ?? []).length === 3, `count=${(queue.body.applications ?? []).length}`);
+  const review = await call("GET", `${S}/applications/${appId}/review`, a1.token);
+  check("D2 live checks: approvable", review.status === 200 && review.body.checks?.approvable === true, JSON.stringify(review.body.checks ?? {}).slice(0, 120));
+  const crossDecide = await call("POST", `/organizations/${bAdmin.orgId}/smartmatch/applications/${appId}/decision`, bAdmin.token, { decision: "REJECT" });
+  check("D3 agency B admin cannot decide", crossDecide.status === 404, `status=${crossDecide.status}`);
+  const noConfirm = await call("POST", `${S}/applications/${appId}/decision`, a1.token, { decision: "APPROVE" });
+  check("D4 approval requires confirmation", noConfirm.status === 400, `status=${noConfirm.status}`);
+  const ok = await call("POST", `${S}/applications/${appId}/decision`, a1.token, { decision: "APPROVE", confirm: true });
+  check("D5 admin approves", ok.status === 200 && ok.body.outcome === "APPROVED", `status=${ok.status}`);
+  const list = await call("GET", `${S}/opportunities`, a1.token);
+  const opp = (list.body.opportunities ?? []).find((o: Json) => o.id === oppId);
+  check("D6 opportunity is FILLED", opp?.status === "FILLED", `status=${opp?.status}`);
+  const events = await call("GET", `${S}/applications/${appId}/events`, a2.token);
+  const ev = (events.body.events ?? []) as Json[];
+  check("D7 decision history SUBMITTED,APPROVED signed by admin 1", ev.map(e => e.event_type).join(",") === "SUBMITTED,APPROVED" && ev[1]?.actor_user_id === a1.userId, ev.map(e => e.event_type).join(","));
+  const evCg = await call("GET", `${S}/applications/${appId}/events`, c1.token);
+  check("D8 caregiver cannot read the agency history endpoint", evCg.status === 403, `status=${evCg.status}`);
+  const mine1 = await call("GET", `${S}/my-applications`, c1.token);
+  check("D9 caregiver 1 sees APPROVED", (mine1.body.applications ?? []).some((a: Json) => a.id === appId && a.status === "APPROVED"), "");
+  const mine2 = await call("GET", `${S}/my-applications`, c2.token);
+  const appr = await smartmatchNotifications(c1.token, appId);
+  check("N4 caregiver notified of the approval", appr.length === 1 && appr[0].type === "SMARTMATCH_APPLICATION_APPROVED", appr.map((n) => n.type).join(","));
+  const closed = await smartmatchNotifications(c2.token, ap2.body.application?.id);
+  check("N5 other caregiver notified that the opportunity was covered", closed.length === 1 && closed[0].type === "SMARTMATCH_APPLICATION_CLOSED", closed.map((n) => n.type).join(","));
+  check("N6 admins' request resolved after the decision", (await smartmatchNotifications(a2.token, appId)).every((n) => n.readAt));
+  check("D10 caregiver 2 sees REJECTED / OPPORTUNITY_FILLED", (mine2.body.applications ?? []).some((a: Json) => a.opportunity_id === oppId && a.status === "REJECTED" && a.decision_reason === "OPPORTUNITY_FILLED"), "");
+
+  // Gate 5: "Crear turno con esta cuidadora" (existing Turnos module)
+  const recipients = await call("GET", `/organizations/${a1.orgId}/care-recipients`, a1.token);
+  const synthetic = ((recipients.body.careRecipients ?? recipients.body.recipients ?? recipients.body.items ?? []) as Json[])
+    .find((r) => String(r.last_name ?? r.lastName ?? "").startsWith("Sintética A"));
+  check("T0 synthetic person receiving care is seeded in agency A", !!synthetic, `status=${recipients.status}`);
+  const supShift = await call("POST", `${S}/opportunities/${oppId}/shift`, sup.token, { careRecipientId: synthetic?.id });
+  check("T1 supervisor cannot create a shift from SmartMatch", supShift.status === 403, `status=${supShift.status}`);
+  const bShift = await call("POST", `/organizations/${bAdmin.orgId}/smartmatch/opportunities/${oppId}/shift`, bAdmin.token, { careRecipientId: synthetic?.id });
+  check("T2 agency B cannot create a shift for agency A", bShift.status === 404, `status=${bShift.status}`);
+  const shiftDraft = await call("GET", `${S}/opportunities/${oppId}/shift-draft`, a1.token);
+  check("T3 draft shows the approved caregiver and allows creation", shiftDraft.body.canCreate === true && shiftDraft.body.caregiver?.displayName === "Cuidadora Uno A", `status=${shiftDraft.status}`);
+  // Gate 6: the person has a registered address, so the admin must confirm one.
+  const R = `/organizations/${a1.orgId}/care-recipients/${synthetic?.id}`;
+  const noLoc = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id });
+  check("G1 SmartMatch shift requires confirming the service address", noLoc.status === 409 && noLoc.body.error === "SERVICE_LOCATION_REQUIRED", `status=${noLoc.status}`);
+  const options = await call("GET", `${R}/service-location-options`, a1.token);
+  const primaryLoc = ((options.body.options ?? []) as Json[]).find((o) => o.isPrimary);
+  check("G2 the agency gets the person's addresses to choose from", options.status === 200 && !!primaryLoc, `status=${options.status}`);
+  const bLoc = await call("GET", `/organizations/${bAdmin.orgId}/care-recipients/${synthetic?.id}/service-locations`, bAdmin.token);
+  check("G3 agency B cannot reach agency A's addresses", [403, 404].includes(bLoc.status), `status=${bLoc.status}`);
+  const made = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id, serviceLocationId: primaryLoc?.id, instructions: "Instrucción sintética de staging." });
+  const shiftId = made.body.shift?.id as string | undefined;
+  check("T4 admin creates the shift for the approved caregiver", made.status === 201 && !!shiftId, `status=${made.status} ${made.body.error ?? ""}`);
+  const dupShift = await call("POST", `${S}/opportunities/${oppId}/shift`, a2.token, { careRecipientId: synthetic?.id });
+  check("T5 a second shift for the same opportunity is refused", dupShift.status === 409 && dupShift.body.error === "SHIFT_ALREADY_CREATED", `status=${dupShift.status}`);
+  const myShifts = await call("GET", `/organizations/${c1.orgId}/me/shifts`, c1.token);
+  check("T6 caregiver sees the shift in her Turnos", ((myShifts.body.shifts ?? []) as Json[]).some((x) => x.id === shiftId), `status=${myShifts.status}`);
+  const cgIns = await call("GET", `/organizations/${c1.orgId}/shifts/${shiftId}/private-instructions`, c1.token);
+  const otherIns = await call("GET", `/organizations/${c2.orgId}/shifts/${shiftId}/private-instructions`, c2.token);
+  check("T7 private instructions: assigned caregiver yes, other caregiver no", cgIns.status === 200 && otherIns.status === 404, `${cgIns.status},${otherIns.status}`);
+  const linkedList = await call("GET", `${S}/opportunities`, a1.token);
+  const linkedOpp = ((linkedList.body.opportunities ?? []) as Json[]).find((o) => o.id === oppId);
+  check("T8 opportunity shows the created shift", linkedOpp?.shift_id === shiftId && linkedOpp?.shift_assignment_status === "pending", JSON.stringify(linkedOpp?.shift_assignment_status ?? null));
+  // Gate 6: caregiver navigation, arrival without consent, family view and correction request.
+  const nav = await call("GET", `/organizations/${c1.orgId}/shifts/${shiftId}/service-location`, c1.token);
+  const navOther = await call("GET", `/organizations/${c2.orgId}/shifts/${shiftId}/service-location`, c2.token);
+  check("G4 assigned caregiver gets the confirmed address; another caregiver does not",
+    nav.status === 200 && nav.body.location?.id === primaryLoc?.id && navOther.status === 404, `${nav.status},${navOther.status}`);
+  // Gate 6 fix: exact coordinates only reach the caregiver once an admin confirmed the GPS point.
+  const navLoc = nav.body.location as Json | undefined;
+  check("G9 coordinates are sent only when the GPS point is confirmed (else approximate)",
+    typeof primaryLoc?.gpsConfirmed === "boolean" && typeof navLoc?.gpsConfirmed === "boolean"
+      && (navLoc.gpsConfirmed ? typeof navLoc.latitude === "number" : navLoc.latitude === null && navLoc.longitude === null),
+    `gpsConfirmed=${navLoc?.gpsConfirmed}`);
+  // Read-only probes: every one of these is refused before any write.
+  const gpsUrl = `${R}/service-locations/${primaryLoc?.id}/confirm-gps`;
+  const point = { latitude: 18.2341, longitude: -66.0485, confirm: true };
+  const gpsCg = await call("POST", gpsUrl, c1.token, point);
+  const gpsB = await call("POST", `/organizations/${bAdmin.orgId}/care-recipients/${synthetic?.id}/service-locations/${primaryLoc?.id}/confirm-gps`, bAdmin.token, point);
+  check("G10 caregivers and other agencies cannot confirm the GPS point",
+    gpsCg.status === 403 && [403, 404].includes(gpsB.status), `${gpsCg.status},${gpsB.status}`);
+  const gpsNoConfirm = await call("POST", gpsUrl, a1.token, { latitude: 18.2341, longitude: -66.0485 });
+  const gpsOutside = await call("POST", gpsUrl, a1.token, { latitude: 40.7128, longitude: -74.006, confirm: true });
+  check("G11 GPS confirmation needs an explicit confirm and a point in Puerto Rico", gpsNoConfirm.status === 400 && gpsOutside.status === 400, `${gpsNoConfirm.status},${gpsOutside.status}`);
+  // Gate 6 close (104): only agency managers change family access. Both probes are refused before any write.
+  const relatives = await call("GET", `${R}/family-location-permissions`, a1.token);
+  const relId = ((relatives.body.relatives ?? []) as Json[])[0]?.id as string | undefined;
+  const revFam = relId ? await call("POST", `${R}/family/${relId}/revoke`, fam.token) : { status: 0 };
+  const revCg = relId ? await call("POST", `${R}/family/${relId}/revoke`, c1.token) : { status: 0 };
+  check("G12 relatives and caregivers cannot revoke family access (managers only)", !!relId && revFam.status === 403 && revCg.status === 403, `${revFam.status},${revCg.status}`);
+  await call("POST", `/organizations/${c1.orgId}/me/shifts/${shiftId}/respond`, c1.token, { decision: "accepted" });
+  // Gate 7 «En Camino» (read-only probes: the SmartMatch shift is days away, so nothing is written).
+  const enRoute = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/journey/en-route`, c1.token, {});
+  const enRouteOther = await call("POST", `/organizations/${c2.orgId}/shifts/${shiftId}/journey/en-route`, c2.token, {});
+  check("G13 «Voy en camino» only inside its window and only by the assigned caregiver",
+    enRoute.status === 409 && enRoute.body.error === "JOURNEY_OUTSIDE_WINDOW" && enRouteOther.status === 404, `${enRoute.status} ${enRoute.body.error},${enRouteOther.status}`);
+  const famShifts = await call("GET", `${R}/family-shifts`, fam.token);
+  const famJourney = ((famShifts.body.shifts ?? []) as Json[]).find((x) => x.journey)?.journey;
+  check("G14 family view carries the derived journey state, without review flag or location",
+    famShifts.status === 200 && (famJourney === undefined || (!("arrivalNeedsReview" in famJourney) && !/lat|lng|eta/i.test(JSON.stringify(famJourney)))), `status=${famShifts.status}`);
+  const ops = await call("GET", `/organizations/${a1.orgId}/operations/journeys`, a1.token);
+  const opsCg = await call("GET", `/organizations/${c1.orgId}/operations/journeys`, c1.token);
+  check("G15 «Hoy en ruta» for agency managers only", ops.status === 200 && Array.isArray(ops.body.journeys) && opsCg.status === 403, `${ops.status},${opsCg.status}`);
+  await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
+  const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});
+  // The SmartMatch shift is days away: «Llegué» is refused outside its window (audit M6, migration 107).
+  // The consented / not-consented arrival paths are covered by verifyGate6ServiceLocations in CI.
+  check("G5 «Llegué» days before the visit is refused (window: 2 h before the start until its end)",
+    arrival.status === 409 && arrival.body.error === "ARRIVAL_OUTSIDE_WINDOW", `status=${arrival.status} ${arrival.body.error ?? ""}`);
+  const famLoc = await call("GET", `/me/care-recipients/${synthetic?.id}/service-location`, fam.token);
+  check("G6 relative without permission sees no address", famLoc.status === 200 && famLoc.body.canView === false && famLoc.body.location === null, `status=${famLoc.status}`);
+  const famReq = await call("POST", `/me/care-recipients/${synthetic?.id}/location-change-requests`, fam.token, { message: "Prueba sintética de staging" });
+  const famReqId = famReq.body.request?.id as string | undefined;
+  const reject = famReqId ? await call("POST", `${R}/location-change-requests/${famReqId}/resolve`, a1.token, { decision: "REJECT", note: "Verificación automática" }) : { status: 0 };
+  check("G7 relative requests a correction; the agency resolves it", famReq.status === 201 && reject.status === 200, `${famReq.status},${reject.status}`);
+
+  // Cleanup: cancel through Turnos so the next run's random schedule never conflicts.
+  if (shiftId) {
+    const cancel = await call("POST", `/organizations/${a1.orgId}/shifts/${shiftId}/cancel`, a1.token, { reason: "Verificación automática de staging" });
+    check("T9 verification shift cancelled through Turnos (cleanup)", cancel.status === 200, `status=${cancel.status}`);
+    const cancelOpp = await call("POST", `${S}/opportunities/${oppId}/cancel`, a1.token, { reason: "SCHEDULE_CHANGED", note: "Verificación automática" });
+    const mineAfter = ((await call("GET", `${S}/my-applications`, c1.token)).body.applications ?? [] as Json[]).find((a: Json) => a.opportunity_id === oppId);
+    check("G8 FILLED opportunity cancelled with a reason after its shift was cancelled in Turnos",
+      cancelOpp.status === 200 && mineAfter?.opportunity_status === "CANCELLED" && mineAfter?.opportunity_cancellation_reason === "SCHEDULE_CHANGED", `status=${cancelOpp.status}`);
+  }
+
+  // Reject path
+  const d2 = await call("POST", `${S}/opportunities`, a2.token, { visibility: "INTERNAL", regionLabel: "Cayey", roleLabel: "Acompañante (staging)", ...window });
+  const opp2 = d2.body.opportunity?.id as string;
+  await call("POST", `${S}/opportunities/${opp2}/publish`, a1.token);
+  const r = await call("POST", `${S}/opportunities/${opp2}/applications`, c2.token, consent);
+  const rej = await call("POST", `${S}/applications/${r.body.application?.id}/decision`, a2.token, { decision: "REJECT" });
+  check("R1 admin rejects; opportunity stays published", rej.status === 200, `status=${rej.status}`);
+
+  const width = Math.max(...results.map(x => x.name.length));
+  for (const x of results) console.log(`${x.pass ? "PASS" : "FAIL"}  ${x.name.padEnd(width)}  ${x.detail}`);
+  const failed = results.filter(x => !x.pass).length;
+  console.log(`\nSmartMatch staging HTTP (${base}): ${results.length - failed}/${results.length} PASS`);
+  if (failed) process.exit(1);
+}
+
+main().catch((err) => { console.error("SmartMatch staging HTTP verification failed:", (err as Error).message); process.exit(1); });

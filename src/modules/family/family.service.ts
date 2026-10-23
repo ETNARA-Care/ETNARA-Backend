@@ -280,7 +280,7 @@ export async function revokeFamilyRelationship(
   relationshipId: string
 ): Promise<void> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    // Security hotfix 088: only agency managers revoke family access (RLS enforces it too).
+    // Only agency managers revoke family access (Gate 6 close; RLS 104 enforces it too).
     const manager = await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx);
     if (!manager.rows[0]?.ok) throw new FamilyManagerOnlyError();
     const result = await sql<{ id: string }>`

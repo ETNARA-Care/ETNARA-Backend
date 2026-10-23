@@ -25,6 +25,8 @@ export interface MeResult {
     type: string;
     membershipStatus: string;
     roles: string[];
+    /** Pilot features enabled for this agency (migration 108): "SMARTMATCH", "EN_CAMINO". */
+    features: string[];
   }>;
 }
 
@@ -48,13 +50,15 @@ export async function getMe(userId: string): Promise<MeResult> {
       organization_type: string;
       membership_status: string;
       role_code: string | null;
+      features: string[] | null;
     }>`
       SELECT
         o.id AS organization_id,
         o.name,
         o.organization_type,
         om.status AS membership_status,
-        r.code AS role_code
+        r.code AS role_code,
+        app_my_org_features(o.id) AS features
       FROM organization_memberships om
       JOIN organizations o ON o.id = om.organization_id
       LEFT JOIN user_roles ur ON ur.organization_membership_id = om.id
@@ -79,6 +83,7 @@ export async function getMe(userId: string): Promise<MeResult> {
           type: row.organization_type,
           membershipStatus: row.membership_status,
           roles: [],
+          features: row.features ?? [],
         });
       }
       if (row.role_code) byOrg.get(row.organization_id)!.roles.push(row.role_code);

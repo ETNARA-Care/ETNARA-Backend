@@ -75,6 +75,72 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyCredentialReviewWriteBoundary.ts
 
+      - name: PostgreSQL SmartMatch RLS verification (app_runtime, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchRls.ts
+
+      - name: PostgreSQL SmartMatch decisions verification (HTTP, concurrency, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchDecisions.ts
+
+      - name: PostgreSQL SmartMatch two-agency end-to-end flow (HTTP, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchTwoAgencyFlow.ts
+
+      - name: PostgreSQL SmartMatch notifications verification (HTTP, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchNotifications.ts
+
+      - name: PostgreSQL SmartMatch to Turnos verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchShifts.ts
+
+      - name: PostgreSQL Gate 6 service location verification (HTTP, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyGate6ServiceLocations.ts
+
+      - name: PostgreSQL Gate 7 journey verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyGate7Journey.ts
+
+      - name: PostgreSQL security audit hardening verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySecurityAudit.ts
+
+      - name: PostgreSQL production security hotfix (088) verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyProductionHotfix.ts
+
+      - name: PostgreSQL SmartMatch pilot switches verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyOrgFeatures.ts
+
+      - name: PostgreSQL SmartMatch cancel + expiry verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchCancelExpiry.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

@@ -1,0 +1,90 @@
+name: SmartMatch isolated PostgreSQL security
+on:
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'src/modules/smartmatch/**'
+      - 'scripts/verifySmartMatchRls.ts'
+      - 'scripts/verifySmartMatchDecisions.ts'
+      - 'scripts/verifySmartMatchTwoAgencyFlow.ts'
+      - 'scripts/verifySmartMatchNotifications.ts'
+      - 'scripts/verifySmartMatchShifts.ts'
+      - 'scripts/verifyGate6ServiceLocations.ts'
+      - 'scripts/verifyGate7Journey.ts'
+      - 'scripts/verifySecurityAudit.ts'
+      - 'scripts/verifyProductionHotfix.ts'
+      - 'scripts/verifyOrgFeatures.ts'
+      - 'scripts/verifySmartMatchCancelExpiry.ts'
+      - 'src/middleware/**'
+      - 'src/modules/platformOrganizations/**'
+      - 'src/modules/careRecipients/**'
+      - 'src/modules/verification/**'
+      - 'src/modules/scheduling/**'
+      - 'src/modules/assignments/**'
+      - 'src/modules/notifications/**'
+      - 'src/modules/eligibility/**'
+      - 'scripts/smartmatch_*.sql'
+      - '.github/workflows/smartmatch-postgres.yml'
+      - 'scripts/check_smartmatch_migration_numbers.py'
+  workflow_dispatch:
+jobs:
+  migration-prefix-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch main for migration prefix comparison
+        run: git fetch origin main:refs/remotes/origin/main
+      - name: Reject migration number conflicts with main
+        run: python3 scripts/check_smartmatch_migration_numbers.py
+  tenant-isolation:
+    # Built from the REAL migration chain (not a synthetic fixture schema), so
+    # role codes, helper functions and policy interactions match production.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: smartmatch_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d smartmatch_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MIGRATIONS_DATABASE_URL: postgres://postgres:postgres@localhost:5432/smartmatch_ci
+      ETNARA_DISPOSABLE_DB: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply all real migrations to the disposable database
+        run: npx tsx scripts/applyMigrationsOnly.ts
+      - name: SmartMatch RLS attacks as app_runtime
+        run: npx tsx scripts/verifySmartMatchRls.ts
+      - name: SmartMatch decisions over HTTP (concurrency, audit, isolation)
+        run: npx tsx scripts/verifySmartMatchDecisions.ts
+      - name: SmartMatch two-agency end-to-end flow over HTTP
+        run: npx tsx scripts/verifySmartMatchTwoAgencyFlow.ts
+      - name: SmartMatch notifications over HTTP
+        run: npx tsx scripts/verifySmartMatchNotifications.ts
+      - name: SmartMatch to Turnos over HTTP
+        run: npx tsx scripts/verifySmartMatchShifts.ts
+      - name: Gate 6 service locations over HTTP
+        run: npx tsx scripts/verifyGate6ServiceLocations.ts
+      - name: Gate 7 journey (En Camino) over HTTP
+        run: npx tsx scripts/verifyGate7Journey.ts
+      - name: Security audit hardening over HTTP
+        run: npx tsx scripts/verifySecurityAudit.ts
+      - name: Production security hotfix (088) over HTTP
+        run: npx tsx scripts/verifyProductionHotfix.ts
+      - name: SmartMatch pilot switches over HTTP
+        run: npx tsx scripts/verifyOrgFeatures.ts
+      - name: SmartMatch cancel + expiry over HTTP
+        run: npx tsx scripts/verifySmartMatchCancelExpiry.ts

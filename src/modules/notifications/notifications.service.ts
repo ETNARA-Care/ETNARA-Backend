@@ -68,6 +68,41 @@ function summarizeType(notificationType: string): string {
       return "Credencial aprobada";
     case "CREDENTIAL_REVIEW_REJECTED":
       return "Credencial rechazada";
+    case "SMARTMATCH_APPLICATION_SUBMITTED":
+      return "Nueva solicitud en SmartMatch";
+    case "SMARTMATCH_APPLICATION_APPROVED":
+      return "Tu solicitud fue aprobada";
+    case "SMARTMATCH_APPLICATION_REJECTED":
+      return "Tu solicitud no fue aprobada";
+    case "SMARTMATCH_APPLICATION_CLOSED":
+      return "La oportunidad se cubrió con otra persona";
+    case "SMARTMATCH_OPPORTUNITY_CANCELLED":
+      return "La agencia canceló una oportunidad que tenías aprobada";
+    case "SMARTMATCH_APPLICATION_OPPORTUNITY_CANCELLED":
+      return "La agencia canceló una oportunidad a la que te postulaste";
+    case "SMARTMATCH_APPLICATION_OPPORTUNITY_EXPIRED":
+      return "Venció una oportunidad a la que te postulaste";
+    // Gate 7 «En camino»: never an address, a location or an estimated time.
+    case "FAMILY_CAREGIVER_EN_ROUTE":
+      return "La cuidadora va en camino";
+    case "FAMILY_CAREGIVER_DELAYED":
+      return "La cuidadora informó un retraso";
+    case "FAMILY_CAREGIVER_ARRIVED":
+      return "Llegada registrada";
+    case "SHIFT_NOT_EN_ROUTE":
+      return "Aún no registra salida (turno en 30 min)";
+    case "SHIFT_DELAY_REPORTED":
+      return "Retraso de 30 min o más informado";
+    case "SHIFT_LATE_ARRIVAL":
+      return "Turno sin llegada registrada (15 min)";
+    case "SHIFT_ARRIVAL_NEEDS_REVIEW":
+      return "Llegada pendiente de revisión";
+    case "LOCATION_CHANGE_REQUESTED":
+      return "Un familiar solicitó corregir una dirección";
+    case "LOCATION_CHANGE_APPROVED":
+      return "La agencia aprobó tu corrección de dirección";
+    case "LOCATION_CHANGE_REJECTED":
+      return "La agencia revisó tu corrección de dirección";
     default:
       return "Notificación";
   }

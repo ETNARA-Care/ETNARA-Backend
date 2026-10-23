@@ -1,5 +1,7 @@
 import { sql } from "kysely";
+import { journeyStates, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
+import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
 import { WorkerNotLinkedError } from "../verification/verification.service.js";
@@ -23,7 +25,7 @@ export class ShiftCannotBeCancelledError extends Error {
     this.name = "ShiftCannotBeCancelledError";
   }
 }
-/** Security hotfix 088: only agency managers change a shift's times or status by hand. */
+/** Security audit: only agency managers change a shift's times or status by hand. */
 export class ShiftUpdateForbiddenError extends Error {
   constructor() { super("SHIFT_UPDATE_FORBIDDEN"); this.name = "ShiftUpdateForbiddenError"; }
 }
@@ -98,6 +100,8 @@ export const createShiftSchema = z
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
     requiredRole: z.string().trim().min(1).max(80).optional(),
+    /** Gate 6: confirmed service address (one of the person's addresses). Defaults to the primary one. */
+    serviceLocationId: z.string().uuid().optional(),
   })
   .refine((d) => d.careRecipientId || d.roomId, {
     message: "Either careRecipientId (home care) or roomId (residential) is required",
@@ -119,7 +123,7 @@ const updateShiftSchema = z
 export type UpdateShiftInput = z.infer<typeof updateShiftSchema>;
 export { updateShiftSchema };
 
-interface ShiftRow {
+export interface ShiftRow {
   id: string;
   organization_id: string;
   care_recipient_id: string | null;
@@ -127,6 +131,7 @@ interface ShiftRow {
   scheduled_start: string;
   scheduled_end: string;
   required_role: string;
+  service_location_id?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -147,7 +152,23 @@ export async function createShift(
   if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
     throw new InvalidShiftTimesError();
   }
-  return withTenantContext({ userId, organizationId }, async (trx) => {
+  return withTenantContext({ userId, organizationId }, (trx) => insertShiftInTransaction(trx, organizationId, input));
+}
+
+/**
+ * Shift creation rules of Turnos (recipient/room must belong to the agency)
+ * and the insert, on a transaction the caller already opened with
+ * withTenantContext(). Used by POST .../shifts and by SmartMatch "Crear turno".
+ */
+export async function insertShiftInTransaction(
+  trx: Parameters<Parameters<typeof withTenantContext>[1]>[0],
+  organizationId: string,
+  input: CreateShiftInput
+): Promise<ShiftRow> {
+  if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
+    throw new InvalidShiftTimesError();
+  }
+  {
     if (input.careRecipientId) {
       const check = await sql<{ id: string }>`
         SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
@@ -161,13 +182,16 @@ export async function createShift(
       if (!check.rows[0]) throw new RoomNotInOrgError();
     }
 
+    const serviceLocationId = input.careRecipientId
+      ? await resolveShiftLocationInTransaction(trx, organizationId, input.careRecipientId, input.serviceLocationId)
+      : null;
     const result = await sql<ShiftRow>`
-      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role)
-      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"})
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id)
+      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
+      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
-  });
+  }
 }
 
 export interface ListShiftsFilter {
@@ -202,7 +226,7 @@ export async function listShifts(userId: string, organizationId: string, filter:
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
-             s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
+             s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
@@ -258,6 +282,8 @@ export interface FamilyShiftSummary {
   status: string;
   checkedInAt: string | null;
   checkedOutAt: string | null;
+  /** Gate 7: «En camino» state (null for visits far from today). */
+  journey: JourneyState | null;
   caregiver: {
     displayName: string;
     credentials: Array<{
@@ -358,6 +384,17 @@ export async function listFamilyShifts(
         AND (s.care_recipient_id = ${careRecipientId} OR s.room_id = app_recipient_room_id(${careRecipientId}))
       ORDER BY s.scheduled_start DESC
     `.execute(trx);
+    // Gate 7: journey state for the visits around today (derived in the database;
+    // families never get the review flag, a location or an estimated time).
+    const nearby = result.rows.filter((r) => {
+      const t = new Date(r.scheduled_start).getTime();
+      return t > Date.now() - 36 * 3600_000 && t < Date.now() + 48 * 3600_000;
+    });
+    const journeys = new Map<string, JourneyState>();
+    const enCamino = await sql<{ on: boolean }>`SELECT app_org_feature_enabled(${organizationId}::uuid, 'EN_CAMINO') AS on`.execute(trx);
+    if (enCamino.rows[0]?.on) {
+      for (const [id, st] of await journeyStates(trx, nearby.map((r) => r.id))) journeys.set(id, toJourney(st, false));
+    }
     return result.rows.map((r) => ({
       id: r.id,
       careRecipientId,
@@ -366,6 +403,7 @@ export async function listFamilyShifts(
       status: r.status,
       checkedInAt: r.checked_in_at,
       checkedOutAt: r.checked_out_at,
+      journey: journeys.get(r.id) ?? null,
       caregiver: r.caregiver_display_name
         ? { displayName: r.caregiver_display_name, credentials: r.caregiver_credentials ?? [] }
         : null,
@@ -378,7 +416,7 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       LIMIT 1
@@ -420,15 +458,17 @@ export async function updateShift(
     if (input.requiredRole !== undefined) fragments.push(sql`required_role = ${input.requiredRole}`);
     fragments.push(sql`updated_at = now()`);
 
+    await sql`SAVEPOINT shift_update`.execute(trx);
     const result = await sql<ShiftRow>`
       UPDATE shifts
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
-    `.execute(trx).catch((error: { message?: string }) => {
-      // Guard in migration 088: a cancelled shift never comes back.
+    `.execute(trx).catch(async (error: { message?: string }) => {
+      // Guards in migration 107: a cancelled shift never comes back; a visit whose
+      // journey/arrival started cannot be moved (cancel and create a new one instead).
       const m = /SHIFT_[A-Z_]+_LOCKED|SHIFT_STATUS_[A-Z_]+/.exec(error?.message ?? "");
-      if (m) throw new ShiftStateLockedError(m[0]);
+      if (m) { await sql`ROLLBACK TO SAVEPOINT shift_update`.execute(trx); throw new ShiftStateLockedError(m[0]); }
       throw error;
     });
     if (!result.rows[0]) throw new ShiftNotFoundError();

@@ -23,6 +23,11 @@ import {
 } from "./verification.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
+  AlreadyArrivedError, ArrivalAfterCheckInError, ArrivalOutsideWindowError, LocationConsentRequiredError, NoArrivalToReviewError,
+  arrivalReviewSchema, arrivalSchema, consentSchema,
+  getMyLocationConsent, grantLocationConsent, recordArrival, reviewArrival, revokeLocationConsent,
+} from "./verification.arrival.js";
+import {
   OrganizationAccessDeniedError,
   InvalidOrganizationIdError,
 } from "../organizationContext/organizationContext.service.js";
@@ -80,6 +85,18 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof NoActiveCheckInError) {
     res.status(409).json({ error: "NO_ACTIVE_CHECK_IN" });
+    return true;
+  }
+  if (err instanceof ArrivalOutsideWindowError) {
+    res.status(409).json({ error: "ARRIVAL_OUTSIDE_WINDOW" });
+    return true;
+  }
+  if (err instanceof AlreadyArrivedError || err instanceof ArrivalAfterCheckInError || err instanceof NoArrivalToReviewError) {
+    res.status(409).json({ error: err.message });
+    return true;
+  }
+  if (err instanceof LocationConsentRequiredError) {
+    res.status(400).json({ error: "LOCATION_CONSENT_REQUIRED" });
     return true;
   }
   if (err instanceof NotOrgManagerError) {
@@ -180,5 +197,44 @@ router.post(
     }
   }
 );
+
+// ---------------------------------------------------------------- Gate 6: arrival
+// Request bodies here may carry one device reading: never log them.
+function gate6(handler: (req: AuthenticatedRequest, res: Response, orgId: string) => Promise<void>) {
+  return async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+    try { await handler(req, res, orgIdParsed.data); }
+    catch (err) {
+      if (handleError(err, res)) return;
+      // Bounded diagnostics: the code only, never the body (it may carry a device reading).
+      console.error("ARRIVAL_ERROR", { code: (err as { code?: string })?.code ?? "UNKNOWN" });
+      res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  };
+}
+router.get("/organizations/:organizationId/me/location-consent", requireAuth, gate6(async (req, res, orgId) => {
+  res.status(200).json(await getMyLocationConsent(req.auth!.userId, orgId));
+}));
+router.post("/organizations/:organizationId/me/location-consent", requireAuth, gate6(async (req, res, orgId) => {
+  if (!consentSchema.safeParse(req.body).success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  res.status(201).json(await grantLocationConsent(req.auth!.userId, orgId));
+}));
+router.delete("/organizations/:organizationId/me/location-consent", requireAuth, gate6(async (req, res, orgId) => {
+  res.status(200).json(await revokeLocationConsent(req.auth!.userId, orgId));
+}));
+router.post("/organizations/:organizationId/shifts/:shiftId/arrival", requireAuth, gate6(async (req, res, orgId) => {
+  const shiftId = uuidParam.safeParse(req.params.shiftId);
+  const body = arrivalSchema.safeParse(req.body ?? {});
+  if (!shiftId.success || !body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  const arrival = await recordArrival(req.auth!.userId, orgId, shiftId.data, body.data);
+  res.status("replayed" in arrival ? 200 : 201).json({ arrival });
+}));
+router.post("/organizations/:organizationId/shifts/:shiftId/arrival/review", requireAuth, gate6(async (req, res, orgId) => {
+  const shiftId = uuidParam.safeParse(req.params.shiftId);
+  const body = arrivalReviewSchema.safeParse(req.body ?? {});
+  if (!shiftId.success || !body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  res.status(200).json(await reviewArrival(req.auth!.userId, orgId, shiftId.data, body.data));
+}));
 
 export default router;
