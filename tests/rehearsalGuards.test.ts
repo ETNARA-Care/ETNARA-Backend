@@ -15,6 +15,10 @@ describe("migration rehearsal guards (before any connection)", () => {
     await expect(assertSafePair(src, "postgres://x@etnara-care-staging-db.railway.internal:5432/railway", ok)).rejects.toThrow(/deny-list/);
     await expect(assertSafePair(src, "postgres://x@prod.example.invalid/db", { ...ok, PRODUCTION_DB_HOSTS: "prod.example.invalid" })).rejects.toThrow(/deny-list/);
   });
+  it("PITR mode: refuses production as the SOURCE (only the restored fork may be read)", async () => {
+    await expect(assertSafePair("postgres://x@etnara-care-staging-db.railway.internal:5432/railway", "postgres://x@iso.example.invalid/db",
+      { ...ok, REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION: "true" })).rejects.toThrow(/source host .* is production/);
+  });
   it("refuses target = source", async () => {
     await expect(assertSafePair(src, src, ok)).rejects.toThrow(/target is the source/);
   });
