@@ -80,6 +80,17 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyAccessInvitationActivation.ts
 
+      - name: PostgreSQL caregiver-agency credential E2E
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+        shell: bash
+        run: |
+          runtime_password="$(openssl rand -hex 24)"
+          psql "$MIGRATIONS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE app_runtime PASSWORD '$runtime_password'"
+          export DATABASE_URL="postgres://app_runtime:$runtime_password@localhost:5432/etnara_ci"
+          npx tsx scripts/verifyCaregiverAgencyCredentialE2E.ts
+
+
       - name: Export/report security guard
         run: npx tsx scripts/verifyExportReportSecurity.ts
 
