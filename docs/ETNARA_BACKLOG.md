@@ -2,6 +2,12 @@
 
 ## In Progress
 
+### ETN-042 — Phase 12.4 offline mode (backend)
+
+- Status: ready for review (gate). Migration 087 + verifyOfflineCheckInOut.
+- Next: Face ID / fingerprint unlock (WebAuthn). Decision pending: encrypted
+  cache of today's shifts so the app opens with no signal after being closed.
+
 ### ETN-041 — Phase 12.4a close open tenant_isolation policies
 
 - Status: ready for review (gate). Migration 086 + verifyTenantPolicyClosure.
