@@ -81,8 +81,23 @@ async function main() {
   const bad = await call("POST", "/auth/login", undefined, { email: "admin1@agencia-a.invalid", password: "wrong-password-123" });
   check("L wrong password rejected", bad.status === 401 || bad.status === 400, `status=${bad.status}`);
 
-  // Unique schedule per run: +3..+9 days, 10:00-14:00 Puerto Rico (UTC-4).
-  const days = 3 + Math.floor(Math.random() * 7);
+  // Leftovers of an earlier run that crashed before its own cleanup (e.g. it raced an
+  // API redeploy): cancel ONLY what this verifier created -- shifts linked to its
+  // «Cuidador/a (staging)» opportunities -- exactly like its T9/G8 cleanup does.
+  const own = await call("GET", `${S}/opportunities`, a1.token);
+  let leftovers = 0;
+  for (const o of (own.body.opportunities ?? []) as Json[]) {
+    if (o.role_label !== "Cuidador/a (staging)" || o.status !== "FILLED") continue;
+    if (o.shift_id && o.shift_status !== "cancelled") {
+      await call("POST", `/organizations/${a1.orgId}/shifts/${o.shift_id}/cancel`, a1.token, { reason: "Verificación automática de staging (limpieza)" });
+    }
+    await call("POST", `${S}/opportunities/${o.id}/cancel`, a1.token, { reason: "SCHEDULE_CHANGED", note: "Limpieza de verificación anterior" });
+    leftovers++;
+  }
+  if (leftovers) console.log(`cleaned ${leftovers} leftover verification opportunit${leftovers === 1 ? "y" : "ies"}`);
+
+  // Unique schedule per run: +3..+60 days, 10:00-14:00 Puerto Rico (UTC-4).
+  const days = 3 + Math.floor(Math.random() * 58);
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + days, 14, Math.floor(Math.random() * 50)));
   const window = { startsAt: start.toISOString(), endsAt: new Date(start.getTime() + 4 * 3600e3).toISOString() };
