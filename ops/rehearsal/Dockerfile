@@ -15,6 +15,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY tsconfig.json ./
 COPY scripts ./scripts
+COPY src ./src
 COPY migrations ./migrations
 # No HTTP server, no secrets baked in: everything comes from Railway variables.
 CMD ["npx", "tsx", "scripts/rehearsal/rehearseMigrations.ts"]

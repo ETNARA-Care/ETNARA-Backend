@@ -40,7 +40,8 @@ async function seed() {
   if (new URL(prodshape).pathname !== "/prodshape") throw new Error("prodshape URL must point at database prodshape");
   const c = new Client({ connectionString: admin }); await c.connect();
   const exists = (await c.query(`SELECT 1 FROM pg_database WHERE datname='prodshape'`)).rowCount;
-  if (exists) throw new Error("prodshape already exists: refusing to reseed");
+  if (exists && process.env.DRILL_RESEED !== "1") throw new Error("prodshape already exists: set DRILL_RESEED=1 to recreate it (synthetic drill database only)");
+  if (exists) await c.query(`DROP DATABASE prodshape WITH (FORCE)`);
   await c.query(`CREATE DATABASE prodshape`);
   await c.end();
   // Production state = every migration up to 087 (088 excluded), applied with the repo's runner.
@@ -50,7 +51,7 @@ async function seed() {
   await applyPendingMigrations(p, dir);
   await p.end();
   const s = spawnSync("npx", ["tsx", "scripts/seedDemo.ts"], { env: { ...process.env, DATABASE_URL: prodshape }, encoding: "utf8" });
-  if (s.status !== 0) throw new Error(`seedDemo failed: ${(s.stderr || "").split("\n").slice(-3).join(" | ")}`);
+  if (s.status !== 0) throw new Error(`seedDemo failed: ${(s.stderr || s.stdout || "").split("\n").filter((l) => l.trim() && !/password/i.test(l)).slice(0, 6).join(" | ")}`);
   const f = await fingerprint(prodshape);
   out("DRILL_SEED", { lastMigration: f.lastMigration, tables: f.tables, rows: f.rows, dataHash: f.dataHash, schemaHash: f.schemaHash, policies: f.policies, timeline: f.timeline });
 }
