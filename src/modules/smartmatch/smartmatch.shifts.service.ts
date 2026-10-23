@@ -19,6 +19,8 @@ type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
  */
 export const smartMatchCreateShiftSchema = z.object({
   careRecipientId: z.string().uuid(),
+  /** Gate 6: the administrator confirms which of the person's addresses applies. */
+  serviceLocationId: z.string().uuid().optional(),
   instructions: z.string().trim().max(2000).optional(),
 }).strict();
 export type SmartMatchCreateShiftInput = z.infer<typeof smartMatchCreateShiftSchema>;
@@ -128,12 +130,20 @@ export async function createShiftFromSmartMatch(
       LIMIT 1
     `.execute(trx);
     if (!recipient.rows[0]) throw new RecipientNotInOrgError();
+    // Gate 6: when the person has registered addresses, one must be confirmed explicitly.
+    if (!input.serviceLocationId) {
+      const any = await sql<{ n: number }>`
+        SELECT count(*)::int AS n FROM care_recipient_locations
+        WHERE care_recipient_id = ${input.careRecipientId} AND organization_id = ${organizationId} AND archived_at IS NULL`.execute(trx);
+      if (any.rows[0].n > 0) throw new SmartMatchConflictError("SERVICE_LOCATION_REQUIRED");
+    }
 
     const shift = await insertShiftInTransaction(trx, organizationId, {
       careRecipientId: input.careRecipientId,
       scheduledStart: iso(opp.starts_at),
       scheduledEnd: iso(opp.ends_at),
       requiredRole: opp.role_label,
+      ...(input.serviceLocationId ? { serviceLocationId: input.serviceLocationId } : {}),
     });
     const saved = await assignWorkerToShiftInTransaction(trx, organizationId, shift.id, {
       organizationWorkerMembershipId: live.caregiver.membershipId,
@@ -191,5 +201,42 @@ export async function saveShiftPrivateInstructions(
       RETURNING instructions, updated_at
     `.execute(trx);
     return r.rows[0];
+  });
+}
+
+// ------------------------------------------------------------------ Gate 6: cancel a FILLED opportunity
+export const SMARTMATCH_CANCELLATION_REASONS = ["NO_LONGER_NEEDED", "SCHEDULE_CHANGED", "COVERED_OTHERWISE", "OTHER"] as const;
+export const smartMatchCancelSchema = z.object({
+  reason: z.enum(SMARTMATCH_CANCELLATION_REASONS),
+  /** Internal only: never sent to the caregiver. */
+  note: z.string().trim().max(300).optional(),
+}).strict();
+
+/**
+ * Rules (migration 102, enforced again by the database trigger):
+ *  - only FILLED opportunities, reason required, written once;
+ *  - a linked shift that is not cancelled blocks it: the agency decides about the
+ *    real shift in Turnos first (SmartMatch never cancels or reassigns shifts);
+ *  - the approved caregiver is notified by trigger (reason category only).
+ */
+export async function cancelFilledOpportunity(
+  userId: string, organizationId: string, opportunityId: string, input: z.infer<typeof smartMatchCancelSchema>,
+) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireOrgAdmin(trx);
+    const opp = await loadOpportunity(trx, organizationId, opportunityId, true);
+    if (opp.status !== "FILLED") throw new SmartMatchConflictError("OPPORTUNITY_NOT_FILLED");
+    if (opp.shift_id) {
+      const shift = (await sql<{ status: string }>`
+        SELECT status::text AS status FROM shifts WHERE id = ${opp.shift_id} AND organization_id = ${organizationId}`.execute(trx)).rows[0];
+      if (shift && shift.status !== "cancelled") throw new SmartMatchConflictError("LINKED_SHIFT_ACTIVE");
+    }
+    const r = await sql<{ id: string; status: string; cancelled_at: string }>`
+      UPDATE smartmatch_opportunities SET status = 'CANCELLED', cancellation_reason = ${input.reason},
+        cancellation_note = ${input.note?.trim() || null}, cancelled_at = now(), cancelled_by_user_id = ${userId}, updated_at = now()
+      WHERE id = ${opportunityId} AND organization_id = ${organizationId} AND status = 'FILLED'
+      RETURNING id, status, cancelled_at`.execute(trx);
+    if (!r.rows[0]) throw new SmartMatchConflictError("OPPORTUNITY_NOT_FILLED");
+    return { opportunity: r.rows[0] };
   });
 }

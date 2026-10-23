@@ -5,10 +5,11 @@ import { MembershipNotActiveError } from "../../context/errors.js";
 import { SmartMatchForbiddenError } from "./smartmatch.service.js";
 import { SmartMatchApplicationNotFoundError, SmartMatchConflictError } from "./smartmatch.applications.service.js";
 import {
-  createShiftFromSmartMatch, getSmartMatchShiftDraft, getShiftPrivateInstructions, saveShiftPrivateInstructions,
+  createShiftFromSmartMatch, getSmartMatchShiftDraft, cancelFilledOpportunity, smartMatchCancelSchema, getShiftPrivateInstructions, saveShiftPrivateInstructions,
   smartMatchCreateShiftSchema, shiftPrivateInstructionsSchema,
 } from "./smartmatch.shifts.service.js";
 import { RecipientNotInOrgError, InvalidShiftTimesError } from "../scheduling/scheduling.service.js";
+import { LocationNotFoundError } from "../careRecipients/serviceLocations.service.js";
 import {
   ShiftNotFoundError, MembershipNotInOrgError, ShiftCancelledError, WorkerNotEligibleError,
   DuplicateAssignmentError, ScheduleConflictError,
@@ -26,6 +27,7 @@ function fail(res: Response, error: unknown): void {
     res.status(404).json({ error: "NOT_FOUND" }); return;
   }
   if (error instanceof SmartMatchConflictError) { res.status(409).json({ error: error.reason }); return; }
+  if (error instanceof LocationNotFoundError) { res.status(400).json({ error: "SERVICE_LOCATION_NOT_IN_RECIPIENT" }); return; }
   if (error instanceof RecipientNotInOrgError) { res.status(400).json({ error: "RECIPIENT_NOT_IN_AGENCY" }); return; }
   if (error instanceof InvalidShiftTimesError) { res.status(400).json({ error: "INVALID_SHIFT_TIMES" }); return; }
   if (error instanceof ScheduleConflictError) { res.status(409).json({ error: "SCHEDULE_CONFLICT" }); return; }
@@ -82,6 +84,15 @@ router.put("/organizations/:organizationId/shifts/:shiftId/private-instructions"
     const body = shiftPrivateInstructionsSchema.safeParse(req.body);
     if (!body.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
     try { res.json({ instructions: await saveShiftPrivateInstructions(req.auth!.userId, p[0], p[1], body.data.instructions) }); }
+    catch (e) { fail(res, e); }
+  });
+
+router.post("/organizations/:organizationId/smartmatch/opportunities/:opportunityId/cancel", requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const p = ids(req, res, "opportunityId"); if (!p) return;
+    const body = smartMatchCancelSchema.safeParse(req.body);
+    if (!body.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
+    try { res.json(await cancelFilledOpportunity(req.auth!.userId, p[0], p[1], body.data)); }
     catch (e) { fail(res, e); }
   });
 

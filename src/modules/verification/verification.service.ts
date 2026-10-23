@@ -95,6 +95,9 @@ const offlineFields = {
   recordedOffline: z.boolean().optional(),
 };
 
+// Gate 6 data minimization: locationLat/locationLng are still accepted for old
+// clients but ignored -- raw device coordinates are never stored. Proximity is
+// checked once, with consent, by POST .../arrival (verification.arrival.ts).
 export const checkInSchema = z.object({
   verificationMethodCode: z.string().min(1),
   actorContext: z.string().optional(),
@@ -123,7 +126,7 @@ const OFFLINE_THRESHOLD_MS = 2 * 60 * 1000;
  * marked "sin conexión" when the device says it waited for signal, or when it
  * arrived late regardless of what the device says.
  */
-function resolveOccurredAt(occurredAt: string | undefined, notBefore?: string, deviceOffline = false): { at: string | null; offline: boolean } {
+export function resolveOccurredAt(occurredAt: string | undefined, notBefore?: string, deviceOffline = false): { at: string | null; offline: boolean } {
   if (!occurredAt) return { at: null, offline: deviceOffline };
   const occurred = new Date(occurredAt).getTime();
   const now = Date.now();
@@ -167,7 +170,7 @@ interface VerificationEventRow {
   replayed?: boolean;
 }
 
-async function resolveWorkerForUser(trx: unknown, userId: string): Promise<string> {
+export async function resolveWorkerForUser(trx: unknown, userId: string): Promise<string> {
   const result = await sql<{ id: string }>`SELECT id FROM workers WHERE user_id = ${userId} LIMIT 1`.execute(
     trx as never
   );
@@ -175,7 +178,7 @@ async function resolveWorkerForUser(trx: unknown, userId: string): Promise<strin
   return result.rows[0].id;
 }
 
-async function resolveMembership(trx: unknown, workerId: string, organizationId: string) {
+export async function resolveMembership(trx: unknown, workerId: string, organizationId: string) {
   const result = await sql<{ id: string; status: string }>`
     SELECT id, status FROM organization_worker_memberships
     WHERE worker_id = ${workerId} AND organization_id = ${organizationId}
@@ -332,7 +335,7 @@ export async function checkIn(
         client_event_id, recorded_offline, occurred_at
       ) VALUES (
         ${organizationId}, ${shiftId}, ${membership.id}, ${methodId},
-        'check_in', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null},
+        'check_in', ${userId}, ${input.actorContext ?? null}, null, null,
         ${input.clientEventId ?? null}, ${when.offline}, COALESCE(${when.at}::timestamptz, now())
       )
       ON CONFLICT (organization_id, organization_worker_membership_id, client_event_id)
@@ -410,7 +413,7 @@ export async function checkOut(
         client_event_id, recorded_offline, occurred_at
       ) VALUES (
         ${organizationId}, ${shiftId}, ${membership.id}, ${methodId},
-        'check_out', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null},
+        'check_out', ${userId}, ${input.actorContext ?? null}, null, null,
         ${input.clientEventId ?? null}, ${when.offline}, COALESCE(${when.at}::timestamptz, now())
       )
       ON CONFLICT (organization_id, organization_worker_membership_id, client_event_id)
@@ -460,6 +463,9 @@ export interface VerificationSummary {
     recordedOffline: boolean;
   }>;
   status: "not_started" | "in_progress" | "completed";
+  /** Gate 6: "Llegué" records (result only, never coordinates). */
+  arrivals: Array<{ membershipId: string; occurredAt: string; proximity: string; distanceM: number | null;
+    needsReview: boolean; reviewedAt: string | null; reviewNote: string | null; recordedOffline: boolean }>;
 }
 
 export async function getVerification(
@@ -514,7 +520,18 @@ export async function getVerification(
       if (allClosed) status = "completed";
     }
 
-    return { shiftId, events, status };
+    const arrivals = (await sql<{ organization_worker_membership_id: string; occurred_at: string; proximity: string;
+      distance_m: number | null; needs_review: boolean; reviewed_at: string | null; review_note: string | null; recorded_offline: boolean }>`
+      SELECT organization_worker_membership_id, occurred_at, proximity, distance_m, needs_review, reviewed_at, review_note, recorded_offline
+      FROM shift_arrivals WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+      ORDER BY occurred_at
+    `.execute(trx)).rows.map((a) => ({
+      membershipId: a.organization_worker_membership_id, occurredAt: a.occurred_at, proximity: a.proximity,
+      distanceM: a.distance_m, needsReview: a.needs_review, reviewedAt: a.reviewed_at, reviewNote: a.review_note,
+      recordedOffline: a.recorded_offline,
+    }));
+
+    return { shiftId, events, status, arrivals };
   });
 }
 

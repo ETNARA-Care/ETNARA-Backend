@@ -9,6 +9,9 @@ on:
       - 'scripts/verifySmartMatchTwoAgencyFlow.ts'
       - 'scripts/verifySmartMatchNotifications.ts'
       - 'scripts/verifySmartMatchShifts.ts'
+      - 'scripts/verifyGate6ServiceLocations.ts'
+      - 'src/modules/careRecipients/**'
+      - 'src/modules/verification/**'
       - 'src/modules/scheduling/**'
       - 'src/modules/assignments/**'
       - 'src/modules/notifications/**'
@@ -66,3 +69,5 @@ jobs:
         run: npx tsx scripts/verifySmartMatchNotifications.ts
       - name: SmartMatch to Turnos over HTTP
         run: npx tsx scripts/verifySmartMatchShifts.ts
+      - name: Gate 6 service locations over HTTP
+        run: npx tsx scripts/verifyGate6ServiceLocations.ts

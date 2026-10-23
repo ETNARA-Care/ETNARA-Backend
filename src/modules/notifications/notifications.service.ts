@@ -76,6 +76,18 @@ function summarizeType(notificationType: string): string {
       return "Tu solicitud no fue aprobada";
     case "SMARTMATCH_APPLICATION_CLOSED":
       return "La oportunidad se cubrió con otra persona";
+    case "SMARTMATCH_OPPORTUNITY_CANCELLED":
+      return "La agencia canceló una oportunidad que tenías aprobada";
+    case "SHIFT_LATE_ARRIVAL":
+      return "Turno sin llegada registrada (15 min)";
+    case "SHIFT_ARRIVAL_NEEDS_REVIEW":
+      return "Llegada pendiente de revisión";
+    case "LOCATION_CHANGE_REQUESTED":
+      return "Un familiar solicitó corregir una dirección";
+    case "LOCATION_CHANGE_APPROVED":
+      return "La agencia aprobó tu corrección de dirección";
+    case "LOCATION_CHANGE_REJECTED":
+      return "La agencia revisó tu corrección de dirección";
     default:
       return "Notificación";
   }

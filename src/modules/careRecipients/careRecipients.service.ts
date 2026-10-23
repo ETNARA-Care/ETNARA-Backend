@@ -243,6 +243,7 @@ export async function getCareRecipientLocation(userId: string, organizationId: s
       SELECT care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
       FROM care_recipient_locations
       WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId}
+        AND is_primary AND archived_at IS NULL
       LIMIT 1
     `.execute(trx);
     return toLocation(result.rows[0]);
@@ -265,22 +266,26 @@ export async function upsertCareRecipientLocation(
     `.execute(trx);
     if (!recipient.rows[0]) throw new RecipientNotFoundError();
 
+    // Gate 6 (migration 100): several addresses per person. This Phase 12.1
+    // endpoint keeps its contract and edits the PRIMARY address.
+    const updated = await sql<Record<string, unknown>>`
+      UPDATE care_recipient_locations SET
+        address_line = ${input.addressLine ?? null}, municipality = ${input.municipality ?? null},
+        access_notes = ${input.accessNotes ?? null}, latitude = ${input.latitude ?? null},
+        longitude = ${input.longitude ?? null}, updated_at = now(), updated_by_user_id = ${userId}
+      WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId}
+        AND is_primary AND archived_at IS NULL
+      RETURNING care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
+    `.execute(trx);
+    if (updated.rows[0]) return toLocation(updated.rows[0]);
     const result = await sql<Record<string, unknown>>`
       INSERT INTO care_recipient_locations (
         care_recipient_id, organization_id, address_line, municipality, access_notes,
-        latitude, longitude, updated_at, updated_by_user_id
+        latitude, longitude, updated_at, updated_by_user_id, is_primary
       ) VALUES (
         ${recipientId}, ${organizationId}, ${input.addressLine ?? null}, ${input.municipality ?? null},
-        ${input.accessNotes ?? null}, ${input.latitude ?? null}, ${input.longitude ?? null}, now(), ${userId}
+        ${input.accessNotes ?? null}, ${input.latitude ?? null}, ${input.longitude ?? null}, now(), ${userId}, true
       )
-      ON CONFLICT (care_recipient_id) DO UPDATE SET
-        address_line = EXCLUDED.address_line,
-        municipality = EXCLUDED.municipality,
-        access_notes = EXCLUDED.access_notes,
-        latitude = EXCLUDED.latitude,
-        longitude = EXCLUDED.longitude,
-        updated_at = now(),
-        updated_by_user_id = EXCLUDED.updated_by_user_id
       RETURNING care_recipient_id, address_line, municipality, access_notes, latitude, longitude, updated_at
     `.execute(trx);
     return toLocation(result.rows[0]);

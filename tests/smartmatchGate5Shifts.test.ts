@@ -32,7 +32,10 @@ describe("SmartMatch Gate 5: Crear turno con esta cuidadora", () => {
   });
 
   it("schedule and role come from the opportunity; the request cannot change them", () => {
-    expect(service).toMatch(/careRecipientId: z\.string\(\)\.uuid\(\),\s+instructions: z\.string\(\)\.trim\(\)\.max\(2000\)\.optional\(\),\s+\}\)\.strict\(\)/);
+    const schema = service.slice(service.indexOf("smartMatchCreateShiftSchema = z.object({"), service.indexOf("}).strict();"));
+    expect(schema).toMatch(/careRecipientId: z\.string\(\)\.uuid\(\)/);
+    expect(schema).toMatch(/serviceLocationId: z\.string\(\)\.uuid\(\)\.optional\(\)/);
+    expect(schema).not.toMatch(/scheduled|starts|ends|requiredRole/i);
     expect(service).toContain("scheduledStart: iso(opp.starts_at)");
     expect(service).toContain("requiredRole: opp.role_label");
     expect(service).toMatch(/FOR UPDATE/);

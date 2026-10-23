@@ -126,11 +126,13 @@ export async function listMySmartMatchApplications(userId: string, organizationI
       id: string; status: string; created_at: string; withdrawn_at: string | null;
       decided_at: string | null; decision_reason: string | null;
       opportunity_id: string; region_label: string; role_label: string;
-      starts_at: string; ends_at: string; opportunity_status: string;
+      starts_at: string; ends_at: string; opportunity_status: string; opportunity_cancellation_reason: string | null;
     }>`
       SELECT a.id, a.status, a.created_at, a.withdrawn_at, a.decided_at, a.decision_reason,
              o.id AS opportunity_id, o.region_label, o.role_label, o.starts_at, o.ends_at,
-             o.status AS opportunity_status
+             o.status AS opportunity_status,
+             -- Gate 6: reason category only (the internal note is never returned to caregivers).
+             CASE WHEN a.status = 'APPROVED' THEN o.cancellation_reason END AS opportunity_cancellation_reason
       FROM smartmatch_applications a
       JOIN smartmatch_opportunities o ON o.id = a.opportunity_id
       WHERE a.caregiver_user_id = ${userId} AND a.organization_id = ${organizationId}

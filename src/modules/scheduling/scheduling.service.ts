@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { z } from "zod";
+import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
 import { WorkerNotLinkedError } from "../verification/verification.service.js";
@@ -90,6 +91,8 @@ export const createShiftSchema = z
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
     requiredRole: z.string().trim().min(1).max(80).optional(),
+    /** Gate 6: confirmed service address (one of the person's addresses). Defaults to the primary one. */
+    serviceLocationId: z.string().uuid().optional(),
   })
   .refine((d) => d.careRecipientId || d.roomId, {
     message: "Either careRecipientId (home care) or roomId (residential) is required",
@@ -119,6 +122,7 @@ export interface ShiftRow {
   scheduled_start: string;
   scheduled_end: string;
   required_role: string;
+  service_location_id?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -169,10 +173,13 @@ export async function insertShiftInTransaction(
       if (!check.rows[0]) throw new RoomNotInOrgError();
     }
 
+    const serviceLocationId = input.careRecipientId
+      ? await resolveShiftLocationInTransaction(trx, organizationId, input.careRecipientId, input.serviceLocationId)
+      : null;
     const result = await sql<ShiftRow>`
-      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role)
-      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"})
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id)
+      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
+      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
   }
@@ -210,7 +217,7 @@ export async function listShifts(userId: string, organizationId: string, filter:
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
-             s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
+             s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
@@ -386,7 +393,7 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       LIMIT 1

@@ -21,6 +21,7 @@ import {
   FamilyMustUseFamilyEndpointError,
 } from "./scheduling.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
+import { LocationNotFoundError } from "../careRecipients/serviceLocations.service.js";
 import {
   OrganizationAccessDeniedError,
   InvalidOrganizationIdError,
@@ -70,6 +71,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof ShiftCancellationForbiddenError) {
     res.status(403).json({ error: "SHIFT_CANCELLATION_FORBIDDEN" });
+    return true;
+  }
+  if (err instanceof LocationNotFoundError) {
+    res.status(400).json({ error: "SERVICE_LOCATION_NOT_IN_RECIPIENT" });
     return true;
   }
   if (err instanceof RecipientNotInOrgError || err instanceof RoomNotInOrgError) {
