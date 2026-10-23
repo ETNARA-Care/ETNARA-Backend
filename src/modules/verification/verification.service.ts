@@ -91,6 +91,8 @@ function assertUuid(value: string, label: string): void {
 const offlineFields = {
   clientEventId: z.string().uuid().optional(),
   occurredAt: z.string().datetime({ offset: true }).optional(),
+  /** The device stored it because there was no signal. */
+  recordedOffline: z.boolean().optional(),
 };
 
 export const checkInSchema = z.object({
@@ -116,16 +118,20 @@ const MAX_OFFLINE_AGE_MS = 7 * 24 * 3600 * 1000;
 /** Arriving later than this after it happened counts as "sin conexión". */
 const OFFLINE_THRESHOLD_MS = 2 * 60 * 1000;
 
-/** Validated time for a device-supplied record, or null to use now(). */
-function resolveOccurredAt(occurredAt: string | undefined, notBefore?: string): { at: string | null; offline: boolean } {
-  if (!occurredAt) return { at: null, offline: false };
+/**
+ * Validated time for a device-supplied record, or null to use now(). It is
+ * marked "sin conexión" when the device says it waited for signal, or when it
+ * arrived late regardless of what the device says.
+ */
+function resolveOccurredAt(occurredAt: string | undefined, notBefore?: string, deviceOffline = false): { at: string | null; offline: boolean } {
+  if (!occurredAt) return { at: null, offline: deviceOffline };
   const occurred = new Date(occurredAt).getTime();
   const now = Date.now();
   if (Number.isNaN(occurred)) throw new OccurredAtOutOfRangeError();
   if (occurred > now + MAX_CLOCK_SKEW_MS) throw new OccurredAtOutOfRangeError();
   if (occurred < now - MAX_OFFLINE_AGE_MS) throw new OccurredAtOutOfRangeError();
   if (notBefore && occurred <= new Date(notBefore).getTime()) throw new OccurredAtOutOfRangeError();
-  return { at: new Date(Math.min(occurred, now)).toISOString(), offline: now - occurred > OFFLINE_THRESHOLD_MS };
+  return { at: new Date(Math.min(occurred, now)).toISOString(), offline: deviceOffline || now - occurred > OFFLINE_THRESHOLD_MS };
 }
 
 /**
@@ -290,7 +296,7 @@ export async function checkIn(
       const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_in");
       if (existing) return { ...existing, replayed: true };
     }
-    const when = resolveOccurredAt(input.occurredAt);
+    const when = resolveOccurredAt(input.occurredAt, undefined, input.recordedOffline === true);
 
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
@@ -393,7 +399,7 @@ export async function checkOut(
 
     const active = await findActiveCheckIn(trx, shiftId, membership.id);
     if (!active) throw new NoActiveCheckInError();
-    const when = resolveOccurredAt(input.occurredAt, active.occurred_at);
+    const when = resolveOccurredAt(input.occurredAt, active.occurred_at, input.recordedOffline === true);
 
     const methodId = active.verification_method_id;
 

@@ -132,6 +132,16 @@ async function main() {
     const row = ((sheets.body.timesheets as Array<{ shift_id: string; recorded_offline: boolean }> | undefined) ?? []).find((t) => t.shift_id === shiftId);
     check("Agency hours show the visit as recorded without signal", row?.recorded_offline === true, `${sheets.status} ${String(row?.recorded_offline)}`);
 
+    // A short outage: arrives within seconds but the device says it waited.
+    const shift3 = await call("POST", `/organizations/${org}/shifts`, adminToken, { careRecipientId: recipientId, scheduledStart: new Date(new Date(start).getTime() + 10 * HOUR).toISOString(), scheduledEnd: new Date(new Date(start).getTime() + 12 * HOUR).toISOString() });
+    const shift3Id = (shift3.body.shift as { id: string }).id;
+    await call("POST", `/organizations/${org}/shifts/${shift3Id}/assignments`, adminToken, { organizationWorkerMembershipId: carlosOwm });
+    await call("POST", `/organizations/${org}/me/shifts/${shift3Id}/respond`, carlos, { decision: "accepted" });
+    const shortIn = await call("POST", `/organizations/${org}/shifts/${shift3Id}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION", clientEventId: randomUUID(), occurredAt: new Date(Date.now() - 5000).toISOString(), recordedOffline: true });
+    await call("POST", `/organizations/${org}/shifts/${shift3Id}/check-out`, carlos, {});
+    check("A short outage is still marked 'sin conexión' when the phone waited for signal",
+      shortIn.status === 201 && (shortIn.body.event as { recorded_offline: boolean }).recorded_offline === true, `${shortIn.status}`);
+
     // Online behaviour unchanged.
     const shift2 = await call("POST", `/organizations/${org}/shifts`, adminToken, { careRecipientId: recipientId, scheduledStart: new Date(new Date(start).getTime() + 5 * HOUR).toISOString(), scheduledEnd: new Date(new Date(start).getTime() + 7 * HOUR).toISOString() });
     const shift2Id = (shift2.body.shift as { id: string }).id;
