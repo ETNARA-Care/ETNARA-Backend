@@ -198,6 +198,22 @@ async function main() {
   const navOther = await call("GET", `/organizations/${c2.orgId}/shifts/${shiftId}/service-location`, c2.token);
   check("G4 assigned caregiver gets the confirmed address; another caregiver does not",
     nav.status === 200 && nav.body.location?.id === primaryLoc?.id && navOther.status === 404, `${nav.status},${navOther.status}`);
+  // Gate 6 fix: exact coordinates only reach the caregiver once an admin confirmed the GPS point.
+  const navLoc = nav.body.location as Json | undefined;
+  check("G9 coordinates are sent only when the GPS point is confirmed (else approximate)",
+    typeof primaryLoc?.gpsConfirmed === "boolean" && typeof navLoc?.gpsConfirmed === "boolean"
+      && (navLoc.gpsConfirmed ? typeof navLoc.latitude === "number" : navLoc.latitude === null && navLoc.longitude === null),
+    `gpsConfirmed=${navLoc?.gpsConfirmed}`);
+  // Read-only probes: every one of these is refused before any write.
+  const gpsUrl = `${R}/service-locations/${primaryLoc?.id}/confirm-gps`;
+  const point = { latitude: 18.2341, longitude: -66.0485, confirm: true };
+  const gpsCg = await call("POST", gpsUrl, c1.token, point);
+  const gpsB = await call("POST", `/organizations/${bAdmin.orgId}/care-recipients/${synthetic?.id}/service-locations/${primaryLoc?.id}/confirm-gps`, bAdmin.token, point);
+  check("G10 caregivers and other agencies cannot confirm the GPS point",
+    gpsCg.status === 403 && [403, 404].includes(gpsB.status), `${gpsCg.status},${gpsB.status}`);
+  const gpsNoConfirm = await call("POST", gpsUrl, a1.token, { latitude: 18.2341, longitude: -66.0485 });
+  const gpsOutside = await call("POST", gpsUrl, a1.token, { latitude: 40.7128, longitude: -74.006, confirm: true });
+  check("G11 GPS confirmation needs an explicit confirm and a point in Puerto Rico", gpsNoConfirm.status === 400 && gpsOutside.status === 400, `${gpsNoConfirm.status},${gpsOutside.status}`);
   await call("POST", `/organizations/${c1.orgId}/me/shifts/${shiftId}/respond`, c1.token, { decision: "accepted" });
   await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
   const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});

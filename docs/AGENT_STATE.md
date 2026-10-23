@@ -2,6 +2,20 @@
 
 ## Current Status
 
+## 2026-10-23 — Gate 6 fix: GPS confirmation separate from address verification (claude/smartmatch-gate1-rls)
+
+- iPhone finding: «Verificada» appeared without an exact point and navigation went to a street
+  approximation. Two independent states now: verified_at (written address checked) and
+  gps_confirmed_at/gps_confirmed_by_user_id (an admin explicitly confirmed the map point).
+- 103 (additive): the two columns + CHECKs (pair; confirmed requires lat/lng); reverify trigger now
+  clears verified_at on written-address edits and gps_confirmed_* on lat/lng edits; history kinds
+  GPS_CONFIRMED / GPS_CHANGED. Existing rows keep verified_at; legacy coordinates stay unconfirmed.
+- POST .../service-locations/:id/confirm-gps (managers; {latitude, longitude, confirm:true}; PR bounds).
+  Shift service-location returns coordinates only when GPS is confirmed (+ gpsConfirmed); options
+  carry gpsConfirmed; arrival proximity uses only confirmed coordinates (else NO_REFERENCE).
+- verifyGate6ServiceLocations 82/82 (negative control 78/82); staging verifier +G9..G11 (66 checks,
+  read-only probes); npm test 423/423; CI PostgreSQL replica 19/19.
+
 ## 2026-10-23 — Gate 6: service location, arrival, FILLED cancellation (claude/smartmatch-gate1-rls)
 
 - User decisions: OpenStreetMap map without geocoding; proximity computed on the server and

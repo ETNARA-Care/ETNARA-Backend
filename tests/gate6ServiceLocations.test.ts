@@ -72,3 +72,23 @@ describe("Gate 6: cancelling a FILLED opportunity", () => {
     expect(m102).not.toMatch(/UPDATE (public\.)?shifts/);
   });
 });
+
+describe("Gate 6 fixes: address verified vs GPS confirmed (migration 103)", () => {
+  const m103 = strip(read("migrations/103_service_location_gps_confirmation.sql"));
+  const service = read("src/modules/careRecipients/serviceLocations.service.ts");
+  it("GPS confirmation is its own state, needs coordinates, and records who/when", () => {
+    expect(m103).toContain("gps_confirmed_at timestamptz NULL");
+    expect(m103).toContain("CHECK (gps_confirmed_at IS NULL OR (latitude IS NOT NULL AND longitude IS NOT NULL))");
+    expect(m103).toContain("CHECK ((gps_confirmed_at IS NULL) = (gps_confirmed_by_user_id IS NULL))");
+    expect(m103).toMatch(/'GPS_CONFIRMED','GPS_CHANGED'/);
+  });
+  it("moving the marker clears only the GPS confirmation; editing the text clears only the verification", () => {
+    expect(m103).toMatch(/\(NEW\.latitude, NEW\.longitude\) IS DISTINCT FROM \(OLD\.latitude, OLD\.longitude\)[\s\S]*NEW\.gps_confirmed_at := NULL/);
+    expect(m103).toMatch(/\(NEW\.address_line, NEW\.municipality, NEW\.postal_code, NEW\.establishment_id\)[\s\S]*NEW\.verified_at := NULL/);
+  });
+  it("confirmation is explicit and caregivers only receive confirmed coordinates", () => {
+    expect(service).toMatch(/confirm: z\.literal\(true\)/);
+    expect(service).toContain("latitude: v.gpsConfirmedAt ? v.latitude : null");
+    expect(read("src/modules/verification/verification.arrival.ts")).toContain("AND gps_confirmed_at IS NOT NULL");
+  });
+});

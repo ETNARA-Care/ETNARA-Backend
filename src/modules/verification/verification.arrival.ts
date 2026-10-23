@@ -129,6 +129,7 @@ export async function recordArrival(userId: string, organizationId: string, shif
       const ref = shift.care_recipient_id ? (await sql<{ latitude: string | null; longitude: string | null }>`
         SELECT latitude, longitude FROM care_recipient_locations
         WHERE organization_id = ${organizationId} AND care_recipient_id = ${shift.care_recipient_id}
+          AND gps_confirmed_at IS NOT NULL -- compare only with a point the agency confirmed
           AND ${shift.service_location_id ? sql`id = ${shift.service_location_id}` : sql`is_primary AND archived_at IS NULL`}`.execute(trx)).rows[0] : undefined;
       if (!ref || ref.latitude == null || ref.longitude == null) proximity = "NO_REFERENCE";
       else {

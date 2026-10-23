@@ -192,8 +192,49 @@ async function main() {
 
     // ================================================================ C: caregiver access
     const nav = await call("GET", `/organizations/${orgA}/shifts/${s2.id}/service-location`, A.cg2.token);
-    check("C1 assigned caregiver gets the confirmed address of her shift (for Cómo llegar)",
-      nav.status === 200 && nav.body.location?.id === altId && nav.body.location?.latitude === 18.1755, `status=${nav.status}`);
+    check("C1 assigned caregiver gets her shift's address; an unconfirmed marker is NOT handed out (approximate navigation)",
+      nav.status === 200 && nav.body.location?.id === altId && nav.body.location?.latitude === null && nav.body.location?.gpsConfirmed === false
+      && nav.body.location?.addressLine === "Calle Sol 4", `status=${nav.status}`);
+
+    // ================================================================ G: address verified vs GPS confirmed (Gate 6 fixes)
+    const altRow = (await call("GET", `${L}/service-locations`, A.admin.token)).body.locations?.find((l: Json) => l.id === altId);
+    check("G1 a marker placed in the form is not a GPS confirmation", altRow?.latitude === 18.1755 && altRow?.gpsConfirmedAt === null);
+    await call("POST", `${L}/service-locations/${altId}/verify`, A.admin.token);
+    const verifiedOnly = (await call("GET", `${L}/service-locations`, A.admin.token)).body.locations?.find((l: Json) => l.id === altId);
+    check("G2 verifying the written address does not confirm the GPS point", !!verifiedOnly?.verifiedAt && verifiedOnly?.gpsConfirmedAt === null);
+    const GPS = `${L}/service-locations/${altId}/confirm-gps`;
+    const noConfirm = await call("POST", GPS, A.admin.token, { latitude: 18.1756, longitude: -66.1613 });
+    const outside = await call("POST", GPS, A.admin.token, { latitude: 40.71, longitude: -74.0, confirm: true });
+    check("G3 confirmation must be explicit and inside Puerto Rico", noConfirm.status === 400 && outside.status === 400, `${noConfirm.status},${outside.status}`);
+    const cgGps = await call("POST", GPS, A.cg2.token, { latitude: 18.1756, longitude: -66.1613, confirm: true });
+    const famGps = await call("POST", GPS, A.family.token, { latitude: 18.1756, longitude: -66.1613, confirm: true });
+    const bGps = await call("POST", `/organizations/${orgB}/care-recipients/${rA}/service-locations/${altId}/confirm-gps`, B.admin.token, { latitude: 18.1756, longitude: -66.1613, confirm: true });
+    check("G4 caregiver, family and another agency cannot confirm coordinates", cgGps.status === 403 && [403, 404].includes(famGps.status) && bGps.status === 404, `${cgGps.status},${famGps.status},${bGps.status}`);
+    const confirmed = await call("POST", GPS, A.supervisor.token, { latitude: 18.1756, longitude: -66.1613, confirm: true });
+    const histGps = ((await call("GET", `${L}/service-locations/history`, A.admin.token)).body.events ?? [] as Json[]).find((e: Json) => e.event_type === "GPS_CONFIRMED" && e.location_id === altId);
+    check("G5 a manager confirms the exact point; who and when are recorded",
+      confirmed.status === 200 && !!confirmed.body.location?.gpsConfirmedAt && histGps?.actor_user_id === A.supervisor.userId && confirmed.body.location?.verifiedAt !== null, `status=${confirmed.status}`);
+    const nav2 = await call("GET", `/organizations/${orgA}/shifts/${s2.id}/service-location`, A.cg2.token);
+    check("G6 navigation then uses the confirmed coordinates", nav2.body.location?.gpsConfirmed === true && nav2.body.location?.latitude === 18.1756 && nav2.body.location?.longitude === -66.1613);
+    const moved2 = await call("PATCH", `${L}/service-locations/${altId}`, A.admin.token, { latitude: 18.1760, longitude: -66.1620 });
+    const histMove = ((await call("GET", `${L}/service-locations/history`, A.admin.token)).body.events ?? [] as Json[]).find((e: Json) => e.event_type === "GPS_CHANGED" && e.location_id === altId);
+    check("G7 moving the marker clears the GPS confirmation, keeps the written-address verification, and is in the history",
+      moved2.body.location?.gpsConfirmedAt === null && !!moved2.body.location?.verifiedAt && !!histMove, JSON.stringify({ g: moved2.body.location?.gpsConfirmedAt, v: !!moved2.body.location?.verifiedAt, h: !!histMove }));
+    await call("POST", GPS, A.admin.token, { latitude: 18.1760, longitude: -66.1620, confirm: true });
+    const rewritten = await call("PATCH", `${L}/service-locations/${altId}`, A.admin.token, { addressLine: "Calle Sol 4-B" });
+    check("G8 editing the written address clears only the address verification, not the confirmed point",
+      rewritten.body.location?.verifiedAt === null && !!rewritten.body.location?.gpsConfirmedAt);
+    let noCoords = false;
+    try { await q(`UPDATE care_recipient_locations SET latitude=NULL, longitude=NULL, gps_confirmed_at=now(), gps_confirmed_by_user_id=$2 WHERE id=$1`, [altId, A.admin.userId]); }
+    catch (e) { noCoords = (e as { code?: string }).code === "23514"; }
+    check("G9 database: a GPS confirmation without coordinates is impossible", noCoords);
+    const opts2 = ((await call("GET", `${L}/service-location-options`, A.admin.token)).body.options ?? []) as Json[];
+    check("G10 the shift form knows which addresses have a confirmed GPS point",
+      opts2.find((o) => o.id === altId)?.gpsConfirmed === true && opts2.find((o) => o.id === primaryId)?.gpsConfirmed === false);
+    const legacyId = (await q<{ id: string }>(`INSERT INTO care_recipient_locations (care_recipient_id,organization_id,address_line,municipality,latitude,longitude,is_primary,verified_at,verified_by_user_id)
+      VALUES ($1,$2,'Calle Vieja 1','Cayey',18.11,-66.16,false,now(),$3) RETURNING id`, [rRes, orgA, A.admin.userId])).rows[0]?.id;
+    const legacy2 = ((await call("GET", `/organizations/${orgA}/care-recipients/${rRes}/service-locations`, A.admin.token)).body.locations ?? []).find((l: Json) => l.id === legacyId);
+    check("G11 existing verified addresses stay verified and are shown as 'GPS not confirmed'", !!legacy2?.verifiedAt && legacy2?.gpsConfirmedAt === null);
     const otherAddr = await asRuntime(A.cg2.userId, orgA, `SELECT id FROM care_recipient_locations WHERE id=$1`, [primaryId]);
     check("C2 she cannot read the person's other addresses (RLS)", otherAddr.length === 0, `rows=${otherAddr.length}`);
     const notAssigned = await call("GET", `/organizations/${orgA}/shifts/${s2.id}/service-location`, A.cg1.token);
@@ -267,6 +308,7 @@ async function main() {
     // ================================================================ A: arrival and proximity
     const sA = await assignedShift(A.cg1, rA2, 2);
     await q(`INSERT INTO care_recipient_locations (care_recipient_id,organization_id,address_line,municipality,latitude,longitude) VALUES ($1,$2,'Parcela 3','Cayey',18.1100,-66.1660)`, [rA2, orgA]);
+    const rA2Loc = (await q<{ id: string }>(`SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1`, [rA2])).rows[0].id;
     await q(`UPDATE shifts SET service_location_id=(SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1) WHERE id=$2`, [rA2, sA.id]);
     const ARR = (id: string) => `/organizations/${orgA}/shifts/${id}/arrival`;
     const noConsentCoords = await call("POST", ARR(sA.id), A.cg1.token, { latitude: 18.11, longitude: -66.166 });
@@ -282,6 +324,12 @@ async function main() {
     const consent = await call("POST", `/organizations/${orgA}/me/location-consent`, A.cg1.token, { consentVersion: "location-check-v1" });
     const consentRow = (await q<{ consent_version: string }>(`SELECT consent_version FROM worker_location_consents WHERE user_id=$1 AND revoked_at IS NULL`, [A.cg1.userId])).rows;
     check("A5 separate, versioned consent for location checks is recorded", consent.status === 201 && consentRow[0]?.consent_version === "location-check-v1", `status=${consent.status}`);
+    const sUnconf = await assignedShift(A.cg1, rA2, 11);
+    await q(`UPDATE shifts SET service_location_id=$1 WHERE id=$2`, [rA2Loc, sUnconf.id]);
+    const unconf = await call("POST", ARR(sUnconf.id), A.cg1.token, { latitude: 18.1105, longitude: -66.1655, accuracyM: 12 });
+    check("G12 proximity is only compared with a confirmed GPS point (unconfirmed marker: NO_REFERENCE, no false alarm)",
+      unconf.status === 201 && unconf.body.arrival?.proximity === "NO_REFERENCE" && unconf.body.arrival?.needsReview === false, JSON.stringify(unconf.body.arrival ?? unconf.body));
+    await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/service-locations/${rA2Loc}/confirm-gps`, A.admin.token, { latitude: 18.11, longitude: -66.166, confirm: true });
     const sNear = await assignedShift(A.cg1, rA2, 7);
     await q(`UPDATE shifts SET service_location_id=(SELECT id FROM care_recipient_locations WHERE care_recipient_id=$1) WHERE id=$2`, [rA2, sNear.id]);
     const near = await call("POST", ARR(sNear.id), A.cg1.token, { latitude: 18.1105, longitude: -66.1655, accuracyM: 12 });

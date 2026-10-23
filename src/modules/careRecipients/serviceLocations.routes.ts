@@ -7,7 +7,7 @@ import { LocationWriteForbiddenError, RecipientNotFoundError } from "./careRecip
 import {
   LocationConflictError, LocationNotFoundError,
   createLocationSchema, updateLocationSchema, reassignShiftsSchema, changeRequestSchema, resolveChangeRequestSchema,
-  familyLocationPermissionSchema,
+  familyLocationPermissionSchema, confirmGpsSchema, confirmServiceLocationGps,
   listServiceLocations, createServiceLocation, updateServiceLocation, setPrimaryServiceLocation, verifyServiceLocation,
   archiveServiceLocation, reassignShiftLocations, listServiceLocationHistory, listShiftLocationOptions, getShiftServiceLocation,
   getFamilyServiceLocation, createLocationChangeRequest, listMyLocationChangeRequests, listLocationChangeRequests,
@@ -81,6 +81,11 @@ router.post(`${R}/service-locations/:locationId/primary`, requireAuth, wrap(asyn
 router.post(`${R}/service-locations/:locationId/verify`, requireAuth, wrap(async (req, res) => {
   const p = ids(req, res, "organizationId", "recipientId", "locationId"); if (!p) return;
   res.json(await verifyServiceLocation(req.auth!.userId, p[0], p[1], p[2]));
+}));
+router.post(`${R}/service-locations/:locationId/confirm-gps`, requireAuth, wrap(async (req, res) => {
+  const p = ids(req, res, "organizationId", "recipientId", "locationId"); if (!p) return;
+  const b = body(confirmGpsSchema, req, res); if (!b) return;
+  res.json(await confirmServiceLocationGps(req.auth!.userId, p[0], p[1], p[2], b));
 }));
 router.post(`${R}/service-locations/:locationId/archive`, requireAuth, wrap(async (req, res) => {
   const p = ids(req, res, "organizationId", "recipientId", "locationId"); if (!p) return;

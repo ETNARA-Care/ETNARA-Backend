@@ -51,6 +51,12 @@ export const resolveChangeRequestSchema = z.object({
   note: text(300),
   apply: z.object({ addressLine: text(200), municipality, postalCode, accessNotes: text(500) }).strict().optional(),
 }).strict();
+/** Gate 6 fix: explicit confirmation of the exact map point (never implied by a search). */
+export const confirmGpsSchema = z.object({
+  latitude: z.number().min(17.5).max(18.7),
+  longitude: z.number().min(-68.0).max(-65.1),
+  confirm: z.literal(true),
+}).strict();
 export const familyLocationPermissionSchema = z.object({ canViewServiceLocation: z.boolean() }).strict();
 
 export type CreateLocationInput = z.infer<typeof createLocationSchema>;
@@ -60,10 +66,10 @@ interface LocationRow {
   id: string; care_recipient_id: string; label: string; is_primary: boolean;
   address_line: string | null; municipality: string | null; postal_code: string | null; access_notes: string | null;
   latitude: string | number | null; longitude: string | number | null; establishment_id: string | null;
-  verified_at: string | null; archived_at: string | null; updated_at: string; created_at: string;
+  verified_at: string | null; gps_confirmed_at: string | null; archived_at: string | null; updated_at: string; created_at: string;
 }
 const columns = sql`id, care_recipient_id, label, is_primary, address_line, municipality, postal_code, access_notes,
-  latitude, longitude, establishment_id, verified_at, archived_at, updated_at, created_at`;
+  latitude, longitude, establishment_id, verified_at, gps_confirmed_at, archived_at, updated_at, created_at`;
 
 async function view(trx: Trx, row: LocationRow) {
   let establishment: { id: string; name: string; address: string | null } | null = null;
@@ -77,7 +83,7 @@ async function view(trx: Trx, row: LocationRow) {
     accessNotes: row.access_notes,
     latitude: row.latitude == null ? null : Number(row.latitude),
     longitude: row.longitude == null ? null : Number(row.longitude),
-    establishment, verifiedAt: row.verified_at, archivedAt: row.archived_at,
+    establishment, verifiedAt: row.verified_at, gpsConfirmedAt: row.gps_confirmed_at, archivedAt: row.archived_at,
     updatedAt: row.updated_at, createdAt: row.created_at,
   };
 }
@@ -231,6 +237,28 @@ export async function verifyServiceLocation(userId: string, organizationId: stri
   });
 }
 
+/**
+ * Managers confirm the exact point of the service (lat/lng within Puerto Rico).
+ * Records who and when (history trigger: GPS_CONFIRMED). Moving the marker
+ * later clears the confirmation (migration 103 trigger) until confirmed again.
+ */
+export async function confirmServiceLocationGps(userId: string, organizationId: string, recipientId: string, locationId: string,
+  input: z.infer<typeof confirmGpsSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await requireManager(trx);
+    const current = await lockedLocation(trx, organizationId, recipientId, locationId);
+    if (current.archived_at) throw new LocationConflictError("LOCATION_ARCHIVED");
+    const lat = Math.round(input.latitude * 1e6) / 1e6;
+    const lng = Math.round(input.longitude * 1e6) / 1e6;
+    const row = (await sql<LocationRow>`
+      UPDATE care_recipient_locations SET latitude = ${lat}, longitude = ${lng},
+        gps_confirmed_at = now(), gps_confirmed_by_user_id = ${userId}, updated_at = now(), updated_by_user_id = ${userId}
+      WHERE id = ${locationId} AND organization_id = ${organizationId}
+      RETURNING ${columns}`.execute(trx)).rows[0];
+    return { location: await view(trx, row) };
+  });
+}
+
 export async function archiveServiceLocation(userId: string, organizationId: string, recipientId: string, locationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await requireManager(trx);
@@ -312,7 +340,7 @@ export async function listShiftLocationOptions(userId: string, organizationId: s
     const out = [];
     for (const row of rows) {
       const v = await view(trx, row);
-      out.push({ id: v.id, label: v.label, isPrimary: v.isPrimary, verified: Boolean(v.verifiedAt),
+      out.push({ id: v.id, label: v.label, isPrimary: v.isPrimary, verified: Boolean(v.verifiedAt), gpsConfirmed: Boolean(v.gpsConfirmedAt),
         summary: v.establishment ? `${v.establishment.name}${v.establishment.address ? ` · ${v.establishment.address}` : ""}`
           : [v.addressLine, v.municipality].filter(Boolean).join(", ") || "Ubicación marcada en el mapa" });
     }
@@ -347,7 +375,11 @@ export async function getShiftServiceLocation(userId: string, organizationId: st
     }
     const v = await view(trx, row);
     return { location: { id: v.id, label: v.label, addressLine: v.addressLine, municipality: v.municipality, postalCode: v.postalCode,
-      accessNotes: v.accessNotes, latitude: v.latitude, longitude: v.longitude, establishment: v.establishment, verified: Boolean(v.verifiedAt) } };
+      accessNotes: v.accessNotes,
+      // Navigation uses ONLY a point the agency confirmed; otherwise the written
+      // address (approximate). Unconfirmed coordinates are not handed out.
+      latitude: v.gpsConfirmedAt ? v.latitude : null, longitude: v.gpsConfirmedAt ? v.longitude : null,
+      gpsConfirmed: Boolean(v.gpsConfirmedAt), establishment: v.establishment, verified: Boolean(v.verifiedAt) } };
   });
 }
 
