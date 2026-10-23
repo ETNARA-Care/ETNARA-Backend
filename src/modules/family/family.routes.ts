@@ -4,6 +4,7 @@ import {
   createFamilyInvitation,
   acceptFamilyInvitation,
   revokeFamilyRelationship,
+  FamilyManagerOnlyError,
   listMyCareRecipients,
   getMyCareRecipient,
   createInvitationSchema,
@@ -31,6 +32,10 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   if (err instanceof InvalidTenantContextError || err instanceof InvalidOrganizationIdError) {
     res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+    return true;
+  }
+  if (err instanceof FamilyManagerOnlyError) {
+    res.status(403).json({ error: "FAMILY_MANAGER_ONLY" });
     return true;
   }
   if (err instanceof RecipientNotFoundError || err instanceof RelationshipNotFoundError) {

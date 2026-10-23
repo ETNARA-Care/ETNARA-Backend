@@ -23,6 +23,14 @@ export class ShiftCannotBeCancelledError extends Error {
     this.name = "ShiftCannotBeCancelledError";
   }
 }
+/** Security hotfix 088: only agency managers change a shift's times or status by hand. */
+export class ShiftUpdateForbiddenError extends Error {
+  constructor() { super("SHIFT_UPDATE_FORBIDDEN"); this.name = "ShiftUpdateForbiddenError"; }
+}
+export class ShiftStateLockedError extends Error {
+  constructor(public readonly reason: string) { super(reason); this.name = "ShiftStateLockedError"; }
+}
+
 export class ShiftCancellationForbiddenError extends Error {
   constructor() {
     super("SHIFT_CANCELLATION_FORBIDDEN");
@@ -388,6 +396,8 @@ export async function updateShift(
 ): Promise<ShiftRow> {
   assertUuid(shiftId, "shiftId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    const managerCheck = await sql<{ is_manager: boolean }>`SELECT app_is_org_manager() AS is_manager`.execute(trx);
+    if (!managerCheck.rows[0]?.is_manager) throw new ShiftUpdateForbiddenError();
     if (input.scheduledStart !== undefined && input.scheduledEnd !== undefined) {
       if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
         throw new InvalidShiftTimesError();
@@ -415,7 +425,12 @@ export async function updateShift(
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
-    `.execute(trx);
+    `.execute(trx).catch((error: { message?: string }) => {
+      // Guard in migration 088: a cancelled shift never comes back.
+      const m = /SHIFT_[A-Z_]+_LOCKED|SHIFT_STATUS_[A-Z_]+/.exec(error?.message ?? "");
+      if (m) throw new ShiftStateLockedError(m[0]);
+      throw error;
+    });
     if (!result.rows[0]) throw new ShiftNotFoundError();
     return result.rows[0];
   });
