@@ -44,7 +44,17 @@ async function session(email: string) {
   return { token, orgId, userId: me.body.user?.id as string };
 }
 
+/** Optionally wait for a fresh deployment to come up (SMARTMATCH_STAGING_WAIT_SECONDS). */
+async function waitForHealth() {
+  const deadline = Date.now() + Number(process.env.SMARTMATCH_STAGING_WAIT_SECONDS ?? 0) * 1000;
+  while (Date.now() < deadline) {
+    try { if ((await fetch(base + "/health")).ok) return; } catch { /* not up yet */ }
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
+}
+
 async function main() {
+  await waitForHealth();
   const health = await call("GET", "/health");
   check("H1 /health responds", health.status === 200 && health.body.status === "ok", `status=${health.status}`);
   if (origin) {
