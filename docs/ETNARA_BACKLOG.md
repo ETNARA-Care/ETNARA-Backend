@@ -2,6 +2,12 @@
 
 ## In Progress
 
+### ETN-041 — Phase 12.4a close open tenant_isolation policies
+
+- Status: ready for review (gate). Migration 086 + verifyTenantPolicyClosure.
+- Next: Phase 12.4 offline mode (7-day caregiver session, encrypted queue,
+  offline check-in/out marked "registrada sin conexión").
+
 ### ETN-040 — Phase 12.2 agency team invitations and administrator authority
 - agency administrators invite administrators and supervisors
 - only ORGANIZATION_ADMIN invites; supervisors cannot see money
