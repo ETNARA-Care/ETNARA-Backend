@@ -2,6 +2,40 @@
 
 ## In Progress
 
+### ETN-040 — Phase 12.2 agency team invitations and administrator authority
+- agency administrators invite administrators and supervisors
+- only ORGANIZATION_ADMIN invites; supervisors cannot see money
+- close direct role/membership writes by non-administrators (RLS)
+
+Status: Backend gate on `gate/12.2-team-invitations-admin-authority`; frontend pending.
+
+### ETN-039 — Phase 12.1 recipient address and directions
+- store the visit address in `care_recipient_locations` with its own RLS
+- managers read and write; assigned workers read only during a live assignment
+- family and platform administrators have no access; no delete
+- strict payload validation and paired coordinates
+- HTTP + RLS verification in CI
+
+Status: Backend implemented on `gate/12.1-recipient-address`; awaiting gate
+PASS. Frontend pending. Publish after Railway returns and 084 is applied.
+### BPH12-001 — Phase 12.0 offline-safe care events
+- idempotent care event creation with device `clientEventId`
+- device `occurredAt` bounded by the active visit
+- migration 081 fixes the shift-assignment RLS recursion introduced by 076
+
+Status: Gate implemented and verified locally; awaiting PASS.
+
+### BUG — assignment acceptance messaging sync
+- `syncAssignedWorkerConversationAccess` fails with "could not determine data
+  type of parameter $4"; acceptance succeeds, conversation access may not.
+
+Status: Found during Phase 12.0; not started.
+### BUG — assignment acceptance messaging sync
+- caregivers were never added to the recipient conversation on acceptance
+- fixed by resolving the thread with app_find_family_thread_id() and casting parameters
+
+Status: Fixed on `fix/assignment-messaging-sync`; verified 7/7 against PostgreSQL 16.
+
 ### ETN-038 — Phase 10.0 multi-agency establishments
 - reuse organizations as the legal tenant and locations as establishments
 - require one explicit active organization for every operation

@@ -8,6 +8,10 @@ import {
   createRecipientSchema,
   updateRecipientSchema,
   RecipientNotFoundError,
+  getCareRecipientLocation,
+  upsertCareRecipientLocation,
+  upsertLocationSchema,
+  LocationWriteForbiddenError,
 } from "./careRecipients.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -27,6 +31,10 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   if (err instanceof InvalidTenantContextError || err instanceof InvalidOrganizationIdError) {
     res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+    return true;
+  }
+  if (err instanceof LocationWriteForbiddenError) {
+    res.status(403).json({ error: "LOCATION_WRITE_FORBIDDEN" });
     return true;
   }
   if (err instanceof RecipientNotFoundError) {
@@ -123,6 +131,54 @@ router.patch(
         bodyParsed.data
       );
       res.status(200).json({ recipient });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/care-recipients/:recipientId/location",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const recipientIdParsed = uuidParam.safeParse(req.params.recipientId);
+    if (!orgIdParsed.success || !recipientIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ID" });
+      return;
+    }
+    try {
+      const location = await getCareRecipientLocation(req.auth!.userId, orgIdParsed.data, recipientIdParsed.data);
+      res.status(200).json({ location });
+    } catch (err) {
+      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.put(
+  "/organizations/:organizationId/care-recipients/:recipientId/location",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const recipientIdParsed = uuidParam.safeParse(req.params.recipientId);
+    if (!orgIdParsed.success || !recipientIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ID" });
+      return;
+    }
+    const bodyParsed = upsertLocationSchema.safeParse(req.body);
+    if (!bodyParsed.success) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const location = await upsertCareRecipientLocation(
+        req.auth!.userId,
+        orgIdParsed.data,
+        recipientIdParsed.data,
+        bodyParsed.data
+      );
+      res.status(200).json({ location });
     } catch (err) {
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

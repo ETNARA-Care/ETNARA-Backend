@@ -43,7 +43,7 @@ describe("Family access regression contracts", () => {
   it("keeps the Family shift caregiver summary curated and verified", () => {
     const scheduling = read("src/modules/scheduling/scheduling.service.ts");
     expect(scheduling).toMatch(/assigned_worker\.display_name AS caregiver_display_name/);
-    expect(scheduling).toMatch(/credential_platform_verifications[\s\S]*status = 'verified'/);
+    expect(scheduling).not.toContain("credential_platform_verifications");
     expect(scheduling).toMatch(/organization_credential_reviews[\s\S]*review_status = 'approved'/);
     expect(scheduling).not.toMatch(/FamilyShiftSummary[\s\S]{0,800}(document_id|issuing_entity_name)/);
   });

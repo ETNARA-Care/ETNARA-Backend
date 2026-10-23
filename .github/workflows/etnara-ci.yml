@@ -2,7 +2,7 @@ name: ETNARA CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'security/170-platform-phi-boundary']
   pull_request:
     branches: [main]
 
@@ -64,10 +64,43 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyTenantIsolation.ts
 
+      - name: PostgreSQL platform PHI boundary verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyPlatformPhiBoundary.ts
+
+      - name: PostgreSQL credential review write boundary verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+        run: npx tsx scripts/verifyCredentialReviewWriteBoundary.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyAccessInvitationActivation.ts
+
+      - name: Export/report security guard
+        run: npx tsx scripts/verifyExportReportSecurity.ts
+
+      - name: PostgreSQL HTTP and RLS verifications (seeded demo)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        shell: bash
+        run: |
+          # Seed once: seedDemo does not change passwords of users that already exist.
+          runtime_password="$(openssl rand -hex 24)"
+          demo_password="$(openssl rand -hex 24)"
+          psql "$MIGRATIONS_DATABASE_URL" -v ON_ERROR_STOP=1 -c "ALTER ROLE app_runtime PASSWORD '$runtime_password'"
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" DEMO_PASSWORD="$demo_password" npx tsx scripts/seedDemo.ts
+          export DATABASE_URL="postgres://app_runtime:$runtime_password@localhost:5432/etnara_ci"
+          export DEMO_PASSWORD="$demo_password"
+          npx tsx scripts/verifyAssignmentMessagingSync.ts
+          npx tsx scripts/verifyCareEventIdempotency.ts
+          npx tsx scripts/verifyRecipientLocationAccess.ts
+          npx tsx scripts/verifyTeamAndAdminAuthority.ts
+          npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
 
       - name: Diff safety check
         run: git diff --check

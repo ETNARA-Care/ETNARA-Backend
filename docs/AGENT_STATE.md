@@ -2,9 +2,125 @@
 
 ## Current Status
 
+## 2026-10-22 — Phase 12.3 staff roles + existing accounts (gate/12.3-staff-roles-existing-accounts)
+
+- POST /organizations/:id/team/roles {membershipId | workerMembershipId, role,
+  enabled}: ORGANIZATION_ADMIN gives or removes SUPERVISOR/ADMINISTRATOR to
+  someone already in the agency. A caregiver keeps WORKER (decision: both
+  roles). Guards: cannot remove own admin, never the last admin (advisory
+  lock), caregiver must have an activated account. RLS from 085 unchanged.
+- Team list exposes workerMembershipId for staff who also work shifts.
+- POST /platform/admin-invitations/accept (authenticated): an existing ETNARA
+  account accepts a staff invitation; the SQL function checks the invited email
+  is this user (INVITATION_IDENTITY_MISMATCH otherwise).
+- Verification: scripts/verifyStaffRolesAndExistingAccounts.ts 18/18 in CI.
+  No migration.
+
+## 2026-10-22 — Phase 12.2 team invitations + administrator authority (gate/12.2-team-invitations-admin-authority)
+
+- Migration 085:
+  - SECURITY DEFINER helpers app_is_org_admin(), app_is_org_manager_definer(), app_role_code().
+  - CLOSED A PRIVILEGE GAP: user_roles and organization_memberships had one
+    permissive FOR ALL policy without WITH CHECK, so any active member
+    (caregiver, family) could write roles/memberships directly as app_runtime.
+    RESTRICTIVE write policies now require an org administrator or the
+    platform; a supervisor may grant only WORKER/FAMILY. No app code wrote
+    these tables as app_runtime (all writes are SECURITY DEFINER functions).
+  - access_invitations.staff_role (ORGANIZATION_ADMIN | SUPERVISOR) for type
+    organization_admin; trigger defaults to ORGANIZATION_ADMIN; only org admins
+    or the platform may read/create/change these rows. Activation grants
+    staff_role; inspection shows "Supervisor de la organización".
+  - Rates, timesheets and pay periods: RESTRICTIVE admin-only policies.
+- New module team: GET /organizations/:id/team, POST .../team/invitations
+  {email, role}, POST .../team/invitations/:id/revoke — ORGANIZATION_ADMIN only.
+- Timesheet and pay-period services require app_is_org_admin(); pay-period
+  routes now return 403 (was 500) when forbidden.
+- Verification: scripts/verifyTeamAndAdminAuthority.ts 28/28 in CI.
+- Limitation: inviting an email that already has an ETNARA account is not
+  supported yet (ACCOUNT_ALREADY_EXISTS, unchanged activation behavior).
+
+## 2026-10-22 — Agency plain language (fix/agency-plain-language)
+
+- Planning and coverage texts use real Spanish plurals instead of "(s)"/"(es)".
+- Operational alerts name the resident by preferred name when set
+  (COALESCE(preferred_name, first + last)), matching the agency screens.
+- Test: tests/fixAgencyPlainLanguage.test.ts. No migration or API-shape change.
+
+## 2026-10-22 — Coverage truth + alert time (fix/coverage-truth-and-alert-time)
+
+- Workforce planning counts a shift as covered only with an ACCEPTED
+  assignment (same rule as operations.service `!shift.accepted`). Texts now say
+  "cuidador confirmado".
+- Operational alert detail formats the shift start in America/Puerto_Rico
+  without seconds (`formatShiftStart`); Railway runs in UTC, so the old
+  `toLocaleString("es-PR")` showed times 4 hours off.
+- Test: tests/fixCoverageTruthAndAlertTime.test.ts. No migration, no RLS change.
+- Pairs with ETNARAMVP fix/agency-coverage-compliance-truth.
+
+## 2026-10-21 — Phase 12.0 offline-safe care events (gate/12.0-offline-safe-care-events)
+
+- Migration 083 (renumbered from 080 to avoid a clash) adds nullable `care_events.client_event_id` with a partial
+  unique index on (organization_id, organization_worker_membership_id,
+  client_event_id). Additive only; RLS policies unchanged.
+- POST care-events accepts optional `clientEventId` and `occurredAt`. A retry
+  returns the stored row (200, `replayed: true`) before the active-visit guard;
+  concurrent retries resolve through ON CONFLICT DO NOTHING; no duplicate
+  family notification. `occurredAt` must be at or after the active check-in and
+  no more than 2 minutes in the future. Reusing an id for another record is 409.
+- After check-out the shift is invisible to the worker (076), so the app must
+  deliver pending records before letting the caregiver finish the visit.
+- FOUND AND FIXED (migration 081): 076 made app_worker_has_shift_assignment read
+  shifts and verification_events, whose worker policies call the same helper.
+  Under app_runtime this recursed until PostgreSQL killed the backend (signal 9)
+  and restarted the whole server when a caregiver accepted a shift. 081 keeps
+  the 076 body verbatim and makes the helper SECURITY DEFINER with a fixed
+  search_path (same pattern as 079).
+- FOUND, NOT FIXED: accepting an assignment logs "messaging synchronization
+  failed: could not determine data type of parameter $4" in
+  syncAssignedWorkerConversationAccess; the acceptance succeeds but the worker
+  may not be added to the recipient conversation.
+- Validation on fresh PostgreSQL 16: bootstrap x2, tenant isolation, platform
+  PHI boundary, invitation activation, new verifyCareEventIdempotency (17/17),
+  76 files / 250 tests, build and diff check pass.
+- Exact next step: Rafa's gate PASS, then deploy; the Railway pre-deploy bootstrap applies 083 before
+  the frontend offline queue ships.
+
+## 2026-10-21 — Fix: caregiver never joined the recipient conversation (fix/assignment-messaging-sync)
+
+- Accepting a shift logged "messaging synchronization failed: could not
+  determine data type of parameter $4" from an untyped `${roomId} IS NOT NULL`.
+- Root cause was deeper: message_threads_read only shows threads the user already
+  participates in, so the accepting worker could never SELECT the thread to join.
+  Even with the cast the INSERT…SELECT inserted 0 rows.
+- The thread is now resolved with the existing SECURITY DEFINER helper
+  app_find_family_thread_id() (migration 035); the INSERT stays under
+  message_thread_participants_write (self only, authorized recipient only).
+  No new privileged function, no RLS change.
+- verifyAssignmentMessagingSync.ts: 3/6 before the fix, 7/7 after, including a
+  direct RLS attack (joining an unassigned recipient's thread is rejected). Wired into CI.
+- Regression: tenant isolation, platform PHI, invitations, 88 files / 272 tests,
+  build and diff check pass.
+
 Project: ETNARA Care
 Repository: ETNARA-Backend
 Branch: phase-10/10.0-multi-agency-compliance
+
+## 2026-10-21 — Phase 12.1 recipient address and directions
+
+- Migration 084 adds `care_recipient_locations` (address line, municipality,
+  access notes, optional paired coordinates) in its own table so RLS controls
+  the address independently of the recipient row.
+- Managers (ORGANIZATION_ADMIN, SUPERVISOR) read and write. A worker reads only
+  while `app_worker_has_recipient_assignment()` is true (assigned, not-ended
+  shift or open visit) and never writes. Family members and platform
+  administrators get no access. No DELETE grant; clearing is an UPDATE.
+- A SECURITY DEFINER trigger rejects a location whose organization differs from
+  its recipient's (CARE_RECIPIENT_LOCATION_ORG_MISMATCH).
+- New routes: GET and PUT `/organizations/:organizationId/care-recipients/:recipientId/location`.
+- Verification: `scripts/verifyRecipientLocationAccess.ts` (21/21, HTTP + RLS
+  attacks) added to CI; the table is included in the platform PHI boundary.
+- Exact next step: gate PASS from Rafa, then the frontend (agency edit fields,
+  caregiver "Cómo llegar" card). Publish only after Railway returns and 084 is applied.
 
 ## 2026-09-27 — Phase 10.0 multi-agency establishments
 

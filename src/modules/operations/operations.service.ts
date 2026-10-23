@@ -2,6 +2,23 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 
+/**
+ * The server runs in UTC; agencies operate in Puerto Rico. Format with an
+ * explicit time zone and no seconds, e.g. "jue, 22 oct, 2:14 p. m.".
+ */
+const SHIFT_START_FORMAT = new Intl.DateTimeFormat("es-PR", {
+  timeZone: "America/Puerto_Rico",
+  weekday: "short",
+  day: "numeric",
+  month: "short",
+  hour: "numeric",
+  minute: "2-digit",
+});
+export function formatShiftStart(value: string | Date): string {
+  return SHIFT_START_FORMAT.format(new Date(value));
+}
+
+
 export class OperationsForbiddenError extends Error {
   constructor() {
     super("OPERATIONS_FORBIDDEN");
@@ -58,7 +75,7 @@ async function requireManager(trx: unknown): Promise<void> {
 async function buildOperationsCenter(trx: unknown, organizationId: string): Promise<OperationsCenter> {
   const shifts = await sql<any>`
     SELECT s.id, s.scheduled_start, s.scheduled_end,
-      trim(concat_ws(' ', cr.first_name, cr.last_name)) recipient,
+      COALESCE(NULLIF(trim(cr.preferred_name), ''), trim(concat_ws(' ', cr.first_name, cr.last_name))) recipient,
       EXISTS (
         SELECT 1 FROM assignments a
         WHERE a.shift_id = s.id
@@ -90,7 +107,7 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
 
   const incidents = await sql<any>`
     SELECT i.id, i.created_at, i.severity,
-      trim(concat_ws(' ', cr.first_name, cr.last_name)) recipient
+      COALESCE(NULLIF(trim(cr.preferred_name), ''), trim(concat_ws(' ', cr.first_name, cr.last_name))) recipient
     FROM incidents i
     JOIN care_recipients cr ON cr.id = i.care_recipient_id
     WHERE i.organization_id = ${organizationId} AND i.status <> 'resolved'
@@ -125,7 +142,7 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
         category: "uncovered_shift",
         severity: start - now < 86_400_000 ? "critical" : "warning",
         title: "Turno sin cubrir",
-        detail: `${shift.recipient || "Residente"} · ${new Date(shift.scheduled_start).toLocaleString("es-PR")}`,
+        detail: `${shift.recipient || "Residente"} · ${formatShiftStart(shift.scheduled_start)}`,
         relatedEntityType: "shift",
         relatedEntityId: shift.id,
         actionPath: `/agency/shifts/${shift.id}`,

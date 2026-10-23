@@ -4,6 +4,10 @@ import {
   createCredential,
   listCredentials,
   listMyCredentialSummaries,
+  listPendingOrganizationCredentialReviews,
+  initiateMyCredentialDocumentUpload,
+  uploadMyCredentialDocumentContent,
+  completeMyCredentialDocumentUpload,
   listCredentialTypes,
   initiateCredentialDocumentUpload,
   completeCredentialDocumentUpload,
@@ -13,11 +17,6 @@ import {
   updateCredential,
   createCredentialSchema,
   updateCredentialSchema,
-  createPlatformVerification,
-  listPlatformVerifications,
-  listPlatformCredentialVerificationQueue,
-  createPlatformCredentialDocumentDownload,
-  platformVerificationSchema,
   createOrUpdateOrganizationReview,
   organizationReviewSchema,
   WorkerNotLinkedError,
@@ -41,7 +40,6 @@ import {
 import {
   MembershipNotActiveError,
   InvalidTenantContextError,
-  UnauthorizedPlatformAccessError,
 } from "../../context/errors.js";
 import { env } from "../../config/env.js";
 
@@ -142,6 +140,87 @@ router.get(
       res.status(200).json({ credentials });
     } catch (err) {
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/upload-url",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const bodyParsed = initiateCredentialDocumentUploadSchema.safeParse(req.body);
+    if (!orgIdParsed.success || !credentialId.success || !bodyParsed.success) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const upload = await initiateMyCredentialDocumentUpload(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, bodyParsed.data
+      );
+      res.status(201).json({ upload });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("initiateMyCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/:fileId/content",
+  requireAuth,
+  express.raw({
+    type: ["application/pdf", "image/jpeg", "image/png"],
+    limit: env.STORAGE_MAX_FILE_BYTES,
+  }),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const fileId = uuidParam.safeParse(req.params.fileId);
+    const contentTypeParsed = credentialDocumentContentTypeSchema.safeParse(req.headers["content-type"]);
+    if (!orgIdParsed.success || !credentialId.success || !fileId.success || !contentTypeParsed.success || !Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const upload = await uploadMyCredentialDocumentContent(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, fileId.data,
+        contentTypeParsed.data, req.body
+      );
+      res.status(200).json({ upload });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("uploadMyCredentialDocumentContent", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/me/credentials/:credentialId/documents/:fileId/complete",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const credentialId = uuidParam.safeParse(req.params.credentialId);
+    const fileId = uuidParam.safeParse(req.params.fileId);
+    if (!orgIdParsed.success || !credentialId.success || !fileId.success) {
+      res.status(400).json({ error: "INVALID_ID" });
+      return;
+    }
+    try {
+      const document = await completeMyCredentialDocumentUpload(
+        req.auth!.userId, orgIdParsed.data, credentialId.data, fileId.data
+      );
+      res.status(200).json({ document });
+    } catch (err) {
+      if (!handleTenantError(err, res)) {
+        logUnexpectedCredentialStorageError("completeMyCredentialDocumentUpload", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
     }
   }
 );
@@ -364,88 +443,29 @@ router.post(
   }
 );
 
-// ===================== Platform Verification (platform admin only) =====================
-
 router.get(
-  "/platform/credentials/verification-queue",
+  "/organizations/:organizationId/credentials/review-queue",
   requireAuth,
   async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const credentials = await listPlatformCredentialVerificationQueue(req.auth!.userId);
-      res.status(200).json({ credentials });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
-
-router.post(
-  "/platform/credentials/:credentialId/documents/:fileId/download-url",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const download = await createPlatformCredentialDocumentDownload(
-        req.auth!.userId,
-        String(req.params.credentialId),
-        String(req.params.fileId)
-      );
-      res.status(200).json({ download });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
-
-router.post(
-  "/platform/credentials/:credentialId/verifications",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    const bodyParsed = platformVerificationSchema.safeParse(req.body);
-    if (!bodyParsed.success) {
-      res.status(400).json({ error: "INVALID_PAYLOAD" });
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
       return;
     }
     try {
-      const verification = await createPlatformVerification(
+      const items = await listPendingOrganizationCredentialReviews(
         req.auth!.userId,
-        String(req.params.credentialId),
-        bodyParsed.data
+        orgIdParsed.data
       );
-      res.status(201).json({ verification });
+      res.status(200).json({ items });
     } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
       if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
   }
 );
 
-router.get(
-  "/platform/credentials/:credentialId/verifications",
-  requireAuth,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const verifications = await listPlatformVerifications(req.auth!.userId, String(req.params.credentialId));
-      res.status(200).json({ verifications });
-    } catch (err) {
-      if (err instanceof UnauthorizedPlatformAccessError) {
-        res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" });
-        return;
-      }
-      if (!handleTenantError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  }
-);
+// Platform-level employee credential inspection is intentionally disabled.
+// Organizations retain tenant-scoped credential review below.
 
 // ===================== Organization Credential Review =====================
 

@@ -40,7 +40,7 @@ describe("Phase 5.9 private credential documents", () => {
 
     expect(service).toContain("INSERT INTO document_versions");
     expect(service).toContain("COALESCE(MAX(version), 0) + 1");
-    expect(service).toContain("SET review_status = 'pending', notes = NULL, reviewed_at = NULL");
+    expect(service).toContain("app_reset_credential_review_pending(${credentialId})");
     expect(service).toContain("throw new CredentialDocumentRequiredError()");
     expect(service).toContain("notes are required when rejecting a document");
     expect(service).toContain("INSERT INTO organization_document_version_reviews");

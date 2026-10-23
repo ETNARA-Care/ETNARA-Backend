@@ -98,8 +98,9 @@ interface TimesheetRow {
   updated_at: string;
 }
 
+/** Hours, rates and pay periods are for organization administrators only (085). */
 async function assertManager(trx: unknown): Promise<void> {
-  const result = await sql<{ is_manager: boolean }>`SELECT app_is_org_manager() AS is_manager`.execute(trx as never);
+  const result = await sql<{ is_manager: boolean }>`SELECT app_is_org_admin() AS is_manager`.execute(trx as never);
   if (!result.rows[0]?.is_manager) throw new TimesheetForbiddenError();
 }
 

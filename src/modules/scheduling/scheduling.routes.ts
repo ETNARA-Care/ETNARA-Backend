@@ -31,7 +31,7 @@ const router = Router();
 const uuidParam = z.string().uuid();
 
 function logUnexpectedSchedulingError(operation: string, err: unknown): void {
-  const error = err instanceof Error ? err : new Error(String(err));
+  const errorName = err instanceof Error ? err.name : "UnknownError";
   const databaseCode =
     typeof err === "object" && err !== null && "code" in err && typeof err.code === "string"
       ? err.code
@@ -42,9 +42,8 @@ function logUnexpectedSchedulingError(operation: string, err: unknown): void {
   // Never include request bodies, user IDs, organization IDs, or SQL text.
   console.error("Unexpected scheduling route error", {
     operation,
-    name: error.name,
-    message: error.message,
-    databaseCode,
+    name: errorName,
+    ...(databaseCode ? { databaseCode } : {}),
   });
 }
 

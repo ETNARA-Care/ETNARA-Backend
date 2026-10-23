@@ -108,19 +108,30 @@ async function syncAssignedWorkerConversationAccess(
   roomId: string | null
 ): Promise<void> {
   await withTenantContext({ userId, organizationId }, async (trx) => {
-    await sql`
-      INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
-      SELECT mt.organization_id, mt.id, ${workerUserId}, true
-      FROM message_threads mt
-      WHERE mt.organization_id = ${organizationId}
-        AND mt.thread_type = 'family_agency'
-        AND mt.care_recipient_id IS NOT NULL
-        AND (
-          mt.care_recipient_id = ${careRecipientId}
-          OR (${roomId} IS NOT NULL AND app_recipient_room_id(mt.care_recipient_id) = ${roomId})
-        )
-      ON CONFLICT (message_thread_id, user_id) DO NOTHING
-    `.execute(trx);
+    // message_threads_read only shows threads the user already participates
+    // in, so the accepting worker cannot SELECT the thread it must join. The
+    // thread is resolved with app_find_family_thread_id() (SECURITY DEFINER,
+    // migration 035), and the INSERT is still checked by
+    // message_thread_participants_write: the worker may add only itself, and
+    // only for a recipient it is authorized for.
+    const recipientIds = careRecipientId
+      ? [careRecipientId]
+      : roomId
+        ? (await sql<{ id: string }>`
+            SELECT id FROM care_recipients
+            WHERE organization_id = ${organizationId} AND room_id = ${roomId}::uuid
+          `.execute(trx)).rows.map((row) => row.id)
+        : [];
+
+    for (const recipientId of recipientIds) {
+      await sql`
+        INSERT INTO message_thread_participants (organization_id, message_thread_id, user_id, can_write)
+        SELECT ${organizationId}, thread.id, ${workerUserId}, true
+        FROM (SELECT app_find_family_thread_id(${organizationId}, ${recipientId}::uuid) AS id) AS thread
+        WHERE thread.id IS NOT NULL
+        ON CONFLICT (message_thread_id, user_id) DO NOTHING
+      `.execute(trx);
+    }
   });
 }
 
@@ -353,8 +364,14 @@ export async function respondToMyAssignment(
         saved.roomId
       );
     } catch (error) {
-      const details = error instanceof Error ? `${error.name}: ${error.message}` : "Unknown error";
-      console.error(`Assignment accepted but messaging synchronization failed: ${details}`);
+      const name = error instanceof Error ? error.name : "UnknownError";
+      const databaseCode = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : undefined;
+      console.error("Assignment accepted but messaging synchronization failed", {
+        name,
+        ...(databaseCode ? { databaseCode } : {}),
+      });
     }
   }
 
