@@ -65,6 +65,13 @@ export class NoActiveCheckInError extends Error {
     this.name = "NoActiveCheckInError";
   }
 }
+export class OccurredAtOutOfRangeError extends Error {
+  constructor() {
+    super("OCCURRED_AT_OUT_OF_RANGE");
+    this.name = "OccurredAtOutOfRangeError";
+  }
+}
+
 export class NotOrgManagerError extends Error {
   constructor() {
     super("SUPERVISOR_OVERRIDE_REQUIRES_ORG_MANAGER");
@@ -79,11 +86,19 @@ function assertUuid(value: string, label: string): void {
   }
 }
 
+// Phase 12.4: a check-in/out recorded on the device without signal carries
+// its own id (so a retry never duplicates it) and the real time it happened.
+const offlineFields = {
+  clientEventId: z.string().uuid().optional(),
+  occurredAt: z.string().datetime({ offset: true }).optional(),
+};
+
 export const checkInSchema = z.object({
   verificationMethodCode: z.string().min(1),
   actorContext: z.string().optional(),
   locationLat: z.number().optional(),
   locationLng: z.number().optional(),
+  ...offlineFields,
 });
 export type CheckInInput = z.infer<typeof checkInSchema>;
 
@@ -91,7 +106,41 @@ export const checkOutSchema = z.object({
   actorContext: z.string().optional(),
   locationLat: z.number().optional(),
   locationLng: z.number().optional(),
+  ...offlineFields,
 });
+
+/** Tolerated device clock drift ahead of the server. */
+const MAX_CLOCK_SKEW_MS = 2 * 60 * 1000;
+/** Records older than this are not accepted (the device deletes them too). */
+const MAX_OFFLINE_AGE_MS = 7 * 24 * 3600 * 1000;
+/** Arriving later than this after it happened counts as "sin conexión". */
+const OFFLINE_THRESHOLD_MS = 2 * 60 * 1000;
+
+/** Validated time for a device-supplied record, or null to use now(). */
+function resolveOccurredAt(occurredAt: string | undefined, notBefore?: string): { at: string | null; offline: boolean } {
+  if (!occurredAt) return { at: null, offline: false };
+  const occurred = new Date(occurredAt).getTime();
+  const now = Date.now();
+  if (Number.isNaN(occurred)) throw new OccurredAtOutOfRangeError();
+  if (occurred > now + MAX_CLOCK_SKEW_MS) throw new OccurredAtOutOfRangeError();
+  if (occurred < now - MAX_OFFLINE_AGE_MS) throw new OccurredAtOutOfRangeError();
+  if (notBefore && occurred <= new Date(notBefore).getTime()) throw new OccurredAtOutOfRangeError();
+  return { at: new Date(Math.min(occurred, now)).toISOString(), offline: now - occurred > OFFLINE_THRESHOLD_MS };
+}
+
+/**
+ * The caller's own record by its device id. Definer helper (087): a retry may
+ * arrive after the visit closed, when the caregiver can no longer read it.
+ * Matching on organization + membership keeps ids from colliding or leaking.
+ */
+async function findByClientEventId(trx: unknown, organizationId: string, membershipId: string, clientEventId: string, eventType: string) {
+  const result = await sql<VerificationEventRow>`
+    SELECT f.id, ${organizationId}::uuid AS organization_id, f.shift_id, ${membershipId}::uuid AS organization_worker_membership_id,
+           f.event_type, f.occurred_at, f.recorded_offline, f.client_event_id
+    FROM app_find_own_verification_event(${clientEventId}::uuid, ${eventType}) f
+  `.execute(trx as never);
+  return result.rows[0] ?? null;
+}
 export type CheckOutInput = z.infer<typeof checkOutSchema>;
 
 interface VerificationEventRow {
@@ -106,6 +155,10 @@ interface VerificationEventRow {
   actor_context: string | null;
   location_lat: string | null;
   location_lng: string | null;
+  client_event_id: string | null;
+  recorded_offline: boolean;
+  /** Not a column: true when a retry returned the record already stored. */
+  replayed?: boolean;
 }
 
 async function resolveWorkerForUser(trx: unknown, userId: string): Promise<string> {
@@ -233,6 +286,12 @@ export async function checkIn(
     if (!membership) throw new NoAssignmentError();
     if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
+    if (input.clientEventId) {
+      const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_in");
+      if (existing) return { ...existing, replayed: true };
+    }
+    const when = resolveOccurredAt(input.occurredAt);
+
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
@@ -263,13 +322,24 @@ export async function checkIn(
     const result = await sql<VerificationEventRow>`
       INSERT INTO verification_events (
         organization_id, shift_id, organization_worker_membership_id, verification_method_id,
-        event_type, actor_user_id, actor_context, location_lat, location_lng
+        event_type, actor_user_id, actor_context, location_lat, location_lng,
+        client_event_id, recorded_offline, occurred_at
       ) VALUES (
         ${organizationId}, ${shiftId}, ${membership.id}, ${methodId},
-        'check_in', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null}
+        'check_in', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null},
+        ${input.clientEventId ?? null}, ${when.offline}, COALESCE(${when.at}::timestamptz, now())
       )
+      ON CONFLICT (organization_id, organization_worker_membership_id, client_event_id)
+        WHERE client_event_id IS NOT NULL
+        DO NOTHING
       RETURNING *
     `.execute(trx);
+    if (!result.rows[0] && input.clientEventId) {
+      // A concurrent retry stored the same record between our lookup and insert.
+      const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_in");
+      if (existing) return { ...existing, replayed: true };
+      throw new AlreadyCheckedInError();
+    }
 
     await sql`UPDATE shifts SET status = 'in_progress', updated_at = now() WHERE id = ${shiftId} AND status != 'cancelled'`.execute(
       trx
@@ -311,6 +381,11 @@ export async function checkOut(
     const membership = await resolveMembership(trx, workerId, organizationId);
     if (!membership) throw new NoAssignmentError();
 
+    if (input.clientEventId) {
+      const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_out");
+      if (existing) return { ...existing, replayed: true };
+    }
+
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
@@ -318,19 +393,31 @@ export async function checkOut(
 
     const active = await findActiveCheckIn(trx, shiftId, membership.id);
     if (!active) throw new NoActiveCheckInError();
+    const when = resolveOccurredAt(input.occurredAt, active.occurred_at);
 
     const methodId = active.verification_method_id;
 
     const result = await sql<VerificationEventRow>`
       INSERT INTO verification_events (
         organization_id, shift_id, organization_worker_membership_id, verification_method_id,
-        event_type, actor_user_id, actor_context, location_lat, location_lng
+        event_type, actor_user_id, actor_context, location_lat, location_lng,
+        client_event_id, recorded_offline, occurred_at
       ) VALUES (
         ${organizationId}, ${shiftId}, ${membership.id}, ${methodId},
-        'check_out', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null}
+        'check_out', ${userId}, ${input.actorContext ?? null}, ${input.locationLat ?? null}, ${input.locationLng ?? null},
+        ${input.clientEventId ?? null}, ${when.offline}, COALESCE(${when.at}::timestamptz, now())
       )
+      ON CONFLICT (organization_id, organization_worker_membership_id, client_event_id)
+        WHERE client_event_id IS NOT NULL
+        DO NOTHING
       RETURNING *
     `.execute(trx);
+    if (!result.rows[0] && input.clientEventId) {
+      // A concurrent retry stored the same record between our lookup and insert.
+      const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_out");
+      if (existing) return { ...existing, replayed: true };
+      throw new AlreadyCheckedInError();
+    }
 
     await recordTimesheetFromCheckout(trx, {
       actorUserId: userId,
@@ -364,6 +451,7 @@ export interface VerificationSummary {
     occurredAt: string;
     methodCode: string;
     membershipId: string;
+    recordedOffline: boolean;
   }>;
   status: "not_started" | "in_progress" | "completed";
 }
@@ -386,8 +474,9 @@ export async function getVerification(
       occurred_at: string;
       organization_worker_membership_id: string;
       method_code: string;
+      recorded_offline: boolean;
     }>`
-      SELECT ve.id, ve.event_type, ve.occurred_at, ve.organization_worker_membership_id, vm.code as method_code
+      SELECT ve.id, ve.event_type, ve.occurred_at, ve.organization_worker_membership_id, vm.code as method_code, ve.recorded_offline
       FROM verification_events ve
       JOIN verification_methods vm ON vm.id = ve.verification_method_id
       WHERE ve.shift_id = ${shiftId}
@@ -400,6 +489,7 @@ export async function getVerification(
       occurredAt: r.occurred_at,
       methodCode: r.method_code,
       membershipId: r.organization_worker_membership_id,
+      recordedOffline: r.recorded_offline,
     }));
 
     let status: VerificationSummary["status"] = "not_started";

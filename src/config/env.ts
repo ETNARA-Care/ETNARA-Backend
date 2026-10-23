@@ -23,6 +23,13 @@ const envSchema = z.object({
     .default("12")
     .transform((val) => Number.parseInt(val, 10))
     .pipe(z.number().int().positive()),
+  // Phase 12.4: caregiver-only accounts keep the session on the device for
+  // up to 7 days so the app works where there is no signal.
+  WORKER_SESSION_DURATION_HOURS: z
+    .string()
+    .default("168")
+    .transform((val) => Number.parseInt(val, 10))
+    .pipe(z.number().int().positive().max(168)),
   ALLOWED_ORIGIN: z.string().default("https://rafaelvegafigueroa-eng.github.io"),
   STORAGE_ENDPOINT: z.string().url().optional(),
   STORAGE_REGION: z.string().min(1).optional(),

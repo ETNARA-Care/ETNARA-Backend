@@ -17,6 +17,7 @@ import {
   WorkerNotEligibleError,
   InvalidVerificationMethodError,
   AlreadyCheckedInError,
+  OccurredAtOutOfRangeError,
   NoActiveCheckInError,
   NotOrgManagerError,
 } from "./verification.service.js";
@@ -69,6 +70,10 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(400).json({ error: "INVALID_VERIFICATION_METHOD" });
     return true;
   }
+  if (err instanceof OccurredAtOutOfRangeError) {
+    res.status(400).json({ error: "OCCURRED_AT_OUT_OF_RANGE" });
+    return true;
+  }
   if (err instanceof AlreadyCheckedInError) {
     res.status(409).json({ error: "ALREADY_CHECKED_IN" });
     return true;
@@ -99,8 +104,8 @@ router.post(
       return;
     }
     try {
-      const event = await checkIn(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
-      res.status(201).json({ event });
+      const { replayed, ...event } = await checkIn(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
+      res.status(replayed ? 200 : 201).json({ event, replayed: replayed === true });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
@@ -122,8 +127,8 @@ router.post(
       return;
     }
     try {
-      const event = await checkOut(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
-      res.status(201).json({ event });
+      const { replayed, ...event } = await checkOut(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
+      res.status(replayed ? 200 : 201).json({ event, replayed: replayed === true });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

@@ -27,7 +27,7 @@ router.post("/auth/login", async (req: Request, res: Response) => {
     recordAttempt(req, identifier, false);
     // Never echo back password_hash, token_hash, or any other internal
     // field -- only the one-time raw token and its expiration.
-    res.status(200).json({ token: result.token, expiresAt: result.expiresAt.toISOString() });
+    res.status(200).json({ token: result.token, expiresAt: result.expiresAt.toISOString(), keepSignedIn: result.keepSignedIn });
   } catch (err) {
     if (err instanceof InvalidCredentialsError) {
       recordAttempt(req, identifier);
