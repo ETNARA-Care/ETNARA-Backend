@@ -32,6 +32,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -81,6 +82,15 @@ export async function assertSafePair(sourceUrl: string, targetUrl: string, env: 
   if (env.REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION === "true" && deny.includes(s.host)) {
     throw new RehearsalGuardError(`source host ${s.host} is production; in this mode the source must be the restored copy`);
   }
+  // ...and must not be an alias of production: no shared address over DNS.
+  if (env.REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION === "true") {
+    const addrs = async (h: string) => { try { return (await lookup(h, { all: true })).map((a) => a.address); } catch { return []; } };
+    const srcAddrs = await addrs(s.host);
+    for (const prod of deny) {
+      const shared = (await addrs(prod)).filter((a) => srcAddrs.includes(a));
+      if (shared.length) throw new RehearsalGuardError(`source host ${s.host} resolves to the production address of ${prod}`);
+    }
+  }
   if (s.host === t.host && s.db === t.db) throw new RehearsalGuardError("target is the source database");
   const src = await connect(sourceUrl, true);
   const tgt = await connect(targetUrl, false);
@@ -95,12 +105,17 @@ export async function assertSafePair(sourceUrl: string, targetUrl: string, env: 
     if (tables > ((await hasMarker(tgt)) ? 1 : 0)) {
       throw new RehearsalGuardError("target is not empty: use a new, empty database for every rehearsal");
     }
+    // A PITR-restored, promoted copy runs on a new timeline (> 1); reported for the record.
+    const timeline = async (c: Client) => {
+      try { return Number((await c.query<{ t: string }>("SELECT timeline_id::text AS t FROM pg_control_checkpoint()")).rows[0].t); } catch { return null; }
+    };
+    const sourceTimeline = await timeline(src);
     const ver = async (c: Client) => {
       const v = Number((await c.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0].v);
       if (!Number.isFinite(v) || v < 100000) throw new RehearsalGuardError("could not read the server version");
       return v;
     };
-    return { sourceVersion: await ver(src), targetVersion: await ver(tgt) };
+    return { sourceVersion: await ver(src), targetVersion: await ver(tgt), sourceTimeline };
   } finally { await src.end(); await tgt.end(); }
 }
 
