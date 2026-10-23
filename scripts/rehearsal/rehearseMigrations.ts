@@ -21,9 +21,18 @@
  *
  * Local test only: REHEARSAL_ALLOW_SAME_CLUSTER=local-test lets source and
  * target live in one local cluster (127.0.0.1/localhost only).
+ *
+ * Verified backup (REHEARSAL_MODE=backup: no migrations are applied):
+ *   - the dump and the source row counts come from ONE exported snapshot, so
+ *     the restored copy must match the source table by table, exactly;
+ *   - with BACKUP_PASSPHRASE the dump is kept, encrypted (gpg AES-256), with
+ *     its SHA-256; with BACKUP_S3_BUCKET (+ AWS_ENDPOINT_URL, AWS_ACCESS_KEY_ID,
+ *     AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION) it is uploaded to a private
+ *     bucket, downloaded again and its checksum compared.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,7 +90,11 @@ export async function assertSafePair(sourceUrl: string, targetUrl: string, env: 
     if (tables > ((await hasMarker(tgt)) ? 1 : 0)) {
       throw new RehearsalGuardError("target is not empty: use a new, empty database for every rehearsal");
     }
-    const ver = async (c: Client) => Number((await c.query<{ v: string }>("SHOW server_version_num")).rows[0].v);
+    const ver = async (c: Client) => {
+      const v = Number((await c.query<{ v: string }>("SELECT current_setting('server_version_num') AS v")).rows[0].v);
+      if (!Number.isFinite(v) || v < 100000) throw new RehearsalGuardError("could not read the server version");
+      return v;
+    };
     return { sourceVersion: await ver(src), targetVersion: await ver(tgt) };
   } finally { await src.end(); await tgt.end(); }
 }
@@ -91,8 +104,9 @@ async function snapshot(c: Client) {
     `SELECT format('%I.%I', schemaname, tablename) t FROM pg_tables WHERE schemaname = 'public' AND tablename <> '${MARKER}' ORDER BY 1`)).rows.map((r) => r.t);
   const counts: Record<string, number> = {};
   for (const t of tables) counts[t] = Number((await c.query<{ n: string }>(`SELECT count(*) n FROM ${t}`)).rows[0].n);
-  const migrations = (await c.query<{ filename: string; applied_at: string }>(
-    `SELECT filename, applied_at FROM schema_migrations ORDER BY filename`).catch(() => ({ rows: [] }))).rows;
+  const hasHistory = (await c.query<{ ok: boolean }>(`SELECT to_regclass('public.schema_migrations') IS NOT NULL AS ok`)).rows[0].ok;
+  const migrations = hasHistory ? (await c.query<{ filename: string; applied_at: string }>(
+    `SELECT filename, applied_at FROM schema_migrations ORDER BY filename`)).rows : [];
   const policies = Number((await c.query<{ n: string }>(`SELECT count(*) n FROM pg_policies WHERE schemaname='public'`)).rows[0].n);
   const noRls = (await c.query<{ t: string }>(
     `SELECT relname t FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -100,8 +114,8 @@ async function snapshot(c: Client) {
   return { counts, migrations, policies, tablesWithoutRls: noRls };
 }
 
-function run(cmd: string, args: string[], env: NodeJS.ProcessEnv) {
-  const r = spawnSync(cmd, args, { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, input?: string) {
+  const r = spawnSync(cmd, args, { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, input });
   if (r.status !== 0) throw new Error(`${cmd} failed (exit ${r.status}): ${(r.stderr || "").split("\n").filter((l) => !/password/i.test(l)).slice(0, 5).join(" | ")}`);
   return r.stdout;
 }
@@ -111,35 +125,95 @@ async function main() {
   if (!sourceUrl || !targetUrl) throw new RehearsalGuardError("REHEARSAL_SOURCE_URL and REHEARSAL_TARGET_URL are required");
   const versions = await assertSafePair(sourceUrl, targetUrl);
   const dumpMajor = Number((run("pg_dump", ["--version"], process.env).match(/(\d+)\.\d+/) ?? [])[1]);
-  if (dumpMajor < Math.floor(versions.sourceVersion / 10000)) {
+  if (!Number.isFinite(dumpMajor) || dumpMajor < Math.floor(versions.sourceVersion / 10000)) {
     throw new RehearsalGuardError(`pg_dump ${dumpMajor} is older than the source server (${versions.sourceVersion}); use the same or newer major`);
   }
   if (Math.floor(versions.targetVersion / 10000) !== Math.floor(versions.sourceVersion / 10000)) {
     console.warn(`WARNING: target major ${versions.targetVersion} differs from source ${versions.sourceVersion}; use the production major for a faithful rehearsal.`);
   }
-  const report: Record<string, unknown> = { startedAt: new Date().toISOString(), versions };
+  const mode = process.env.REHEARSAL_MODE === "backup" ? "backup" : "rehearse";
+  const report: Record<string, unknown> = { mode, startedAt: new Date().toISOString(), versions };
   const work = mkdtempSync(join(tmpdir(), "etnara-rehearsal-"));
   const dumpFile = join(work, "source.dump");
   try {
-    // 1. Read-only dump of the source.
+    // 1. Read-only, consistent dump: one exported snapshot for the dump AND the source counts.
     const t0 = Date.now();
-    run("pg_dump", ["--format=custom", "--no-owner", `--file=${dumpFile}`, `--dbname=${sourceUrl}`],
+    const src = await connect(sourceUrl, true);
+    await src.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const snap = (await src.query<{ s: string }>("SELECT pg_export_snapshot() AS s")).rows[0].s;
+    const sourceSnapshot = await snapshot(src);
+    const roles = (await src.query<{ r: string }>(
+      `SELECT DISTINCT grantee r FROM information_schema.role_table_grants WHERE grantee NOT IN ('PUBLIC') AND grantee NOT LIKE 'pg\\_%'
+       UNION SELECT DISTINCT unnest(roles)::text FROM pg_policies WHERE schemaname='public'`)).rows.map((r) => r.r).filter((r) => r !== "public");
+    run("pg_dump", ["--format=custom", "--no-owner", `--snapshot=${snap}`, `--file=${dumpFile}`, `--dbname=${sourceUrl}`],
       { ...process.env, PGOPTIONS: "-c default_transaction_read_only=on" });
+    await src.query("COMMIT");
+    await src.end();
     report.dumpSeconds = (Date.now() - t0) / 1000;
+    report.dumpBytes = statSync(dumpFile).size;
+    report.sourceMigration = sourceSnapshot.migrations.at(-1)?.filename ?? null;
+
+    // 1b. Optional retained backup: encrypted, checksummed, uploaded and read back.
+    const passphrase = process.env.BACKUP_PASSPHRASE;
+    if (passphrase) {
+      const enc = join(work, "source.dump.gpg");
+      run("gpg", ["--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "--symmetric", "--cipher-algo", "AES256",
+        "--output", enc, dumpFile], process.env, passphrase);
+      const sha = createHash("sha256").update(readFileSync(enc)).digest("hex");
+      const backup: Record<string, unknown> = { encrypted: "gpg AES256", sha256: sha, bytes: statSync(enc).size };
+      const bucket = process.env.BACKUP_S3_BUCKET;
+      if (bucket) {
+        const key = `etnara-backup-${new Date().toISOString().replace(/[:.]/g, "-")}-${backup.sha256 as string}`.slice(0, 120) + ".dump.gpg";
+        const endpoint = process.env.AWS_ENDPOINT_URL ? ["--endpoint-url", process.env.AWS_ENDPOINT_URL] : [];
+        run("aws", [...endpoint, "s3", "cp", enc, `s3://${bucket}/${key}`, "--only-show-errors"], process.env);
+        const back = join(work, "readback.gpg");
+        run("aws", [...endpoint, "s3", "cp", `s3://${bucket}/${key}`, back, "--only-show-errors"], process.env);
+        const sha2 = createHash("sha256").update(readFileSync(back)).digest("hex");
+        backup.object = `s3://${bucket}/${key}`;
+        backup.readBackChecksumMatches = sha2 === sha;
+      }
+      // Decrypting must give back the exact dump (the passphrase works).
+      const dec = join(work, "decrypted.dump");
+      run("gpg", ["--batch", "--yes", "--pinentry-mode", "loopback", "--passphrase-fd", "0", "--output", dec, "--decrypt", enc], process.env, passphrase);
+      backup.decryptMatches = createHash("sha256").update(readFileSync(dec)).digest("hex") === createHash("sha256").update(readFileSync(dumpFile)).digest("hex");
+      report.backup = backup;
+    }
 
     // 2. Target: marker first (protects every later run), roles the dump references, restore.
     const tgt = await connect(targetUrl, false);
     await tgt.query(`CREATE TABLE IF NOT EXISTS public.${MARKER} (created_at timestamptz NOT NULL DEFAULT now(), note text)`);
     await tgt.query(`INSERT INTO public.${MARKER} (note) VALUES ('ETNARA migration rehearsal copy -- disposable, delete after use')`);
-    await tgt.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='app_runtime') THEN CREATE ROLE app_runtime NOLOGIN NOBYPASSRLS; END IF; END $$`);
+    for (const role of roles) {
+      await tgt.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN
+        EXECUTE format('CREATE ROLE %I NOLOGIN NOBYPASSRLS', '${role.replace(/'/g, "''")}'); END IF; END $$`);
+    }
     await tgt.end();
     const t1 = Date.now();
     run("pg_restore", ["--no-owner", "--exit-on-error", `--dbname=${targetUrl}`, dumpFile], process.env);
     report.restoreSeconds = (Date.now() - t1) / 1000;
 
-    // 3. Before / migrate / after.
+    // 3. The restored copy must equal the source snapshot, table by table.
     const c = await connect(targetUrl, false);
     const before = await snapshot(c);
+    const mismatches = [...new Set([...Object.keys(sourceSnapshot.counts), ...Object.keys(before.counts)])]
+      .filter((t) => sourceSnapshot.counts[t] !== before.counts[t]);
+    report.restoreVerification = {
+      tables: Object.keys(sourceSnapshot.counts).length,
+      rows: Object.values(sourceSnapshot.counts).reduce((a, b) => a + b, 0),
+      policies: { source: sourceSnapshot.policies, copy: before.policies },
+      mismatchedTables: mismatches,
+      verified: mismatches.length === 0 && sourceSnapshot.policies === before.policies
+        && sourceSnapshot.migrations.length === before.migrations.length,
+    };
+    if (mode === "backup") {
+      await c.end();
+      const b = report.backup as Record<string, unknown> | undefined;
+      report.verdict = (report.restoreVerification as { verified: boolean }).verified
+        && (!b || (b.decryptMatches === true && b.readBackChecksumMatches !== false)) ? "PASS" : "REVIEW";
+      return finish(report);
+    }
+
+    // 4. Migrate on the copy.
     const pending = listMigrationFiles(MIGRATIONS_DIR).filter((f) => !before.migrations.some((m) => m.filename === f));
     report.pendingMigrations = pending;
     const t2 = Date.now();
@@ -172,15 +246,22 @@ async function main() {
     }
     report.notValidConstraints = validation;
     await c.end();
-    report.verdict = !migrationError && lost.length === 0 && validation.every((v) => v.ok) && pending.length === applied.length ? "PASS" : "REVIEW";
+    report.verdict = (report.restoreVerification as { verified: boolean }).verified
+      && !migrationError && lost.length === 0 && validation.every((v) => v.ok) && pending.length === applied.length ? "PASS" : "REVIEW";
+    return finish(report);
   } finally {
-    rmSync(work, { recursive: true, force: true }); // the dump never outlives the run
+    rmSync(work, { recursive: true, force: true }); // local files never outlive the run
   }
+}
+
+function finish(report: Record<string, unknown>) {
   report.finishedAt = new Date().toISOString();
   const out = process.env.REHEARSAL_REPORT ?? "rehearsal-report.json";
   writeFileSync(out, JSON.stringify(report, null, 2));
-  console.log(`Rehearsal ${report.verdict}: ${(report.applied as unknown[]).length} migrations applied in ${report.migrateSeconds}s; report: ${out}`);
-  if (report.verdict !== "PASS") process.exit(2);
+  // Counts, names and timings only -- safe for logs.
+  console.log(`REHEARSAL_REPORT ${JSON.stringify(report)}`);
+  console.log(`Rehearsal (${report.mode}) ${report.verdict}${report.applied ? `: ${(report.applied as unknown[]).length} migrations applied in ${report.migrateSeconds}s` : ""}; report: ${out}`);
+  if (report.verdict !== "PASS") process.exitCode = 2;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
