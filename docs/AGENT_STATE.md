@@ -2,6 +2,31 @@
 
 ## Current Status
 
+## 2026-10-22 — Phase 12.4a close open tenant policies (gate/12.4a-close-open-tenant-policies)
+
+- Migration 086: the PERMISSIVE FOR ALL "<table>_tenant_isolation" policy on 12
+  tables (assignments, assignment_history, consent_records, family_invitations,
+  organization_memberships, organization_worker_memberships, professional_scope,
+  user_roles, verification_events, verification_overrides, worker_eligibility,
+  worker_roles) let any active member (family, caregiver) read AND write every
+  row of the organization. Each is now RESTRICTIVE (same org + active
+  membership, or platform; self lookup and legacy token lookup kept).
+- Reads: structural tables keep a member_read inside the agency (messaging,
+  notifications and /me depend on it). verification_events and assignments
+  writes go only through the existing manager / own-worker / family policies;
+  check-ins are no longer readable by other caregivers.
+- Writes: managers (definer helper), establishment admins for caregiver
+  memberships and eligibility, the caregiver for its own eligibility. 085
+  authority still limits memberships/roles.
+- New definer helpers: app_is_any_establishment_admin(),
+  app_is_own_worker_membership(id), app_shift_has_open_check_in(shift) — used by
+  check-out so a co-worker still on the shift keeps it in progress.
+- scripts/verifyTenantPolicyClosure.ts (22 checks, in CI): failed 13/22 before
+  086, 22/22 after. Full regression on a fresh DB: all verify scripts PASS;
+  332 unit tests; HTTP smoke identical to baseline.
+- Follow-ups: tighten reads on structural tables per role; legacy
+  POST /family-invitations/accept is unused and already blocked by 085.
+
 ## 2026-10-22 — Phase 12.3 staff roles + existing accounts (gate/12.3-staff-roles-existing-accounts)
 
 - POST /organizations/:id/team/roles {membershipId | workerMembershipId, role,

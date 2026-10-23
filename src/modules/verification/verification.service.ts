@@ -341,19 +341,11 @@ export async function checkOut(
       checkOutAt: result.rows[0].occurred_at,
     });
 
-    const stillActive = await sql<{ id: string }>`
-      SELECT ve1.id FROM verification_events ve1
-      WHERE ve1.shift_id = ${shiftId} AND ve1.event_type = 'check_in'
-        AND NOT EXISTS (
-          SELECT 1 FROM verification_events ve2
-          WHERE ve2.shift_id = ve1.shift_id
-            AND ve2.organization_worker_membership_id = ve1.organization_worker_membership_id
-            AND ve2.event_type = 'check_out'
-            AND ve2.occurred_at > ve1.occurred_at
-        )
-      LIMIT 1
+    // Definer helper (086): this caregiver cannot read co-workers' check-ins.
+    const stillActive = await sql<{ open: boolean }>`
+      SELECT app_shift_has_open_check_in(${shiftId}) AS open
     `.execute(trx);
-    if (!stillActive.rows[0]) {
+    if (!stillActive.rows[0]?.open) {
       await sql`UPDATE shifts SET status = 'completed', updated_at = now() WHERE id = ${shiftId} AND status = 'in_progress'`.execute(
         trx
       );
