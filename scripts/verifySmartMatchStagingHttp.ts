@@ -235,8 +235,10 @@ async function main() {
   check("G15 «Hoy en ruta» for agency managers only", ops.status === 200 && Array.isArray(ops.body.journeys) && opsCg.status === 403, `${ops.status},${opsCg.status}`);
   await call("DELETE", `/organizations/${c1.orgId}/me/location-consent`, c1.token);
   const arrival = await call("POST", `/organizations/${c1.orgId}/shifts/${shiftId}/arrival`, c1.token, {});
-  check("G5 arrival without location consent is recorded and flagged for review (not blocked)",
-    arrival.status === 201 && arrival.body.arrival?.proximity === "NO_CONSENT" && arrival.body.arrival?.needsReview === true, `status=${arrival.status}`);
+  // The SmartMatch shift is days away: «Llegué» is refused outside its window (audit M6, migration 107).
+  // The consented / not-consented arrival paths are covered by verifyGate6ServiceLocations in CI.
+  check("G5 «Llegué» days before the visit is refused (window: 2 h before the start until its end)",
+    arrival.status === 409 && arrival.body.error === "ARRIVAL_OUTSIDE_WINDOW", `status=${arrival.status} ${arrival.body.error ?? ""}`);
   const famLoc = await call("GET", `/me/care-recipients/${synthetic?.id}/service-location`, fam.token);
   check("G6 relative without permission sees no address", famLoc.status === 200 && famLoc.body.canView === false && famLoc.body.location === null, `status=${famLoc.status}`);
   const famReq = await call("POST", `/me/care-recipients/${synthetic?.id}/location-change-requests`, fam.token, { message: "Prueba sintética de staging" });
