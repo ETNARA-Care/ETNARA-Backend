@@ -391,7 +391,10 @@ export async function listFamilyShifts(
       return t > Date.now() - 36 * 3600_000 && t < Date.now() + 48 * 3600_000;
     });
     const journeys = new Map<string, JourneyState>();
-    for (const [id, st] of await journeyStates(trx, nearby.map((r) => r.id))) journeys.set(id, toJourney(st, false));
+    const enCamino = await sql<{ on: boolean }>`SELECT app_org_feature_enabled(${organizationId}::uuid, 'EN_CAMINO') AS on`.execute(trx);
+    if (enCamino.rows[0]?.on) {
+      for (const [id, st] of await journeyStates(trx, nearby.map((r) => r.id))) journeys.set(id, toJourney(st, false));
+    }
     return result.rows.map((r) => ({
       id: r.id,
       careRecipientId,

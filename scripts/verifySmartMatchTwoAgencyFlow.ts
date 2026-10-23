@@ -75,7 +75,7 @@ async function main() {
   }
 
   async function agency(letter: string) {
-    const orgId = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [`SM Gate3 ${letter} ${tag}`])).rows[0].id;
+    const orgId = (await q<{ id: string }>(`WITH o AS (INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id), f AS (INSERT INTO organization_features (organization_id,feature_code,enabled) SELECT o.id, c, true FROM o, unnest(ARRAY['SMARTMATCH','EN_CAMINO']) c) SELECT id FROM o`, [`SM Gate3 ${letter} ${tag}`])).rows[0].id;
     const rs = (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id,name) VALUES ($1,$2) RETURNING id`, [orgId, `SM Gate3 ${letter} ${tag}`])).rows[0].id;
     await q(`INSERT INTO requirements (requirement_set_id,credential_type_id,is_mandatory,requires_organization_review) SELECT $1,id,true,false FROM credential_types WHERE code='BLS'`, [rs]);
     return {

@@ -79,6 +79,13 @@ async function main() {
         await q(`INSERT INTO requirements (requirement_set_id, credential_type_id, is_mandatory, requires_organization_review)
                  VALUES ($1, $2, true, false)`, [rs, bls]);
       }
+      // Pilot (migration 108): only Agency A gets SmartMatch and «En camino» by default.
+      // ON CONFLICT DO NOTHING keeps whatever ETNARA central switched later.
+      if (agency.key === "a") {
+        await q(`INSERT INTO organization_features (organization_id, feature_code, enabled)
+                 SELECT $1, c, true FROM unnest(ARRAY['SMARTMATCH','EN_CAMINO']) c
+                 ON CONFLICT (organization_id, feature_code) DO NOTHING`, [orgId]);
+      }
       // One synthetic person receiving care per agency, for "Crear turno" (Gate 5).
       const recipientLast = `Sintética ${agency.key.toUpperCase()} (staging)`;
       await q(`INSERT INTO care_recipients (organization_id, first_name, last_name)

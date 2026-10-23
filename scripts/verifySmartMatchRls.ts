@@ -88,6 +88,7 @@ async function expectAllowed(name: string, ctx: Ctx, sql: string, params: unknow
 async function seed() {
   const q = (s: string, p: unknown[] = []) => client.query(s, p);
   await q(`INSERT INTO organizations (id,name,organization_type,status) VALUES ($1,'SM Synthetic A','HOME_CARE_AGENCY','active'),($2,'SM Synthetic B','HOME_CARE_AGENCY','active')`, [ORG_A, ORG_B]);
+  await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) SELECT o, 'SMARTMATCH', true FROM unnest($1::uuid[]) o`, [[ORG_A, ORG_B]]);
   for (const [key, uid] of Object.entries(U)) {
     await q(`INSERT INTO users (id,email,status) VALUES ($1,$2,'active')`, [uid, `sm-${key}@example.invalid`]);
   }

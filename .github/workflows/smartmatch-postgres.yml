@@ -13,6 +13,9 @@ on:
       - 'scripts/verifyGate7Journey.ts'
       - 'scripts/verifySecurityAudit.ts'
       - 'scripts/verifyProductionHotfix.ts'
+      - 'scripts/verifyOrgFeatures.ts'
+      - 'src/middleware/**'
+      - 'src/modules/platformOrganizations/**'
       - 'src/modules/careRecipients/**'
       - 'src/modules/verification/**'
       - 'src/modules/scheduling/**'
@@ -80,3 +83,5 @@ jobs:
         run: npx tsx scripts/verifySecurityAudit.ts
       - name: Production security hotfix (088) over HTTP
         run: npx tsx scripts/verifyProductionHotfix.ts
+      - name: SmartMatch pilot switches over HTTP
+        run: npx tsx scripts/verifyOrgFeatures.ts

@@ -110,6 +110,19 @@ async function main() {
   check("C1 caregiver sees the published opportunity", disc.status === 200 && (disc.body.opportunities ?? []).some((o: Json) => o.id === oppId), `status=${disc.status}`);
   const discB = await call("GET", `/organizations/${bCg.orgId}/smartmatch/available-opportunities`, bCg.token);
   check("C2 agency B caregiver does not see it", !(discB.body.opportunities ?? []).some((o: Json) => o.id === oppId), `status=${discB.status}`);
+  // Pilot switches (migration 108): Agency A is the pilot, Agency B has nothing enabled.
+  const meA = await call("GET", "/me", a1.token);
+  const meB = await call("GET", "/me", bAdmin.token);
+  const featA = (meA.body.organizations ?? []).find((o: Json) => o.id === a1.orgId)?.features ?? [];
+  const featB = (meB.body.organizations ?? []).find((o: Json) => o.id === bAdmin.orgId)?.features ?? null;
+  check("F1 /me: pilot agency A has SMARTMATCH and EN_CAMINO; agency B has none",
+    featA.includes("SMARTMATCH") && featA.includes("EN_CAMINO") && Array.isArray(featB) && featB.length === 0, `${JSON.stringify(featA)} ${JSON.stringify(featB)}`);
+  const bOpps = await call("GET", `/organizations/${bAdmin.orgId}/smartmatch/opportunities`, bAdmin.token);
+  const bJourneys = await call("GET", `/organizations/${bAdmin.orgId}/operations/journeys`, bAdmin.token);
+  const bConsent = await call("GET", `/organizations/${bCg.orgId}/me/location-consent`, bCg.token);
+  check("F2 agency B gets 404 FEATURE_NOT_ENABLED on SmartMatch, «En camino» and «Llegué»",
+    discB.status === 404 && discB.body.error === "FEATURE_NOT_ENABLED" && bOpps.status === 404 && bJourneys.status === 404 && bConsent.status === 404,
+    `${discB.status},${bOpps.status},${bJourneys.status},${bConsent.status}`);
   const noConsent = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, {});
   check("C3 application without consent rejected", noConsent.status === 400, `status=${noConsent.status}`);
   const ap = await call("POST", `${S}/opportunities/${oppId}/applications`, c1.token, consent);
