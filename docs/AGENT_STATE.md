@@ -2,6 +2,23 @@
 
 ## Current Status
 
+## 2026-10-22 — SmartMatch Gate 1: real caregiver role, network lock, applications RLS (claude/smartmatch-gate1-rls)
+
+- Root cause of the RLS recursion seen in Gate 0: the SmartMatch branch predated main's
+  079/081 recursion fixes. Not schema drift: confirmed read-only via the live deploy log
+  (079/081 registered; no SmartMatch migrations applied there). Main merged into this branch.
+- Migration 095: caregiver access = WORKER role + active worker membership (094 required a
+  non-existent CAREGIVER role, so discovery always returned 0 rows); NETWORK blocked by a
+  CHECK constraint (applies to every writer); caregiver submit/read/withdraw policies with
+  required consent (consented_at + consent_version); organization_id denormalized onto
+  applications with a composite FK so policies are acyclic under FORCE RLS; agency
+  policies moved onto app_is_org_admin(). No approve/reject privilege for app_runtime.
+- scripts/verifySmartMatchRls.ts: 47 attacks as app_runtime on the real migration chain
+  (wired into etnara-ci.yml and smartmatch-postgres.yml, which no longer uses a fake schema).
+  Negative control without 095: 37/47 (detects role and NETWORK bugs).
+- Next step (Gate 2): transactional decision function + endpoints (apply, withdraw,
+  my-applications, eligibility, approve/reject → FILLED, no assignment).
+
 ## 2026-10-22 — Phase 12.3 staff roles + existing accounts (gate/12.3-staff-roles-existing-accounts)
 
 - POST /organizations/:id/team/roles {membershipId | workerMembershipId, role,

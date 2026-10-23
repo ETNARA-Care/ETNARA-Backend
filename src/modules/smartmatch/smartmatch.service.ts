@@ -159,16 +159,10 @@ export async function listAgencyPendingApplications(
  */
 export async function listCaregiverInternalOpportunities(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Caregivers hold the WORKER role and an active worker membership
+    // (there is no CAREGIVER role code). Same helper the RLS policy uses.
     const membership = await sql<{ allowed: boolean }>`
-      SELECT EXISTS (
-        SELECT 1 FROM organization_memberships om
-        JOIN user_roles ur ON ur.organization_membership_id = om.id
-        JOIN roles r ON r.id = ur.role_id
-        WHERE om.user_id = ${userId}
-          AND om.organization_id = ${organizationId}
-          AND om.status = 'active'
-          AND r.code = 'CAREGIVER'
-      ) AS allowed
+      SELECT app_smartmatch_is_active_worker() AS allowed
     `.execute(trx);
     if (!membership.rows[0]?.allowed) throw new SmartMatchForbiddenError();
     const result = await sql<{
