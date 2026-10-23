@@ -76,6 +76,11 @@ export async function assertSafePair(sourceUrl: string, targetUrl: string, env: 
   const s = parse(sourceUrl), t = parse(targetUrl);
   const deny = [...BUILTIN_PRODUCTION_HOSTS, ...(env.PRODUCTION_DB_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)];
   if (deny.includes(t.host)) throw new RehearsalGuardError(`target host ${t.host} is on the production deny-list`);
+  // PITR mode: the source must be the restored fork, never production itself
+  // (no SQL access to the live database at all).
+  if (env.REHEARSAL_SOURCE_MUST_NOT_BE_PRODUCTION === "true" && deny.includes(s.host)) {
+    throw new RehearsalGuardError(`source host ${s.host} is production; in this mode the source must be the restored copy`);
+  }
   if (s.host === t.host && s.db === t.db) throw new RehearsalGuardError("target is the source database");
   const src = await connect(sourceUrl, true);
   const tgt = await connect(targetUrl, false);
