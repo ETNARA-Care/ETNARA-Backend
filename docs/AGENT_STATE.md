@@ -2,6 +2,20 @@
 
 ## Current Status
 
+## 2026-10-22 — SmartMatch Gate 3: integration hardening, two-agency flow (claude/smartmatch-gate1-rls)
+
+- Catalog audit of every SmartMatch policy/grant/trigger found 4 gaps, each confirmed as
+  app_runtime: FILLED could be reopened; schedule/place/role editable after publishing;
+  opportunities insertable as PUBLISHED/FILLED; withdrawals could carry decision data.
+  Migration 097 closes them (status-machine trigger binding every writer, terms locked
+  after publish, INTERNAL DRAFT-only insert with server ids/timestamps, clean withdrawal).
+- Publishing: any administrator of the agency may publish its drafts (was creator-only).
+- scripts/verifySmartMatchTwoAgencyFlow.ts: 66 HTTP checks, two agencies in parallel,
+  cross-agency/family/supervisor/platform attacks, history privacy, zero assignments.
+  Negative controls: without 097 -> 69/77 RLS; old publish rule -> 58/64 flow.
+- Railway etnara-smartmatch-staging: DATABASE_URL references its own Postgres (isolated)
+  but as the superuser, i.e. RLS would be bypassed; NODE_ENV invalid. See Gate 3 report.
+
 ## 2026-10-22 — SmartMatch Gate 2: agency decisions, re-apply, history (claude/smartmatch-gate1-rls)
 
 - Migration 096: re-apply after withdrawal (partial unique index: one non-withdrawn

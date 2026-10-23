@@ -246,6 +246,43 @@ async function main() {
     await expectCount("M1 applicant still sees FILLED opportunity they applied to", wA, `${opps} WHERE id=$1`, [OPP.aPub], 1);
     await expectCount("M2 non-applicant does not see FILLED opportunity", { user: U.workerA2, org: ORG_A }, `${opps} WHERE id=$1`, [OPP.aPub], 0);
 
+    // Opportunity integrity (097)
+    const insOpp = (status: string, extraCols = "", extraVals = "") =>
+      `INSERT INTO smartmatch_opportunities (organization_id,created_by_user_id,visibility,status,region_label,role_label,starts_at,ends_at${extraCols}) VALUES ($1,$2,'INTERNAL','${status}','Caguas','Cuidador',now()+interval '1 day',now()+interval '1 day 4 hours'${extraVals})`;
+    await expectAllowed("G1 admin creates a DRAFT", adminA, insOpp("DRAFT"), [ORG_A, U.adminA]);
+    await expectDenied("G2 admin cannot create an opportunity already PUBLISHED", adminA, insOpp("PUBLISHED"), [ORG_A, U.adminA]);
+    await expectDenied("G3 admin cannot create an opportunity already FILLED", adminA, insOpp("FILLED"), [ORG_A, U.adminA]);
+    await expectDenied("G4 client cannot choose id or created_at", adminA, insOpp("DRAFT", ",created_at", ",now()-interval '9 days'"), [ORG_A, U.adminA]);
+    await expectAllowed("G5 any agency admin publishes a draft (not only its creator)", { user: U.adminA2, org: ORG_A },
+      `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1 AND status='DRAFT'`, [OPP.aDraft]);
+    await expectDenied("G6 admin of agency B cannot publish agency A draft", { user: U.adminB, org: ORG_B },
+      `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.aDraft]);
+    await expectDenied("G7 caregiver cannot publish a draft", wA,
+      `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.aDraft]);
+    await expectAllowed("G8 PUBLISHED -> CANCELLED allowed", adminA,
+      `UPDATE smartmatch_opportunities SET status='CANCELLED' WHERE id=$1 AND status='PUBLISHED'`, [OPP.aPast]);
+    await expectDenied("G9 schedule cannot change after publishing", adminA,
+      `UPDATE smartmatch_opportunities SET starts_at=starts_at+interval '1 day', ends_at=ends_at+interval '1 day' WHERE id=$1`, [OPP.aPub]);
+    await expectDenied("G10 municipality/role cannot change after publishing", adminA,
+      `UPDATE smartmatch_opportunities SET region_label='Ponce' WHERE id=$1`, [OPP.aPub]);
+    await expectAllowed("G11 draft terms remain editable", adminA,
+      `UPDATE smartmatch_opportunities SET region_label='Ponce' WHERE id=$1`, [OPP.aDraft]);
+    await client.query("SAVEPOINT g12");
+    await client.query(`UPDATE smartmatch_opportunities SET status='FILLED' WHERE id=$1`, [OPP.bPub]);
+    await client.query("RELEASE SAVEPOINT g12");
+    await expectDenied("G12 FILLED cannot be reopened (admin)", { user: U.adminB, org: ORG_B },
+      `UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.bPub]);
+    try {
+      await client.query("SAVEPOINT g13");
+      await client.query(`UPDATE smartmatch_opportunities SET status='PUBLISHED' WHERE id=$1`, [OPP.bPub]);
+      record("G13 FILLED cannot be reopened even by privileged SQL", false, "NOT DENIED");
+    } catch (e) {
+      record("G13 FILLED cannot be reopened even by privileged SQL", (e as Error).message.includes("INVALID_STATUS_TRANSITION"), (e as Error).message);
+    } finally { await client.query("ROLLBACK TO SAVEPOINT g13"); }
+    const pendingApp = (await client.query(`INSERT INTO smartmatch_applications (opportunity_id,organization_id,caregiver_user_id,consented_at,consent_version) VALUES ($1,$2,$3,now(),$4) RETURNING id`, [OPP.aPub, ORG_A, U.workerA2, CONSENT])).rows[0].id as string;
+    await expectDenied("G14 withdrawal cannot carry decision data", { user: U.workerA2, org: ORG_A },
+      `UPDATE smartmatch_applications SET status='WITHDRAWN', withdrawn_at=now(), decision_checks='{"approvable":true}'::jsonb WHERE id=$1`, [pendingApp]);
+
     // Network lock
     await expectDenied("N1 admin cannot create NETWORK opportunity", { user: U.adminA, org: ORG_A },
       `INSERT INTO smartmatch_opportunities (organization_id,created_by_user_id,visibility,region_label,role_label,starts_at,ends_at) VALUES ($1,$2,'NETWORK','Caguas','Cuidador',now()+interval '1 day',now()+interval '2 days')`, [ORG_A, U.adminA]);

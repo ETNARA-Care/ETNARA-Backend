@@ -60,8 +60,10 @@ export async function listAgencyOpportunities(userId: string, organizationId: st
 }
 
 /**
- * Publish a vetted INTERNAL opportunity. The agency administrator must
- * explicitly publish their own draft. No cross-organization discovery.
+ * Publish a vetted INTERNAL draft. Any active administrator of the same
+ * agency may publish it (not only its creator); RLS and the 097 transition
+ * trigger keep it within the agency and allow only DRAFT -> PUBLISHED.
+ * No cross-organization discovery.
  */
 export async function activateInternalOpportunity(
   userId: string, organizationId: string, opportunityId: string,
@@ -73,7 +75,6 @@ export async function activateInternalOpportunity(
       SET status = 'PUBLISHED', updated_at = now()
       WHERE id = ${opportunityId}
         AND organization_id = ${organizationId}
-        AND created_by_user_id = ${userId}
         AND visibility = 'INTERNAL'
         AND status = 'DRAFT'
         AND starts_at > now()

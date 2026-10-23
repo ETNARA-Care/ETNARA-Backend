@@ -87,6 +87,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifySmartMatchDecisions.ts
 
+      - name: PostgreSQL SmartMatch two-agency end-to-end flow (HTTP, synthetic)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchTwoAgencyFlow.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

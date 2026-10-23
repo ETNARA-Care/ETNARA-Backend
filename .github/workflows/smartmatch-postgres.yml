@@ -6,6 +6,7 @@ on:
       - 'src/modules/smartmatch/**'
       - 'scripts/verifySmartMatchRls.ts'
       - 'scripts/verifySmartMatchDecisions.ts'
+      - 'scripts/verifySmartMatchTwoAgencyFlow.ts'
       - 'src/modules/eligibility/**'
       - 'scripts/smartmatch_*.sql'
       - '.github/workflows/smartmatch-postgres.yml'
@@ -54,3 +55,5 @@ jobs:
         run: npx tsx scripts/verifySmartMatchRls.ts
       - name: SmartMatch decisions over HTTP (concurrency, audit, isolation)
         run: npx tsx scripts/verifySmartMatchDecisions.ts
+      - name: SmartMatch two-agency end-to-end flow over HTTP
+        run: npx tsx scripts/verifySmartMatchTwoAgencyFlow.ts
