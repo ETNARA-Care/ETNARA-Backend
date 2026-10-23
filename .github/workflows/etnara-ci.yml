@@ -108,6 +108,7 @@ jobs:
           DATABASE_URL="$MIGRATIONS_DATABASE_URL" DEMO_PASSWORD="$demo_password" npx tsx scripts/seedDemo.ts
           export DATABASE_URL="postgres://app_runtime:$runtime_password@localhost:5432/etnara_ci"
           export DEMO_PASSWORD="$demo_password"
+          npx tsx scripts/verifyTenantPolicyClosure.ts
           npx tsx scripts/verifyAssignmentMessagingSync.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
