@@ -270,12 +270,19 @@ export async function acceptFamilyInvitation(
   });
 }
 
+export class FamilyManagerOnlyError extends Error {
+  constructor() { super("FAMILY_MANAGER_ONLY"); this.name = "FamilyManagerOnlyError"; }
+}
+
 export async function revokeFamilyRelationship(
   userId: string,
   organizationId: string,
   relationshipId: string
 ): Promise<void> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Security hotfix 088: only agency managers revoke family access (RLS enforces it too).
+    const manager = await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx);
+    if (!manager.rows[0]?.ok) throw new FamilyManagerOnlyError();
     const result = await sql<{ id: string }>`
       UPDATE family_relationships
       SET status = 'revoked', revoked_at = now()
