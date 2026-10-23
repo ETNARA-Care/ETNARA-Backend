@@ -12,6 +12,7 @@ on:
       - 'scripts/verifyGate6ServiceLocations.ts'
       - 'scripts/verifyGate7Journey.ts'
       - 'scripts/verifySecurityAudit.ts'
+      - 'scripts/verifyProductionHotfix.ts'
       - 'src/modules/careRecipients/**'
       - 'src/modules/verification/**'
       - 'src/modules/scheduling/**'
@@ -77,3 +78,5 @@ jobs:
         run: npx tsx scripts/verifyGate7Journey.ts
       - name: Security audit hardening over HTTP
         run: npx tsx scripts/verifySecurityAudit.ts
+      - name: Production security hotfix (088) over HTTP
+        run: npx tsx scripts/verifyProductionHotfix.ts
