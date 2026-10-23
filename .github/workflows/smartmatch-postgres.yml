@@ -8,6 +8,9 @@ on:
       - 'scripts/verifySmartMatchDecisions.ts'
       - 'scripts/verifySmartMatchTwoAgencyFlow.ts'
       - 'scripts/verifySmartMatchNotifications.ts'
+      - 'scripts/verifySmartMatchShifts.ts'
+      - 'src/modules/scheduling/**'
+      - 'src/modules/assignments/**'
       - 'src/modules/notifications/**'
       - 'src/modules/eligibility/**'
       - 'scripts/smartmatch_*.sql'
@@ -61,3 +64,5 @@ jobs:
         run: npx tsx scripts/verifySmartMatchTwoAgencyFlow.ts
       - name: SmartMatch notifications over HTTP
         run: npx tsx scripts/verifySmartMatchNotifications.ts
+      - name: SmartMatch to Turnos over HTTP
+        run: npx tsx scripts/verifySmartMatchShifts.ts

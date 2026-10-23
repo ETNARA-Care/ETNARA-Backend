@@ -49,11 +49,18 @@ export async function listAgencyOpportunities(userId: string, organizationId: st
     const rows = await sql<{
       id: string; region_label: string; role_label: string;
       starts_at: string; ends_at: string; status: string;
+      shift_id: string | null; shift_status: string | null; shift_assignment_status: string | null;
     }>`
-      SELECT id, region_label, role_label, starts_at, ends_at, status
-      FROM smartmatch_opportunities
-      WHERE organization_id = ${organizationId}
-      ORDER BY created_at DESC LIMIT 100
+      -- shift_*: the Turnos shift created from this opportunity (099), if any.
+      SELECT o.id, o.region_label, o.role_label, o.starts_at, o.ends_at, o.status,
+             o.shift_id, s.status::text AS shift_status,
+             (SELECT a.response_status FROM assignments a
+              WHERE a.shift_id = o.shift_id AND a.organization_id = o.organization_id
+              ORDER BY a.created_at DESC LIMIT 1) AS shift_assignment_status
+      FROM smartmatch_opportunities o
+      LEFT JOIN shifts s ON s.id = o.shift_id AND s.organization_id = o.organization_id
+      WHERE o.organization_id = ${organizationId}
+      ORDER BY o.created_at DESC LIMIT 100
     `.execute(trx);
     return rows.rows;
   });

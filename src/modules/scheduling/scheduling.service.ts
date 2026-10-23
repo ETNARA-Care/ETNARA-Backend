@@ -111,7 +111,7 @@ const updateShiftSchema = z
 export type UpdateShiftInput = z.infer<typeof updateShiftSchema>;
 export { updateShiftSchema };
 
-interface ShiftRow {
+export interface ShiftRow {
   id: string;
   organization_id: string;
   care_recipient_id: string | null;
@@ -139,7 +139,23 @@ export async function createShift(
   if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
     throw new InvalidShiftTimesError();
   }
-  return withTenantContext({ userId, organizationId }, async (trx) => {
+  return withTenantContext({ userId, organizationId }, (trx) => insertShiftInTransaction(trx, organizationId, input));
+}
+
+/**
+ * Shift creation rules of Turnos (recipient/room must belong to the agency)
+ * and the insert, on a transaction the caller already opened with
+ * withTenantContext(). Used by POST .../shifts and by SmartMatch "Crear turno".
+ */
+export async function insertShiftInTransaction(
+  trx: Parameters<Parameters<typeof withTenantContext>[1]>[0],
+  organizationId: string,
+  input: CreateShiftInput
+): Promise<ShiftRow> {
+  if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
+    throw new InvalidShiftTimesError();
+  }
+  {
     if (input.careRecipientId) {
       const check = await sql<{ id: string }>`
         SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
@@ -159,7 +175,7 @@ export async function createShift(
       RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
-  });
+  }
 }
 
 export interface ListShiftsFilter {

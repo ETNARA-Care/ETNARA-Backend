@@ -2,6 +2,22 @@
 
 ## Current Status
 
+## 2026-10-23 — SmartMatch Gate 5: Crear turno con esta cuidadora (claude/smartmatch-gate1-rls)
+
+- Decision (user, option A): approval keeps meaning FILLED, no assignment. A separate admin action
+  creates ONE real shift in the existing Turnos module, schedule/role fixed to the opportunity.
+- Migration 099 (additive): smartmatch_opportunities.shift_id (unique, composite FK same agency,
+  only FILLED, write-once trigger); shift_private_instructions (FORCE RLS: agency managers + the
+  assigned worker via app_worker_has_shift_assignment; no family policy; platform_phi_deny).
+  Reason: shifts rows are readable by family (shifts_family_read) -- instructions never go there.
+- Turnos services: extracted insertShiftInTransaction / assignWorkerToShiftInTransaction (existing
+  endpoints call them; behavior unchanged). POST .../smartmatch/opportunities/:id/shift does lock,
+  re-validation (membership, credentials, availability, active recipient of the agency), shift,
+  assignment (eligibility, duplicates, overlaps, SHIFT_ASSIGNMENT_PENDING), instructions, link in
+  ONE transaction. GET .../shift-draft; GET/PUT .../shifts/:id/private-instructions.
+- verifySmartMatchShifts.ts 30/30 (CI); staging verifier now 52 checks (T0-T9, cancels its shift).
+- Gate 1 guard test tightened: only the RESTRICTIVE platform_phi_deny may mention app_is_superadmin().
+
 ## 2026-10-23 — SmartMatch Gate 5: notifications + privacy validation (claude/smartmatch-gate1-rls)
 
 - Migration 098: AFTER INSERT trigger on smartmatch_application_events writes into the existing

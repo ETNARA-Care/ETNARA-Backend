@@ -2,7 +2,9 @@ import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
-import { evaluateWorkerEligibility } from "../eligibility/eligibility.service.js";
+import { evaluateWorkerEligibilityInTransaction } from "../eligibility/eligibility.service.js";
+
+type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
 
 export class ShiftNotFoundError extends Error {
   constructor() {
@@ -155,7 +157,27 @@ export async function createAssignment(
   input: CreateAssignmentInput
 ): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
-  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+  const saved = await withTenantContext({ userId, organizationId }, (trx) =>
+    assignWorkerToShiftInTransaction(trx, organizationId, shiftId, input));
+  return saved.assignment;
+}
+
+/**
+ * The assignment rules of Turnos (shift open, worker in the agency, eligible
+ * credentials, no duplicate, no overlapping shift), the insert, closing open
+ * coverage campaigns and the worker's SHIFT_ASSIGNMENT_PENDING notification,
+ * on a transaction the caller already opened with withTenantContext().
+ * Used by POST .../shifts/:id/assignments and by SmartMatch "Crear turno",
+ * so both paths enforce exactly the same rules.
+ */
+export async function assignWorkerToShiftInTransaction(
+  trx: Trx,
+  organizationId: string,
+  shiftId: string,
+  input: CreateAssignmentInput
+) {
+  assertUuid(shiftId, "shiftId");
+  {
     const shiftRow = await sql<{
       id: string;
       status: string;
@@ -183,7 +205,7 @@ export async function createAssignment(
     const membership = membershipRow.rows[0];
     if (!membership) throw new MembershipNotInOrgError();
 
-    const eligibility = await evaluateWorkerEligibility(userId, organizationId, input.organizationWorkerMembershipId);
+    const eligibility = await evaluateWorkerEligibilityInTransaction(trx, organizationId, input.organizationWorkerMembershipId);
     if (eligibility.eligibilityStatus !== "eligible") {
       throw new WorkerNotEligibleError(eligibility.eligibilityStatus);
     }
@@ -250,9 +272,7 @@ export async function createAssignment(
       careRecipientId: shift.care_recipient_id,
       roomId: shift.room_id,
     };
-  });
-
-  return saved.assignment;
+  }
 }
 
 export async function listAssignments(userId: string, organizationId: string, shiftId: string) {

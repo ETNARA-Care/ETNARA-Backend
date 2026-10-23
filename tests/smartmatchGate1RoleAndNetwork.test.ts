@@ -38,8 +38,11 @@ describe("SmartMatch Gate 1: real caregiver role and network lock", () => {
 
   it("gives the platform/Tower context no SmartMatch policy", () => {
     const smartmatchMigrations = readdirSync(resolve(root, "migrations"))
-      .filter(f => /^09\d_smartmatch/.test(f)).map(f => stripSqlComments(read(`migrations/${f}`))).join("\n");
-    expect(smartmatchMigrations).not.toContain("app_is_superadmin()");
+      .filter(f => /^\d{3}_smartmatch/.test(f)).map(f => stripSqlComments(read(`migrations/${f}`))).join("\n");
+    // The only allowed mention is the RESTRICTIVE platform PHI deny (078 pattern),
+    // which takes access away from the platform super-admin, never grants it.
+    const deny = /CREATE POLICY platform_phi_deny ON \w+\s+AS RESTRICTIVE FOR ALL TO app_runtime\s+USING \(NOT app_is_superadmin\(\)\) WITH CHECK \(NOT app_is_superadmin\(\)\);/g;
+    expect(smartmatchMigrations.replace(deny, "")).not.toContain("app_is_superadmin()");
   });
 
   it("ships a real-PostgreSQL verifier wired into CI", () => {

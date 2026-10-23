@@ -77,6 +77,12 @@ async function main() {
         await q(`INSERT INTO requirements (requirement_set_id, credential_type_id, is_mandatory, requires_organization_review)
                  VALUES ($1, $2, true, false)`, [rs, bls]);
       }
+      // One synthetic person receiving care per agency, for "Crear turno" (Gate 5).
+      const recipientLast = `Sintética ${agency.key.toUpperCase()} (staging)`;
+      await q(`INSERT INTO care_recipients (organization_id, first_name, last_name)
+               SELECT $1, 'Persona', $2::text
+               WHERE NOT EXISTS (SELECT 1 FROM care_recipients WHERE organization_id = $1 AND last_name = $2::text)`,
+        [orgId, recipientLast]);
       for (const person of agency.people) {
         let userId = (await q<{ id: string }>(`SELECT id FROM users WHERE lower(email) = lower($1)`, [person.email])).rows[0]?.id;
         if (userId) {

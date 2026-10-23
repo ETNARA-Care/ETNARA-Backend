@@ -51,7 +51,7 @@ async function requireActiveWorker(trx: Trx): Promise<void> {
   if (!r.rows[0]?.allowed) throw new SmartMatchForbiddenError();
 }
 
-async function requireOrgAdmin(trx: Trx): Promise<void> {
+export async function requireOrgAdmin(trx: Trx): Promise<void> {
   const r = await sql<{ allowed: boolean }>`SELECT app_is_org_admin() AS allowed`.execute(trx);
   if (!r.rows[0]?.allowed) throw new SmartMatchForbiddenError();
 }
@@ -143,11 +143,11 @@ export async function listMySmartMatchApplications(userId: string, organizationI
 
 // ------------------------------------------------------------------- agency
 
-interface LockedApplication {
+export interface LockedApplication {
   id: string; status: string; caregiver_user_id: string; opportunity_id: string;
   consented_at: string | null;
 }
-interface LockedOpportunity {
+export interface LockedOpportunity {
   id: string; status: string; visibility: string; starts_at: string; ends_at: string; open: boolean;
 }
 
@@ -155,7 +155,7 @@ interface LockedOpportunity {
  * Computes approval checks for one application, inside the caller's
  * transaction. Missing or unverifiable data yields false: never assumed.
  */
-async function computeApprovalChecks(
+export async function computeApprovalChecks(
   trx: Trx, organizationId: string, app: LockedApplication, opp: LockedOpportunity,
 ): Promise<{ checks: SmartMatchApprovalChecks; caregiver: { membershipId: string | null; displayName: string | null } }> {
   const worker = await sql<{ membership_id: string; worker_status: string; display_name: string | null; has_worker_role: boolean }>`

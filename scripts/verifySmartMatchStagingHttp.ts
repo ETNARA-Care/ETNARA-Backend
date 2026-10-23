@@ -159,6 +159,36 @@ async function main() {
   check("N6 admins' request resolved after the decision", (await smartmatchNotifications(a2.token, appId)).every((n) => n.readAt));
   check("D10 caregiver 2 sees REJECTED / OPPORTUNITY_FILLED", (mine2.body.applications ?? []).some((a: Json) => a.opportunity_id === oppId && a.status === "REJECTED" && a.decision_reason === "OPPORTUNITY_FILLED"), "");
 
+  // Gate 5: "Crear turno con esta cuidadora" (existing Turnos module)
+  const recipients = await call("GET", `/organizations/${a1.orgId}/care-recipients`, a1.token);
+  const synthetic = ((recipients.body.careRecipients ?? recipients.body.recipients ?? recipients.body.items ?? []) as Json[])
+    .find((r) => String(r.last_name ?? r.lastName ?? "").startsWith("Sintética A"));
+  check("T0 synthetic person receiving care is seeded in agency A", !!synthetic, `status=${recipients.status}`);
+  const supShift = await call("POST", `${S}/opportunities/${oppId}/shift`, sup.token, { careRecipientId: synthetic?.id });
+  check("T1 supervisor cannot create a shift from SmartMatch", supShift.status === 403, `status=${supShift.status}`);
+  const bShift = await call("POST", `/organizations/${bAdmin.orgId}/smartmatch/opportunities/${oppId}/shift`, bAdmin.token, { careRecipientId: synthetic?.id });
+  check("T2 agency B cannot create a shift for agency A", bShift.status === 404, `status=${bShift.status}`);
+  const shiftDraft = await call("GET", `${S}/opportunities/${oppId}/shift-draft`, a1.token);
+  check("T3 draft shows the approved caregiver and allows creation", shiftDraft.body.canCreate === true && shiftDraft.body.caregiver?.displayName === "Cuidadora Uno A", `status=${shiftDraft.status}`);
+  const made = await call("POST", `${S}/opportunities/${oppId}/shift`, a1.token, { careRecipientId: synthetic?.id, instructions: "Instrucción sintética de staging." });
+  const shiftId = made.body.shift?.id as string | undefined;
+  check("T4 admin creates the shift for the approved caregiver", made.status === 201 && !!shiftId, `status=${made.status} ${made.body.error ?? ""}`);
+  const dupShift = await call("POST", `${S}/opportunities/${oppId}/shift`, a2.token, { careRecipientId: synthetic?.id });
+  check("T5 a second shift for the same opportunity is refused", dupShift.status === 409 && dupShift.body.error === "SHIFT_ALREADY_CREATED", `status=${dupShift.status}`);
+  const myShifts = await call("GET", `/organizations/${c1.orgId}/me/shifts`, c1.token);
+  check("T6 caregiver sees the shift in her Turnos", ((myShifts.body.shifts ?? []) as Json[]).some((x) => x.id === shiftId), `status=${myShifts.status}`);
+  const cgIns = await call("GET", `/organizations/${c1.orgId}/shifts/${shiftId}/private-instructions`, c1.token);
+  const otherIns = await call("GET", `/organizations/${c2.orgId}/shifts/${shiftId}/private-instructions`, c2.token);
+  check("T7 private instructions: assigned caregiver yes, other caregiver no", cgIns.status === 200 && otherIns.status === 404, `${cgIns.status},${otherIns.status}`);
+  const linkedList = await call("GET", `${S}/opportunities`, a1.token);
+  const linkedOpp = ((linkedList.body.opportunities ?? []) as Json[]).find((o) => o.id === oppId);
+  check("T8 opportunity shows the created shift", linkedOpp?.shift_id === shiftId && linkedOpp?.shift_assignment_status === "pending", JSON.stringify(linkedOpp?.shift_assignment_status ?? null));
+  // Cleanup: cancel through Turnos so the next run's random schedule never conflicts.
+  if (shiftId) {
+    const cancel = await call("POST", `/organizations/${a1.orgId}/shifts/${shiftId}/cancel`, a1.token, { reason: "Verificación automática de staging" });
+    check("T9 verification shift cancelled through Turnos (cleanup)", cancel.status === 200, `status=${cancel.status}`);
+  }
+
   // Reject path
   const d2 = await call("POST", `${S}/opportunities`, a2.token, { visibility: "INTERNAL", regionLabel: "Cayey", roleLabel: "Acompañante (staging)", ...window });
   const opp2 = d2.body.opportunity?.id as string;
