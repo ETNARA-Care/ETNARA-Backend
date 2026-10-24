@@ -21,7 +21,22 @@ const c = new Client({ connectionString: process.env.PREFLIGHT_URL, options: "-c
   const org = process.env.PILOT_ORG_ID ?? "";
   if (!/^[0-9a-f-]{36}$/.test(org)) throw new Error("PILOT_ORG_ID must be a full uuid");
   await c.connect();
+  // Refuse to run unless the login itself cannot write: not a superuser, no
+  // write privilege on any application table, read-only by default.
+  const who = (await c.query<{ u: string; su: boolean; ro: string; w: number }>(
+    `SELECT current_user u, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) su,
+            current_setting('default_transaction_read_only') ro,
+            (SELECT count(*)::int FROM pg_class k JOIN pg_namespace n ON n.oid=k.relnamespace
+              WHERE n.nspname='public' AND k.relkind IN ('r','p')
+                AND has_table_privilege(current_user, k.oid, 'INSERT,UPDATE,DELETE,TRUNCATE')
+                -- password_reset_tokens is granted to PUBLIC by migration 074 (every role gets it);
+                -- the read-only session + READ ONLY transaction below still block any write there.
+                AND k.relname <> 'password_reset_tokens') w`)).rows[0];
+  if (who.su || who.ro !== "on" || who.w !== 0) throw new Error(`refused: login can write (role=${who.u} superuser=${who.su} read_only=${who.ro} writable_tables=${who.w})`);
+  console.log(`PILOT_PREFLIGHT_ROLE ${who.u} superuser=${who.su} read_only=${who.ro} writable_tables=${who.w}`);
   await c.query("BEGIN READ ONLY");
+  const txro = (await c.query<{ v: string }>(`SELECT current_setting('transaction_read_only') v`)).rows[0].v;
+  if (txro !== "on") throw new Error("refused: transaction is not read-only");
   const q = async <T extends Record<string, unknown>>(s: string, p: unknown[] = []) => (await c.query<T>(s, p)).rows;
   const out: Record<string, unknown> = {};
 
