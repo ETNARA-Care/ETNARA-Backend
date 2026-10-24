@@ -369,6 +369,49 @@ async function main() {
       req.status === 200 && issued >= 1 && conf.status === 200 && loginNew.status === 200 && loginOld.status === 401 && reuse.status >= 400 && reuse.status < 500,
       `request=${req.status} tokens=${issued} confirm=${conf.status} new=${loginNew.status} old=${loginOld.status} reuse=${reuse.status}`);
 
+    // ================================================================ M: caregiver in two agencies (CURRENT scope, documented)
+    // The schedule protection is per agency: each agency checks only its own
+    // shifts and SmartMatch visits for its own membership of the caregiver.
+    // These checks pin that scope (and the isolation) so a future cross-agency
+    // check is a deliberate, reviewed change. See the PR report, section M.
+    const multi = await person("multi", orgA, ["WORKER"], true);
+    const multiWorker = (await q<{ id: string }>(`SELECT worker_id AS id FROM organization_worker_memberships WHERE id=$1`, [multi.owm])).rows[0].id;
+    const mB = (await q<{ id: string }>(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [multi.userId, orgB])).rows[0].id;
+    await q(`INSERT INTO user_roles (organization_membership_id,organization_id,role_id) SELECT $1,$2,id FROM roles WHERE code='WORKER'`, [mB, orgB]);
+    const multiOwmB = (await q<{ id: string }>(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,'active','caregiver') RETURNING id`, [multiWorker, orgB])).rows[0].id;
+    const loginMulti = async (orgId: string) => {
+      const r = await call("POST", "/auth/login", "", { email: multi.email, password });
+      await call("POST", "/me/active-organization", r.body.token, { organizationId: orgId });
+      return r.body.token as string;
+    };
+    const multiA = await loginMulti(orgA); const multiB = await loginMulti(orgB);
+    const rB = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name,status) VALUES ($1,'Sintetico','AgenciaB','active') RETURNING id`, [orgB])).rows[0].id;
+    const dm = nextWeekday(4, 4);
+    const shA = await regularShift(pr(dm, "10:00"), pr(dm, "14:00"));
+    const asA = await assign(shA, multi);
+    const accA = await call("POST", `/organizations/${orgA}/me/shifts/${shA}/respond`, multiA, { decision: "accepted" });
+    const shB = await call("POST", `/organizations/${orgB}/shifts`, B.admin.token, { careRecipientId: rB, scheduledStart: pr(dm, "11:00").toISOString(), scheduledEnd: pr(dm, "13:00").toISOString() });
+    const asB = await call("POST", `/organizations/${orgB}/shifts/${shB.body.shift?.id}/assignments`, B.admin.token, { organizationWorkerMembershipId: multiOwmB });
+    const accB = await call("POST", `/organizations/${orgB}/me/shifts/${shB.body.shift?.id}/respond`, multiB, { decision: "accepted" });
+    check("M1 CURRENT SCOPE (known gap): agency B can assign, and the caregiver accept, a shift that overlaps her accepted shift at agency A",
+      asA.status === 201 && accA.status < 300 && asB.status === 201 && accB.status < 300, `A assign=${asA.status} accept=${accA.status} | B assign=${asB.status} accept=${accB.status}`);
+    const bLeak = JSON.stringify([asB.body, shB.body]);
+    const bSeesA = await (async () => {
+      const rt = new pg.Client({ connectionString: process.env.DATABASE_URL }); await rt.connect();
+      try {
+        await rt.query("BEGIN");
+        await rt.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [B.admin.userId, orgB]);
+        const shifts = (await rt.query(`SELECT 1 FROM shifts WHERE id=$1`, [shA])).rowCount;
+        const asg = (await rt.query(`SELECT 1 FROM assignments WHERE organization_worker_membership_id=$1`, [multi.owm])).rowCount;
+        const rec = (await rt.query(`SELECT 1 FROM care_recipients WHERE id=$1`, [rA])).rowCount;
+        const fn = (await rt.query<{ busy: boolean }>(`SELECT app_smartmatch_worker_has_commitment($1,$2,$3,NULL) busy`, [multi.owm, pr(dm, "00:00"), pr(dm, "23:00")])).rows[0].busy;
+        await rt.query("ROLLBACK");
+        return { shifts, asg, rec, fn };
+      } finally { await rt.end(); }
+    })();
+    check("M2 isolation holds: agency B learns nothing about agency A (no shift, assignment, patient or busy signal, in the API or by RLS)",
+      !bLeak.includes(shA) && !bLeak.includes(rA) && bSeesA.shifts === 0 && bSeesA.asg === 0 && bSeesA.rec === 0 && bSeesA.fn === false, JSON.stringify(bSeesA));
+
     check("Z1 no server error (5xx) in the whole run", serverErrors.length === 0, serverErrors.join(" | "));
   } finally {
     for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name.padEnd(120)} ${r.detail}`);
