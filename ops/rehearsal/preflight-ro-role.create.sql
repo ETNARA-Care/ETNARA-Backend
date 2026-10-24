@@ -1,7 +1,9 @@
 -- ETNARA: temporary READ-ONLY access for the one-shot pilot preflight (least privilege).
--- Run ONCE as the database owner (Railway → etnara-care-staging-db → Database → Query),
--- replacing <PASSWORD> with a password of letters and digits only, generated in your
--- password manager (never paste it in chats).
+-- Run ONCE as the database owner in psql (Railway → etnara-care-staging-db → Database →
+-- Console). This file contains NO password: the role is created without one (it cannot
+-- log in yet). Then set it interactively with psql's  \password etnara_preflight_ro
+-- psql asks twice with hidden input and sends only a SCRAM hash, so the password never
+-- appears in this SQL, the psql history, server logs or the screen.
 --
 -- Design:
 -- * The login etnara_preflight_ro gets NO privilege on any table. Its only privilege is
@@ -24,10 +26,10 @@
 BEGIN;
 DO $$ BEGIN
   EXECUTE format(
-    'CREATE ROLE etnara_preflight_ro LOGIN PASSWORD %L
+    'CREATE ROLE etnara_preflight_ro LOGIN PASSWORD NULL
        NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT
        CONNECTION LIMIT 1 VALID UNTIL %L',
-    '<PASSWORD>', (now() + interval '24 hours')::text);
+    (now() + interval '24 hours')::text);
 END $$;
 ALTER ROLE etnara_preflight_ro SET default_transaction_read_only = on;
 ALTER ROLE etnara_preflight_ro SET statement_timeout = '30s';
@@ -110,6 +112,7 @@ COMMIT;
 
 -- Checks (all must hold):
 -- 1. role: rolsuper = f, rolbypassrls = f, rolcanlogin = t, valid ~24 h.
+--    (rolpassword is still NULL here: run  \password etnara_preflight_ro  next.)
 SELECT rolname, rolsuper, rolbypassrls, rolcreaterole, rolcanlogin, rolconnlimit, rolvaliduntil
   FROM pg_roles WHERE rolname = 'etnara_preflight_ro';
 -- 2. table/column privileges granted to the role: must be 0 rows.
