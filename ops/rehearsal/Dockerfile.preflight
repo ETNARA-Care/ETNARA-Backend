@@ -1,0 +1,10 @@
+# One-shot, READ-ONLY pilot preflight (scripts/rehearsal/pilotPreflight.ts).
+# No HTTP server, no exposed port, no secrets baked in. Its only command is the
+# preflight: there is no way for this image to run migrations or restores.
+FROM node:20-bookworm-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY tsconfig.json ./
+COPY scripts/rehearsal/pilotPreflight.ts ./scripts/rehearsal/pilotPreflight.ts
+CMD ["npx", "tsx", "scripts/rehearsal/pilotPreflight.ts"]
