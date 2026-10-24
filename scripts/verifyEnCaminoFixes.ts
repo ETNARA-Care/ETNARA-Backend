@@ -81,7 +81,7 @@ async function main() {
     admin: await person("admin", orgA, ["ORGANIZATION_ADMIN"]), sup: await person("sup", orgA, ["SUPERVISOR"]),
     fam: await person("fam", orgA, ["FAMILY"]), famMuted: await person("fammuted", orgA, ["FAMILY"]),
     platform: await person("platform", orgA, []),
-    cg: await Promise.all(Array.from({ length: 13 }, (_, i) => person(`cg${i}`, orgA, ["WORKER"], true))),
+    cg: await Promise.all(Array.from({ length: 16 }, (_, i) => person(`cg${i}`, orgA, ["WORKER"], true))),
   };
   const Off = { admin: await person("offadmin", orgOff, ["ORGANIZATION_ADMIN"]), fam: await person("offfam", orgOff, ["FAMILY"]), cg: await person("offcg", orgOff, ["WORKER"], true) };
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [A.platform.userId]);
@@ -202,6 +202,17 @@ async function main() {
     const platformSees = (await apiNotes(A.platform)).length;
     check("S1 agencies without «En camino» see no change; notices never reach people outside the agency; ETNARA Central gets none",
       offNotes === 0 && crossA === "0" && platformSees === 0, `offAgency=${offNotes} outside=${crossA} platform=${platformSees}`);
+    // Point 1 (review 24-oct): with EN_CAMINO off, neither cancellation nor removal sends ANY notice of the new
+    // service types, and no journey notice either -- the agency behaves exactly as before migration 113.
+    const off2 = await shift(Off.cg, 300, 60, { org: orgOff, admin: Off.admin, rec: rOff });
+    const offRem = await call("PATCH", `/organizations/${orgOff}/shifts/${off2.id}/assignments/${off2.assignmentId}`, Off.admin.token, { reason: "Reasignada" });
+    const offAll = (await q<{ n: string }>(`SELECT count(*) n FROM notifications WHERE organization_id=$1 AND notification_type IN
+      ('SHIFT_CANCELLED','SHIFT_UNASSIGNED','FAMILY_VISIT_CANCELLED','FAMILY_CAREGIVER_CHANGED','FAMILY_CAREGIVER_EN_ROUTE','FAMILY_CAREGIVER_DELAYED',
+       'FAMILY_CAREGIVER_ARRIVED','SHIFT_NOT_EN_ROUTE','SHIFT_DELAY_REPORTED','SHIFT_LATE_ARRIVAL')`, [orgOff])).rows[0].n;
+    const offJourney = await call("GET", J(off.id, orgOff), Off.admin.token);
+    check("S2 EN_CAMINO off: cancelling AND removing a caregiver send no service or journey notice at all (unchanged behaviour); the journey stays hidden",
+      offRem.status === 200 && offAll === "0" && offJourney.status >= 400 && offJourney.status < 500,
+      `remove=${offRem.status} notices=${offAll} journey=${offJourney.status}`);
 
     // ================================================================ 4. offline sync
     const o1 = await shift(A.cg[5], 60, 240);
@@ -211,6 +222,47 @@ async function main() {
     const famStale = await notes(A.fam.userId, ["FAMILY_CAREGIVER_EN_ROUTE"], o1.id);
     check("O1 a departure saved without signal syncs 3 h later (inside its window): stored as offline, no stale notice to the family",
       old3h.status === 201 && offRow?.recorded_offline === true && famStale.length === 0, `status=${old3h.status} ${old3h.body.error ?? ""} offline=${offRow?.recorded_offline} familyNotices=${famStale.length}`);
+
+    // Point 2 (review 24-oct): a phone that was offline for hours. Times are the phone's, the records are marked
+    // offline, and the late sync creates no misleading notice or state.
+    const countFor = async (id: string) => Number((await q<{ n: string }>(`SELECT count(*) n FROM notifications WHERE related_entity_id = $1
+      OR related_entity_id IN (SELECT id FROM shift_journey_events WHERE shift_id = $1)`, [id])).rows[0].n);
+    const typesFor = async (id: string, since: number) => (await q<{ t: string }>(`SELECT notification_type t FROM notifications WHERE (related_entity_id = $1
+      OR related_entity_id IN (SELECT id FROM shift_journey_events WHERE shift_id = $1)) ORDER BY created_at OFFSET $2`, [id, since])).rows.map((r) => r.t);
+    const x8 = await shift(A.cg[13], 60, 240);
+    await moveStart(x8.id, -100);                           // started 100 min ago
+    const depAt = new Date(Date.now() - 90 * 60_000).toISOString();   // left 10 min after start, offline
+    const arrAt = new Date(Date.now() - 60 * 60_000).toISOString();   // arrived 30 min later, offline
+    const before8 = await countFor(x8.id);
+    const dep8 = await enRoute(A.cg[13], x8.id, { occurredAt: depAt, recordedOffline: true });
+    const afterDep = await typesFor(x8.id, before8);
+    const st8a = (await call("GET", J(x8.id), A.admin.token)).body;
+    const arr8 = await arrive(A.cg[13], x8.id, { occurredAt: arrAt, recordedOffline: true });
+    const afterArr = await typesFor(x8.id, before8);
+    const st8 = (await call("GET", J(x8.id), A.admin.token)).body;
+    const rows8 = (await q<{ kind: string; at: Date; off: boolean }>(`SELECT 'EN_ROUTE' kind, occurred_at at, recorded_offline off FROM shift_journey_events WHERE shift_id=$1
+      UNION ALL SELECT 'ARRIVED', occurred_at, recorded_offline FROM shift_arrivals WHERE shift_id=$1 ORDER BY 2`, [x8.id])).rows;
+    const hist8 = ((st8.history ?? []) as Json[]).filter((h) => ["EN_ROUTE", "ARRIVED"].includes(h.kind as string));
+    const same = (a: unknown, b: string) => new Date(a as string).getTime() === new Date(b).getTime();
+    check("O8 synced 1.5 h late: departure and arrival keep the phone's original times (stored, state and history), both marked offline",
+      dep8.status === 201 && arr8.status === 201 && rows8.length === 2 && same(rows8[0].at, depAt) && same(rows8[1].at, arrAt) && rows8.every((r) => r.off)
+      && same(st8.journey?.enRouteAt, depAt) && same(st8.journey?.arrivedAt, arrAt)
+      && hist8.length === 2 && hist8[0].kind === "EN_ROUTE" && hist8.every((h) => (h.detail as Json)?.offline === true),
+      `dep=${dep8.status} arr=${arr8.status} rows=${JSON.stringify(rows8)} enRouteAt=${st8.journey?.enRouteAt} arrivedAt=${st8.journey?.arrivedAt} hist=${JSON.stringify(hist8)}`);
+    check("O9 no misleading notice or state: the late departure sends nothing (no «va en camino», no delay alert) and is shown as EN_ROUTE since its real time; the late arrival only asks the agency to review it (no «llegó» to the family)",
+      afterDep.length === 0 && st8a.journey?.state === "EN_ROUTE" && st8.journey?.state === "ARRIVED" && st8.journey?.arrivalNeedsReview === true
+      && afterArr.length > 0 && afterArr.every((t) => t === "SHIFT_ARRIVAL_NEEDS_REVIEW"),
+      `afterDeparture=${JSON.stringify(afterDep)} afterArrival=${JSON.stringify(afterArr)} states=${st8a.journey?.state}/${st8.journey?.state} review=${st8.journey?.arrivalNeedsReview}`);
+    const x10 = await shift(A.cg[14], 60, 240);
+    await moveStart(x10.id, -11 * 60 - 40, 12 * 60);       // started 11 h 40 min ago, still running
+    const dep11 = new Date(Date.now() - 11 * 3600e3 - 30 * 60_000).toISOString();
+    const before10 = await countFor(x10.id);
+    const sync11 = await enRoute(A.cg[14], x10.id, { occurredAt: dep11, recordedOffline: true });
+    const st10 = (await call("GET", J(x10.id), A.admin.token)).body;
+    check("O10 up to 12 h: a departure from 11.5 h ago syncs with its original time, offline, and sends nothing",
+      sync11.status === 201 && same(st10.journey?.enRouteAt, dep11) && (await typesFor(x10.id, before10)).length === 0
+      && (await q(`SELECT 1 FROM shift_journey_events WHERE shift_id=$1 AND recorded_offline`, [x10.id])).rowCount === 1,
+      `status=${sync11.status} ${sync11.body.error ?? ""} enRouteAt=${st10.journey?.enRouteAt}`);
     const o2 = await shift(A.cg[6], 60, 240);
     await moveStart(o2.id, -13 * 60 + 30, 15 * 60);
     const old13h = await enRoute(A.cg[6], o2.id, { occurredAt: new Date(Date.now() - 13 * 3600e3).toISOString(), recordedOffline: true });

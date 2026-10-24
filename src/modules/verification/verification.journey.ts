@@ -201,10 +201,13 @@ async function operationalHistory(trx: Trx, organizationId: string, shiftId: str
       JOIN workers w ON w.id = owm.worker_id WHERE ra.shift_id = ${shiftId} AND ra.organization_id = ${organizationId}
     UNION ALL
     SELECT e.occurred_at, e.event_type,
-           CASE WHEN e.event_type = 'DELAY_REPORTED' THEN jsonb_build_object('minutes', e.declared_delay_minutes, 'reason', e.delay_reason) END
+           -- Migration 113: a record made without signal keeps the phone's time and is marked so the agency can tell
+           NULLIF(jsonb_strip_nulls(jsonb_build_object('minutes', e.declared_delay_minutes, 'reason', e.delay_reason,
+             'offline', CASE WHEN e.recorded_offline THEN true END)), '{}'::jsonb)
       FROM shift_journey_events e WHERE e.shift_id = ${shiftId} AND e.organization_id = ${organizationId}
     UNION ALL
-    SELECT sa.occurred_at, 'ARRIVED', jsonb_build_object('proximity', sa.proximity, 'needsReview', sa.needs_review, 'reviewed', sa.reviewed_at IS NOT NULL)
+    SELECT sa.occurred_at, 'ARRIVED', jsonb_strip_nulls(jsonb_build_object('proximity', sa.proximity, 'needsReview', sa.needs_review,
+             'reviewed', sa.reviewed_at IS NOT NULL, 'offline', CASE WHEN sa.recorded_offline THEN true END))
       FROM shift_arrivals sa WHERE sa.shift_id = ${shiftId} AND sa.organization_id = ${organizationId}
     UNION ALL
     SELECT ve.occurred_at, CASE ve.event_type::text WHEN 'check_in' THEN 'STARTED' ELSE 'FINISHED' END, NULL
