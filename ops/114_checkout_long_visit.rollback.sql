@@ -1,10 +1,10 @@
--- ROLLBACK of migration 113 (check-out of visits open > 48 h). NOT recommended:
+-- ROLLBACK of migration 114 (check-out of visits open > 48 h). NOT recommended:
 -- it brings the incident back (check-out of a visit open > 48 h answers 500 and
 -- the visit can never be finished). A code-only rollback does NOT need this:
--- the previous backend works with 113 (same function signature).
--- Restores the exact 058 definition and removes the 113 notice index; the
+-- the previous backend works with 114 (same function signature).
+-- Restores the exact 058 definition and removes the 114 notice index; the
 -- TIMESHEET_NEEDS_REVIEW notices and audit rows already written are kept.
--- Run as the database owner, in one go.
+-- Never touches migration 113 (En Camino, #205). Run as the database owner, in one go.
 BEGIN;
 DROP INDEX IF EXISTS idx_notifications_timesheet_review_once;
 CREATE OR REPLACE FUNCTION app_record_timesheet_from_checkout(
@@ -107,5 +107,5 @@ $$;
 
 REVOKE ALL ON FUNCTION app_record_timesheet_from_checkout(uuid, uuid, uuid, uuid, timestamptz, timestamptz) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_record_timesheet_from_checkout(uuid, uuid, uuid, uuid, timestamptz, timestamptz) TO app_runtime;
-DELETE FROM schema_migrations WHERE filename = '113_checkout_long_visit_timesheet_review.sql';
+DELETE FROM schema_migrations WHERE filename = '114_checkout_long_visit_timesheet_review.sql';
 COMMIT;

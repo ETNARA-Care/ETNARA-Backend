@@ -1,4 +1,4 @@
--- Migration 113: a visit left open for more than 48 h can be finished.
+-- Migration 114: a visit left open for more than 48 h can be finished.
 --
 -- Incident 24-oct-2026: POST .../check-out answered 500 on every retry. The
 -- check-out calls app_record_timesheet_from_checkout (058), which RAISEd
@@ -58,7 +58,7 @@ BEGIN
         RAISE EXCEPTION 'invalid timesheet window';
     END IF;
 
-    -- 113: longer than 48 h -> no automatic timesheet; the agency reviews it.
+    -- 114: longer than 48 h -> no automatic timesheet; the agency reviews it.
     IF extract(epoch FROM (p_check_out_at - p_check_in_at)) > 172800 THEN
         IF NOT EXISTS (
             SELECT 1 FROM assignments assignment

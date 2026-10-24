@@ -4,7 +4,7 @@
  * Incident 24-oct-2026: four HTTP 500 in a row on POST .../check-out, every
  * retry failing the same way. Cause: a visit open for more than 48 h made
  * app_record_timesheet_from_checkout RAISE 'invalid timesheet window' and the
- * whole check-out rolled back (fixed by migration 113).
+ * whole check-out rolled back (fixed by migration 114).
  *
  * Covers regular Turnos shifts and shifts created from SmartMatch, the 48 h
  * boundary, offline retries, the supervisor override, rejection paths, and the
