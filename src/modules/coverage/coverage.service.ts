@@ -117,19 +117,7 @@ export async function recommendCoverage(
           SELECT 1 FROM worker_availability_settings availability_settings
           WHERE availability_settings.organization_worker_membership_id = owm.id
         ) AS availability_configured,
-        EXISTS (
-          SELECT 1
-          FROM worker_availability_settings availability_settings
-          JOIN worker_weekly_availability weekly
-            ON weekly.organization_worker_membership_id = availability_settings.organization_worker_membership_id
-          WHERE availability_settings.organization_worker_membership_id = owm.id
-            AND (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone)::date
-              = (${input.scheduledEnd}::timestamptz AT TIME ZONE availability_settings.timezone)::date
-            AND extract(dow FROM (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone))::int
-              = weekly.weekday
-            AND (${input.scheduledStart}::timestamptz AT TIME ZONE availability_settings.timezone)::time >= weekly.start_time
-            AND (${input.scheduledEnd}::timestamptz AT TIME ZONE availability_settings.timezone)::time <= weekly.end_time
-        ) AS matches_weekly_availability,
+        public.app_availability_covers(owm.id, ${input.scheduledStart}::timestamptz, ${input.scheduledEnd}::timestamptz) AS matches_weekly_availability,
         EXISTS (
           SELECT 1 FROM worker_unavailability_periods unavailable
           WHERE unavailable.organization_worker_membership_id = owm.id

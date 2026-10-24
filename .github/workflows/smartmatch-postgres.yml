@@ -15,6 +15,9 @@ on:
       - 'scripts/verifyProductionHotfix.ts'
       - 'scripts/verifyOrgFeatures.ts'
       - 'scripts/verifySmartMatchCancelExpiry.ts'
+      - 'scripts/verifySmartMatchFixes.ts'
+      - 'scripts/verifySmartMatchFixesRollback.ts'
+      - 'ops/110_111_smartmatch_fixes.rollback.sql'
       - 'src/middleware/**'
       - 'src/modules/platformOrganizations/**'
       - 'src/modules/careRecipients/**'
@@ -90,3 +93,8 @@ jobs:
         run: npx tsx scripts/verifyOrgFeatures.ts
       - name: SmartMatch cancel + expiry over HTTP
         run: npx tsx scripts/verifySmartMatchCancelExpiry.ts
+      - name: SmartMatch fixes (conflicts, races, overnight, limits, reset tokens) over HTTP
+        run: npx tsx scripts/verifySmartMatchFixes.ts
+
+      - name: PostgreSQL SmartMatch fixes rollback (never reopens password_reset_tokens to PUBLIC)
+        run: npx tsx scripts/verifySmartMatchFixesRollback.ts

@@ -26,7 +26,9 @@ describe("Phase 7.3 worker-declared availability", () => {
 
   it("blocks recommendations outside declared availability without auto-assigning", () => {
     const coverage = read("src/modules/coverage/coverage.service.ts");
-    expect(coverage).toContain("worker_weekly_availability");
+    // Weekly windows are evaluated by app_availability_covers (migration 110: overnight-aware).
+    expect(coverage).toContain("app_availability_covers(owm.id");
+    expect(read("migrations/110_schedule_commitments_and_overnight_availability.sql")).toContain("worker_weekly_availability");
     expect(coverage).toContain("worker_unavailability_periods");
     expect(coverage).toContain("matchesDeclaredAvailability");
     expect(coverage).toContain("El turno está fuera de su disponibilidad semanal");

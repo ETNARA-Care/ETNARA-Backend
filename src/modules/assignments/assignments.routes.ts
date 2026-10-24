@@ -15,6 +15,7 @@ import {
   ScheduleConflictError,
   AssignmentNotFoundError,
   AssignmentAlreadyRespondedError,
+  MyScheduleConflictError,
 } from "./assignments.service.js";
 import {
   removeAssignmentAudited,
@@ -74,6 +75,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof ScheduleConflictError) {
     res.status(409).json({ error: "SCHEDULE_CONFLICT" });
+    return true;
+  }
+  if (err instanceof MyScheduleConflictError) {
+    res.status(409).json({ error: "MY_SCHEDULE_CONFLICT" });
     return true;
   }
   if (err instanceof AssignmentAlreadyRespondedError) {

@@ -215,11 +215,16 @@ async function main() {
     const other = await call("POST", `/organizations/${orgA}/shifts`, A.admin1.token, { careRecipientId: rA2, scheduledStart: o3.starts_at.toISOString(), scheduledEnd: o3.ends_at.toISOString() });
     const otherAssign = await call("POST", `/organizations/${orgA}/shifts/${other.body.shift?.id}/assignments`, A.admin1.token, { organizationWorkerMembershipId: cg3m });
     check("T18 existing Turnos endpoints still create and assign (regression)", other.status === 201 && otherAssign.status === 201, `${other.status},${otherAssign.status}`);
-    await approve(opp3, A.cg3);
+    // H1 (migration 110): a caregiver who already has a shift at that time can no longer be
+    // approved -- the conflict is caught at approval, not later when creating the shift.
+    const ap3 = await call("POST", `${S}/opportunities/${opp3}/applications`, A.cg3.token, consent);
     const before3 = await shiftCount();
-    const conflict = await call("POST", `${S}/opportunities/${opp3}/shift`, A.admin1.token, { careRecipientId: rA });
-    check("T19 schedule conflict with another shift is refused and nothing is left behind",
-      conflict.status === 409 && conflict.body.error === "SCHEDULE_CONFLICT" && (await shiftCount()) === before3 && (await shiftsOf(opp3)) === 0, `status=${conflict.status} ${conflict.body.error}`);
+    const blocked3 = await call("POST", `${S}/applications/${ap3.body.application?.id}/decision`, A.admin1.token, { decision: "APPROVE", confirm: true });
+    const opp3Row = (await q<{ status: string }>(`SELECT status FROM smartmatch_opportunities WHERE id=$1`, [opp3])).rows[0];
+    check("T19 schedule conflict with another shift is refused at approval and nothing is left behind",
+      blocked3.status === 409 && blocked3.body.error === "APPROVAL_BLOCKED" && blocked3.body.checks?.noScheduleConflict === false
+      && opp3Row.status === "PUBLISHED" && (await shiftCount()) === before3 && (await shiftsOf(opp3)) === 0,
+      `status=${blocked3.status} ${blocked3.body.error} noScheduleConflict=${blocked3.body.checks?.noScheduleConflict} opp=${opp3Row.status}`);
     const opp4 = await opportunity(6);
     await approve(opp4, A.cg4);
     await q(`UPDATE credentials SET status='revoked' WHERE worker_id=$1`, [A.cg4.workerId]);
