@@ -171,6 +171,15 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts
 
+      - name: Local private S3 for photo tests (moto, never a hosted service)
+        run: pip install --quiet "moto[server]==5.2.4"
+
+      - name: PostgreSQL activity photos upload (EXIF removal, review, consent, family, concurrency)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoUpload.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

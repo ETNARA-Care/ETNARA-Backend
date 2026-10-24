@@ -173,7 +173,9 @@ export async function getFamilyTimeline(
       }
     }
 
-    const photoEventIds = pageRows.filter((r) => r.type_code === "PHOTO").map((r) => r.id);
+    // Any activity may carry one photo (116). RLS (115) returns only the photos
+    // this relative may see right now: approved, consents active, switch on.
+    const photoEventIds = pageRows.map((r) => r.id);
     const photoRefMap = new Map<string, string>();
     if (canViewPhotos && photoEventIds.length > 0) {
       const photos = await sql<{ care_event_id: string; id: string }>`
@@ -187,10 +189,9 @@ export async function getFamilyTimeline(
       const { title, summary } = summarizeEvent(row.type_code, row.structured_data, row.note_text);
       const caregiver = caregiverMap.get(row.membership_id) ?? { displayName: null, role: null };
       const item: TimelineItem = { id: row.id, type: row.type_code, occurredAt: row.occurred_at, title, summary, caregiver };
-      if (row.type_code === "PHOTO") {
-        const ref = photoRefMap.get(row.id);
-        item.photo = ref ? { visible: true, reference: ref } : { visible: false };
-      }
+      const ref = photoRefMap.get(row.id);
+      if (ref) item.photo = { visible: true, reference: ref };
+      else if (row.type_code === "PHOTO") item.photo = { visible: false };
       return item;
     });
 

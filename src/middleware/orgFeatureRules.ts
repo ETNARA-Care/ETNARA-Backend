@@ -8,6 +8,11 @@ const RULES: { pattern: RegExp; feature: OrgFeature }[] = [
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/(journey|arrival)(/|$)`), feature: "EN_CAMINO" },
   { pattern: new RegExp(`^/organizations/(${UUID})/operations/journeys$`), feature: "EN_CAMINO" },
   { pattern: new RegExp(`^/organizations/(${UUID})/me/location-consent$`), feature: "EN_CAMINO" },
+  // Activity photos (115/116): upload, review, image, consents.
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-events/${UUID}/photo$`), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
 ];
 
 export function gatedFeatureFor(path: string): { organizationId: string; feature: OrgFeature } | null {
