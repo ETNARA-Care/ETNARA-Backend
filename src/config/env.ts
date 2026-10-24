@@ -60,6 +60,17 @@ const envSchema = z.object({
     .default("15728640")
     .transform((value) => Number.parseInt(value, 10))
     .pipe(z.number().int().positive().max(20 * 1024 * 1024)),
+  // Phone linking + SMS recovery (migration 117). OFF until a provider is contracted and approved.
+  PHONE_VERIFICATION_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  // "test" keeps codes in memory for local verification only and is refused in production.
+  SMS_PROVIDER: z.enum(["disabled", "test", "twilio_verify"]).default("disabled"),
+  PHONE_CODE_SECRET: z.string().min(32).optional(),
+  SMS_DAILY_CAP: z.string().default("200").transform((v) => Number.parseInt(v, 10)).pipe(z.number().int().positive().max(100000)),
+  // Accounts created from this date on must link a phone (staff); older ones are only reminded.
+  PHONE_REQUIRED_SINCE: z.string().datetime({ offset: true }).optional(),
+  TWILIO_ACCOUNT_SID: z.string().regex(/^AC[0-9a-f]{32}$/).optional(),
+  TWILIO_AUTH_TOKEN: z.string().min(16).optional(),
+  TWILIO_VERIFY_SERVICE_SID: z.string().regex(/^VA[0-9a-f]{32}$/).optional(),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_SENDER_ADDRESS: z.string().email().default("invitations@etnara.care"),
   EMAIL_SENDER_NAME: z.string().default("ETNARA Care"),
