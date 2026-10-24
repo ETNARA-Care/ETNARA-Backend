@@ -1,4 +1,4 @@
-# Rollback — SmartMatch fixes (migrations 110 and 111)
+# Rollback — SmartMatch fixes (migrations 110, 111 and 112)
 
 ## Rule
 Migration **111 is never rolled back.** It removed PUBLIC's access to
@@ -9,10 +9,10 @@ No step here grants anything on that table to PUBLIC. The API connects as
 ## 1. Code-only rollback (recommended)
 1. Railway → `etnara-care-backend` → redeploy the previous deployment (`8274cce`).
 2. GitHub Pages → revert the frontend PR (#221).
-3. Leave 110 and 111 applied. The previous backend works with both (tested:
-   `verifySmartMatchFixesRollback` RB4).
+3. Leave 110, 111 and 112 applied. The previous backend works with them (it
+   does not call the new functions).
 
-## 2. Database rollback of 110 (only if its objects must go)
+## 2. Database rollback of 110 and 112 (only if their objects must go)
 1. Do step 1 first.
 2. Note the PITR recovery time.
 3. As the database owner: `psql "$MIGRATIONS_DATABASE_URL" -v ON_ERROR_STOP=1 -f ops/110_111_smartmatch_fixes.rollback.sql`
@@ -20,7 +20,7 @@ No step here grants anything on that table to PUBLIC. The API connects as
    - overnight availability windows exist (the agency must edit them first);
    - PUBLIC holds any privilege on `password_reset_tokens`;
    - `app_runtime` is missing SELECT/INSERT/UPDATE on it.
-5. Roll forward later by redeploying the new backend: the pre-deploy applies 110 again.
+5. Roll forward later by redeploying the new backend: the pre-deploy applies 110 and 112 again.
 
 ## 3. Password recovery fails after a deploy or rollback
 Symptom: `/auth/password-reset/*` returns 500, logs show `permission denied for table password_reset_tokens`.

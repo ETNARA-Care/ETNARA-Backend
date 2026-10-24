@@ -369,16 +369,16 @@ async function main() {
       req.status === 200 && issued >= 1 && conf.status === 200 && loginNew.status === 200 && loginOld.status === 401 && reuse.status >= 400 && reuse.status < 500,
       `request=${req.status} tokens=${issued} confirm=${conf.status} new=${loginNew.status} old=${loginOld.status} reuse=${reuse.status}`);
 
-    // ================================================================ M: caregiver in two agencies (CURRENT scope, documented)
-    // The schedule protection is per agency: each agency checks only its own
-    // shifts and SmartMatch visits for its own membership of the caregiver.
-    // These checks pin that scope (and the isolation) so a future cross-agency
-    // check is a deliberate, reviewed change. See the PR report, section M.
+    // ================================================================ M: caregiver in two agencies (layer 1, migration 112)
+    // When SHE accepts a shift, her confirmed commitments in every agency she
+    // works for are checked; only she gets the answer. Agencies learn nothing.
     const multi = await person("multi", orgA, ["WORKER"], true);
     const multiWorker = (await q<{ id: string }>(`SELECT worker_id AS id FROM organization_worker_memberships WHERE id=$1`, [multi.owm])).rows[0].id;
     const mB = (await q<{ id: string }>(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [multi.userId, orgB])).rows[0].id;
     await q(`INSERT INTO user_roles (organization_membership_id,organization_id,role_id) SELECT $1,$2,id FROM roles WHERE code='WORKER'`, [mB, orgB]);
     const multiOwmB = (await q<{ id: string }>(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,'active','caregiver') RETURNING id`, [multiWorker, orgB])).rows[0].id;
+    await q(`INSERT INTO worker_availability_settings (organization_worker_membership_id,organization_id,timezone) VALUES ($1,$2,'America/Puerto_Rico')`, [multiOwmB, orgB]);
+    for (let d = 0; d < 7; d++) await q(`INSERT INTO worker_weekly_availability (organization_worker_membership_id,organization_id,weekday,start_time,end_time) VALUES ($1,$2,$3,'00:00','23:59')`, [multiOwmB, orgB, d]);
     const loginMulti = async (orgId: string) => {
       const r = await call("POST", "/auth/login", "", { email: multi.email, password });
       await call("POST", "/me/active-organization", r.body.token, { organizationId: orgId });
@@ -386,17 +386,32 @@ async function main() {
     };
     const multiA = await loginMulti(orgA); const multiB = await loginMulti(orgB);
     const rB = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name,status) VALUES ($1,'Sintetico','AgenciaB','active') RETURNING id`, [orgB])).rows[0].id;
-    const dm = nextWeekday(4, 4);
-    const shA = await regularShift(pr(dm, "10:00"), pr(dm, "14:00"));
-    const asA = await assign(shA, multi);
-    const accA = await call("POST", `/organizations/${orgA}/me/shifts/${shA}/respond`, multiA, { decision: "accepted" });
-    const shB = await call("POST", `/organizations/${orgB}/shifts`, B.admin.token, { careRecipientId: rB, scheduledStart: pr(dm, "11:00").toISOString(), scheduledEnd: pr(dm, "13:00").toISOString() });
-    const asB = await call("POST", `/organizations/${orgB}/shifts/${shB.body.shift?.id}/assignments`, B.admin.token, { organizationWorkerMembershipId: multiOwmB });
-    const accB = await call("POST", `/organizations/${orgB}/me/shifts/${shB.body.shift?.id}/respond`, multiB, { decision: "accepted" });
-    check("M1 CURRENT SCOPE (known gap): agency B can assign, and the caregiver accept, a shift that overlaps her accepted shift at agency A",
-      asA.status === 201 && accA.status < 300 && asB.status === 201 && accB.status < 300, `A assign=${asA.status} accept=${accA.status} | B assign=${asB.status} accept=${accB.status}`);
-    const bLeak = JSON.stringify([asB.body, shB.body]);
-    const bSeesA = await (async () => {
+    /** A shift at agency A or B assigned to the caregiver (pending until she answers). */
+    async function offered(orgId: string, start: Date, end: Date) {
+      const adminToken = orgId === orgA ? A.admin1.token : B.admin.token;
+      const s = await call("POST", `/organizations/${orgId}/shifts`, adminToken, { careRecipientId: orgId === orgA ? rA : rB, scheduledStart: start.toISOString(), scheduledEnd: end.toISOString() });
+      if (s.status !== 201) throw new Error(`shift ${s.status} ${JSON.stringify(s.body)}`);
+      const id = s.body.shift.id as string;
+      const a = await call("POST", `/organizations/${orgId}/shifts/${id}/assignments`, adminToken, { organizationWorkerMembershipId: orgId === orgA ? multi.owm : multiOwmB });
+      if (a.status !== 201) throw new Error(`assign ${a.status} ${JSON.stringify(a.body)}`);
+      return id;
+    }
+    const respond = (orgId: string, shiftId: string, decision: "accepted" | "rejected") =>
+      call("POST", `/organizations/${orgId}/me/shifts/${shiftId}/respond`, orgId === orgA ? multiA : multiB, { decision });
+    const status = async (shiftId: string) => (await q<{ s: string }>(`SELECT a.response_status::text s FROM assignments a WHERE a.shift_id=$1 ORDER BY created_at DESC LIMIT 1`, [shiftId])).rows[0]?.s;
+    const MSG = "MY_SCHEDULE_CONFLICT";
+    const dm = nextWeekday(4, 4);              // a Thursday
+
+    const shA = await offered(orgA, pr(dm, "10:00"), pr(dm, "14:00"));
+    const accA = await respond(orgA, shA, "accepted");
+    const shB = await offered(orgB, pr(dm, "11:00"), pr(dm, "13:00"));
+    const accB = await respond(orgB, shB, "accepted");
+    check("M1 she cannot accept at agency B a shift that overlaps the one she accepted at agency A (409, still pending)",
+      accA.status === 200 && accB.status === 409 && accB.body.error === MSG && (await status(shB)) === "pending", `A=${accA.status} B=${accB.status} ${accB.body.error}`);
+    const bText = JSON.stringify(accB.body);
+    const bNotices = await call("GET", "/me/notifications?limit=100", B.admin.token);
+    const bAssign = await call("GET", `/organizations/${orgB}/shifts/${shB}/assignments`, B.admin.token);
+    const bProbe = await (async () => {
       const rt = new pg.Client({ connectionString: process.env.DATABASE_URL }); await rt.connect();
       try {
         await rt.query("BEGIN");
@@ -404,13 +419,81 @@ async function main() {
         const shifts = (await rt.query(`SELECT 1 FROM shifts WHERE id=$1`, [shA])).rowCount;
         const asg = (await rt.query(`SELECT 1 FROM assignments WHERE organization_worker_membership_id=$1`, [multi.owm])).rowCount;
         const rec = (await rt.query(`SELECT 1 FROM care_recipients WHERE id=$1`, [rA])).rowCount;
-        const fn = (await rt.query<{ busy: boolean }>(`SELECT app_smartmatch_worker_has_commitment($1,$2,$3,NULL) busy`, [multi.owm, pr(dm, "00:00"), pr(dm, "23:00")])).rows[0].busy;
+        // The helper has no person argument: from agency B it can only speak about the caller.
+        const fn = (await rt.query<{ busy: boolean }>(`SELECT app_my_confirmed_commitment_overlaps($1,$2,NULL) busy`, [pr(dm, "00:00"), pr(dm, "23:00")])).rows[0].busy;
         await rt.query("ROLLBACK");
         return { shifts, asg, rec, fn };
       } finally { await rt.end(); }
     })();
-    check("M2 isolation holds: agency B learns nothing about agency A (no shift, assignment, patient or busy signal, in the API or by RLS)",
-      !bLeak.includes(shA) && !bLeak.includes(rA) && bSeesA.shifts === 0 && bSeesA.asg === 0 && bSeesA.rec === 0 && bSeesA.fn === false, JSON.stringify(bSeesA));
+    const publicExec112 = (await q<{ p: boolean }>(`SELECT has_function_privilege('public','app_my_confirmed_commitment_overlaps(timestamptz,timestamptz,uuid)','EXECUTE') p`)).rows[0].p;
+    check("M2 isolation: the answer reaches only her; agency B learns nothing about agency A (API, notices, RLS, helper)",
+      !bText.includes(shA) && !bText.includes(rA) && !/10:00|14:00|Fix/.test(bText)
+        && !JSON.stringify(bNotices.body).includes(shA) && !JSON.stringify(bAssign.body).includes(shA)
+        && bProbe.shifts === 0 && bProbe.asg === 0 && bProbe.rec === 0 && bProbe.fn === false && !publicExec112,
+      JSON.stringify({ ...bProbe, publicExec112 }));
+    const rejB = await respond(orgB, shB, "rejected");
+    check("M3 she can still decline that shift (rejection is never blocked)", rejB.status === 200 && (await status(shB)) === "rejected", `${rejB.status}`);
+
+    // Pending offers never block; rejected and cancelled shifts free the time.
+    const pA = await offered(orgA, pr(dm, "16:00"), pr(dm, "18:00"));
+    const pB = await offered(orgB, pr(dm, "16:30"), pr(dm, "17:30"));
+    const accPA = await respond(orgA, pA, "accepted");
+    check("M4 an overlapping PENDING offer at another agency does not block accepting (offers are not commitments)", accPA.status === 200, `${accPA.status} ${accPA.body.error ?? ""}`);
+    const accPB = await respond(orgB, pB, "accepted");
+    check("M5 …but once she accepted one, the other agency's overlapping offer can no longer be accepted", accPB.status === 409 && accPB.body.error === MSG, `${accPB.status}`);
+    const cancel = await call("POST", `/organizations/${orgA}/shifts/${pA}/cancel`, A.admin1.token, {});
+    const accAfterCancel = await respond(orgB, pB, "accepted");
+    check("M6 when agency A cancels its shift, she can accept agency B's overlapping one", cancel.status === 200 && accAfterCancel.status === 200, `cancel=${cancel.status} accept=${accAfterCancel.status} ${accAfterCancel.body.error ?? ""}`);
+    await call("POST", `/organizations/${orgA}/shifts/${shA}/cancel`, A.admin1.token, {});
+    const rjA = await offered(orgA, pr(dm, "19:00"), pr(dm, "20:00"));
+    const rejA = await respond(orgA, rjA, "rejected");
+    const rjB = await offered(orgB, pr(dm, "19:15"), pr(dm, "19:45"));
+    const accRjB = await respond(orgB, rjB, "accepted");
+    check("M7 a shift she declined at agency A is not a commitment: she can accept an overlapping one at agency B",
+      rejA.status === 200 && accRjB.status === 200, `reject=${rejA.status} accept=${accRjB.status} ${accRjB.body.error ?? ""}`);
+
+    // Overnight shifts.
+    const dn = addDays(dm, 2);
+    const nightA = await offered(orgA, pr(dn, "22:00"), pr(addDays(dn, 1), "06:00"));
+    await respond(orgA, nightA, "accepted");
+    const earlyB = await offered(orgB, pr(addDays(dn, 1), "03:00"), pr(addDays(dn, 1), "05:00"));
+    const afterB = await offered(orgB, pr(addDays(dn, 1), "06:00"), pr(addDays(dn, 1), "08:00"));
+    const accEarly = await respond(orgB, earlyB, "accepted");
+    const accAfter = await respond(orgB, afterB, "accepted");
+    check("M8 overnight: a 22:00->06:00 shift at A blocks 03:00-05:00 at B; 06:00-08:00 right after is fine",
+      accEarly.status === 409 && accEarly.body.error === MSG && accAfter.status === 200, `03-05=${accEarly.status} 06-08=${accAfter.status}`);
+
+    // An approved SmartMatch visit (no shift yet) is a confirmed commitment.
+    const SB = `/organizations/${orgB}/smartmatch`;
+    const dv = addDays(dm, 5);
+    const oppB = await call("POST", `${SB}/opportunities`, B.admin.token, { visibility: "INTERNAL", regionLabel: "Caguas", roleLabel: "Cuidador/a", startsAt: pr(dv, "14:00").toISOString(), endsAt: pr(dv, "18:00").toISOString() });
+    await call("POST", `${SB}/opportunities/${oppB.body.opportunity?.id}/publish`, B.admin.token);
+    const appB = await call("POST", `${SB}/opportunities/${oppB.body.opportunity?.id}/applications`, multiB, consent);
+    const apprB = await call("POST", `${SB}/applications/${appB.body.application?.id}/decision`, B.admin.token, { decision: "APPROVE", confirm: true });
+    const smA = await offered(orgA, pr(dv, "15:00"), pr(dv, "17:00"));
+    const accSmA = await respond(orgA, smA, "accepted");
+    check("M9 SmartMatch: a visit approved for her at agency B blocks accepting an overlapping shift at agency A",
+      apprB.status === 200 && accSmA.status === 409 && accSmA.body.error === MSG, `approve=${apprB.status} ${apprB.body.error ?? ""} accept=${accSmA.status}`);
+    const mkB = await call("POST", `${SB}/opportunities/${oppB.body.opportunity?.id}/shift`, B.admin.token, { careRecipientId: rB });
+    const smShiftB = (await q<{ id: string | null }>(`SELECT shift_id AS id FROM smartmatch_opportunities WHERE id=$1`, [oppB.body.opportunity?.id])).rows[0]?.id;
+    const accSmB = smShiftB ? await respond(orgB, smShiftB, "accepted") : { status: 0, body: {} as Json };
+    check("M10 SmartMatch: once agency B creates the shift of that visit she accepts it normally (its own visit does not block it)",
+      mkB.status === 201 && accSmB.status === 200, `shift=${mkB.status} ${mkB.body.error ?? ""} accept=${accSmB.status} ${accSmB.body.error ?? ""}`);
+
+    // Concurrency: the same person accepts two overlapping shifts at two agencies at the same instant.
+    const dc = addDays(dm, 7);
+    let exactlyOne = 0; const roundsDetail: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const start = pr(dc, `${String(6 + i * 2).padStart(2, "0")}:00`); const end = new Date(start.getTime() + 90 * 60e3);
+      const cA = await offered(orgA, start, end); const cB = await offered(orgB, new Date(start.getTime() + 30 * 60e3), new Date(end.getTime() + 30 * 60e3));
+      const [ra, rb] = await Promise.all([respond(orgA, cA, "accepted"), respond(orgB, cB, "accepted")]);
+      const accepted = [ra, rb].filter((r) => r.status === 200).length;
+      const conflicts = [ra, rb].filter((r) => r.status === 409 && r.body.error === MSG).length;
+      if (accepted === 1 && conflicts === 1) exactlyOne++;
+      roundsDetail.push(`${ra.status}/${rb.status}`);
+    }
+    check("M11 6 rounds: accepting at agency A and agency B at the same instant -> exactly one accepted, the other told only to her",
+      exactlyOne === 6, roundsDetail.join(" "));
 
     check("Z1 no server error (5xx) in the whole run", serverErrors.length === 0, serverErrors.join(" | "));
   } finally {

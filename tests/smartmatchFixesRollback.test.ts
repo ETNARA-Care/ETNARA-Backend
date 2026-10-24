@@ -9,7 +9,7 @@ describe("SmartMatch fixes rollback keeps password_reset_tokens restricted", () 
   it("never grants to PUBLIC and never unregisters 111", () => {
     expect(code).not.toMatch(/TO\s+PUBLIC/i);
     expect(code).not.toMatch(/DELETE FROM schema_migrations[^;]*111/i);
-    expect(code).toMatch(/DELETE FROM schema_migrations WHERE filename = '110_schedule_commitments_and_overnight_availability\.sql';/);
+    expect(code).toMatch(/WHERE filename IN \('110_schedule_commitments_and_overnight_availability\.sql', '112_caregiver_cross_agency_acceptance\.sql'\);/);
   });
 
   it("checks the privileges before and after, inside one transaction", () => {

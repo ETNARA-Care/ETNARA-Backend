@@ -48,6 +48,24 @@ export class AssignmentNotFoundError extends Error {
     this.name = "AssignmentNotFoundError";
   }
 }
+/** The caregiver already accepted another shift (any of her agencies) at that time. */
+export class MyScheduleConflictError extends Error {
+  constructor() {
+    super("MY_SCHEDULE_CONFLICT");
+    this.name = "MyScheduleConflictError";
+  }
+}
+
+/**
+ * Serialize a caregiver's own acceptances across ALL her agencies until the
+ * end of the transaction: the key is the person (workers.id), not the
+ * per-agency membership, so two acceptances at different agencies at the same
+ * instant cannot both pass app_my_confirmed_commitment_overlaps (112).
+ */
+async function lockPersonSchedule(trx: Trx, workerId: string): Promise<void> {
+  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${"person-schedule:" + workerId}, 0))`.execute(trx);
+}
+
 export class AssignmentAlreadyRespondedError extends Error {
   constructor() {
     super("ASSIGNMENT_ALREADY_RESPONDED");
@@ -322,10 +340,10 @@ export async function respondToMyAssignment(
   try {
     saved = await withTenantContext({ userId, organizationId }, async (trx) => {
     responseStage = "load_assignment";
-    const result = await sql<AssignmentRow & { worker_user_id: string | null; room_id: string | null }>`
+    const result = await sql<AssignmentRow & { worker_user_id: string | null; room_id: string | null; worker_id: string }>`
       SELECT a.id, a.organization_id, a.shift_id, a.organization_worker_membership_id,
              a.care_recipient_id, a.role_in_shift, a.response_status, a.responded_at,
-             a.response_reason, a.created_at, w.user_id AS worker_user_id, s.room_id
+             a.response_reason, a.created_at, w.user_id AS worker_user_id, s.room_id, w.id AS worker_id
       FROM assignments a
       JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id
       JOIN workers w ON w.id = owm.worker_id
@@ -343,11 +361,23 @@ export async function respondToMyAssignment(
     if (assignment.response_status !== "pending") throw new AssignmentAlreadyRespondedError();
 
     responseStage = "load_shift";
-    const shift = await sql<{ status: string }>`
-      SELECT status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
+    const shift = await sql<{ status: string; scheduled_start: string; scheduled_end: string }>`
+      SELECT status, scheduled_start, scheduled_end FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
     if (!shift.rows[0]) throw new ShiftNotFoundError();
     if (shift.rows[0].status === "cancelled") throw new ShiftCancelledError();
+
+    if (input.decision === "accepted") {
+      // Layer 1: her own confirmed commitments in every agency she works for.
+      // Only she learns the result; no agency sees anything of another.
+      responseStage = "check_my_schedule";
+      await lockPersonSchedule(trx, assignment.worker_id);
+      const overlap = await sql<{ busy: boolean }>`
+        SELECT public.app_my_confirmed_commitment_overlaps(
+          ${shift.rows[0].scheduled_start}::timestamptz, ${shift.rows[0].scheduled_end}::timestamptz, ${shiftId}::uuid) AS busy
+      `.execute(trx);
+      if (overlap.rows[0]?.busy) throw new MyScheduleConflictError();
+    }
 
     if (input.decision === "rejected") {
       responseStage = "update_shift";

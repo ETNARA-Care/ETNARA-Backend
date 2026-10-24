@@ -1,10 +1,10 @@
--- ROLLBACK of migration 110 (SmartMatch fixes). Migration 111 is NOT rolled back.
+-- ROLLBACK of migrations 112 and 110 (SmartMatch fixes). Migration 111 is NOT rolled back.
 --
 -- Run ONLY together with redeploying the previous backend (8274cce), as the
--- database owner, in one go. Never needed for a code-only rollback: 110 and 111
--- are compatible with the previous backend (it simply does not call the new
+-- database owner, in one go. Never needed for a code-only rollback: 110, 111 and
+-- 112 are compatible with the previous backend (it simply does not call the new
 -- functions). Roll back the CODE first; run this only if the database objects
--- of 110 themselves must go. Procedure: ops/110_111_smartmatch_fixes.rollback.md
+-- of 110/112 themselves must go. Procedure: ops/110_111_smartmatch_fixes.rollback.md
 --
 -- Security: migration 111 (password_reset_tokens reachable by app_runtime only)
 -- is a security fix and stays. This script never grants anything to PUBLIC and
@@ -40,17 +40,21 @@ BEGIN
   END IF;
 END $$;
 
--- 2. 110: functions (unused by the previous backend) and the constraint.
+-- 2. 112: the caregiver's own cross-agency check (unused by the previous backend).
+DROP FUNCTION IF EXISTS public.app_my_confirmed_commitment_overlaps(timestamptz, timestamptz, uuid);
+
+-- 3. 110: functions (unused by the previous backend) and the constraint.
 DROP FUNCTION IF EXISTS public.app_smartmatch_worker_has_commitment(uuid, timestamptz, timestamptz, uuid);
 DROP FUNCTION IF EXISTS public.app_availability_covers(uuid, timestamptz, timestamptz);
 ALTER TABLE worker_weekly_availability DROP CONSTRAINT IF EXISTS worker_weekly_availability_nonzero;
 ALTER TABLE worker_weekly_availability ADD CONSTRAINT worker_weekly_availability_check CHECK (start_time < end_time);
 
--- 3. Only 110 is unregistered (re-applied by the next deploy if rolled forward).
--- 111 stays registered and applied.
-DELETE FROM schema_migrations WHERE filename = '110_schedule_commitments_and_overnight_availability.sql';
+-- 4. Only 110 and 112 are unregistered (re-applied by the next deploy if rolled
+-- forward). 111 stays registered and applied.
+DELETE FROM schema_migrations
+ WHERE filename IN ('110_schedule_commitments_and_overnight_availability.sql', '112_caregiver_cross_agency_acceptance.sql');
 
--- 4. Postconditions, same transaction: nothing reopened to PUBLIC.
+-- 5. Postconditions, same transaction: nothing reopened to PUBLIC.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) a

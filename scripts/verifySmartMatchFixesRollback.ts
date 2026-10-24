@@ -1,5 +1,5 @@
 /**
- * Rollback procedure of the SmartMatch fixes (ops/110_111_smartmatch_fixes.rollback.sql):
+ * Rollback procedure of the SmartMatch fixes (ops/110_111_smartmatch_fixes.rollback.sql, 110 + 112):
  * it never reopens password_reset_tokens to PUBLIC, keeps 111, refuses to run
  * in unsafe states, password recovery keeps working afterwards, and 110 rolls
  * forward again. Works on its OWN temporary database (created and dropped here).
@@ -23,6 +23,7 @@ const check = (name: string, pass: boolean, detail = "") => results.push({ name,
 const ROLLBACK = readFileSync("ops/110_111_smartmatch_fixes.rollback.sql", "utf8");
 const M110 = "110_schedule_commitments_and_overnight_availability.sql";
 const M111 = "111_password_reset_tokens_runtime_only.sql";
+const M112 = "112_caregiver_cross_agency_acceptance.sql";
 
 async function main() {
   const tag = randomUUID().slice(0, 8).replace(/-/g, "");
@@ -42,7 +43,7 @@ async function main() {
     bootstrap();
     await db.connect();
     const q = <T extends pg.QueryResultRow = pg.QueryResultRow>(s: string, p: unknown[] = []) => db.query<T>(s, p);
-    const state = async () => (await q<{ pub: boolean; sel: boolean; ins: boolean; upd: boolean; del: boolean; m110: boolean; m111: boolean; fns: number; oldc: boolean; newc: boolean }>(`
+    const state = async () => (await q<{ pub: boolean; sel: boolean; ins: boolean; upd: boolean; del: boolean; m110: boolean; m111: boolean; m112: boolean; fns: number; oldc: boolean; newc: boolean }>(`
       SELECT EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid='password_reset_tokens'::regclass AND a.grantee=0) pub,
              has_table_privilege('app_runtime','password_reset_tokens','SELECT') sel,
              has_table_privilege('app_runtime','password_reset_tokens','INSERT') ins,
@@ -50,9 +51,10 @@ async function main() {
              has_table_privilege('app_runtime','password_reset_tokens','DELETE') del,
              EXISTS (SELECT 1 FROM schema_migrations WHERE filename=$1) m110,
              EXISTS (SELECT 1 FROM schema_migrations WHERE filename=$2) m111,
-             (SELECT count(*)::int FROM pg_proc WHERE proname IN ('app_smartmatch_worker_has_commitment','app_availability_covers')) fns,
+             EXISTS (SELECT 1 FROM schema_migrations WHERE filename=$3) m112,
+             (SELECT count(*)::int FROM pg_proc WHERE proname IN ('app_smartmatch_worker_has_commitment','app_availability_covers','app_my_confirmed_commitment_overlaps')) fns,
              EXISTS (SELECT 1 FROM pg_constraint WHERE conname='worker_weekly_availability_check') oldc,
-             EXISTS (SELECT 1 FROM pg_constraint WHERE conname='worker_weekly_availability_nonzero') newc`, [M110, M111])).rows[0];
+             EXISTS (SELECT 1 FROM pg_constraint WHERE conname='worker_weekly_availability_nonzero') newc`, [M110, M111, M112])).rows[0];
     const run = async () => { try { await q(ROLLBACK); return "ok"; } catch (e) { await q("ROLLBACK").catch(() => undefined); return (e as Error).message; } };
     const restricted = (s: Awaited<ReturnType<typeof state>>) => !s.pub && s.sel && s.ins && s.upd && !s.del;
 
@@ -81,12 +83,12 @@ async function main() {
     const noUpd = await state();
     await q(`GRANT UPDATE ON password_reset_tokens TO app_runtime`);
     check("RB2 it refuses to run if PUBLIC holds any privilege or app_runtime lost access (nothing changed)",
-      /PUBLIC holds privileges/.test(r2) && /app_runtime lacks/.test(r3) && pubAfter.m110 && pubAfter.fns === 2 && noUpd.m110 && noUpd.fns === 2, `${r2.slice(0, 40)} | ${r3.slice(0, 40)}`);
+      /PUBLIC holds privileges/.test(r2) && /app_runtime lacks/.test(r3) && pubAfter.m110 && pubAfter.fns === 3 && noUpd.m110 && noUpd.fns === 3, `${r2.slice(0, 40)} | ${r3.slice(0, 40)}`);
 
     const r4 = await run();
     const after4 = await state();
-    check("RB3 the rollback removes 110 only: functions gone, old constraint back, 110 unregistered",
-      r4 === "ok" && after4.fns === 0 && after4.oldc && !after4.newc && !after4.m110, `${r4} ${JSON.stringify(after4)}`);
+    check("RB3 the rollback removes 110 and 112 only: functions gone, old constraint back, both unregistered",
+      r4 === "ok" && after4.fns === 0 && after4.oldc && !after4.newc && !after4.m110 && !after4.m112, `${r4} ${JSON.stringify(after4)}`);
     check("RB4 after the rollback 111 stays: PUBLIC has nothing, app_runtime keeps SELECT/INSERT/UPDATE (no DELETE)",
       restricted(after4) && after4.m111, JSON.stringify({ pub: after4.pub, sel: after4.sel, ins: after4.ins, upd: after4.upd, del: after4.del, m111: after4.m111 }));
 
@@ -125,8 +127,8 @@ async function main() {
     bootstrap();
     const fwd = await state();
     await q(`INSERT INTO worker_weekly_availability (organization_worker_membership_id,organization_id,weekday,start_time,end_time) VALUES ($1,$2,5,'22:00','06:00')`, [owm, orgId]);
-    check("RB6 roll forward: the next deploy applies 110 again (overnight windows accepted) and 111 stays effective",
-      fwd.m110 && fwd.fns === 2 && fwd.newc && !fwd.oldc && restricted(fwd) && fwd.m111, JSON.stringify(fwd));
+    check("RB6 roll forward: the next deploy applies 110 and 112 again (overnight windows accepted) and 111 stays effective",
+      fwd.m110 && fwd.m112 && fwd.fns === 3 && fwd.newc && !fwd.oldc && restricted(fwd) && fwd.m111, JSON.stringify(fwd));
   } finally {
     if (httpServer) httpServer.close();
     if (pool) await pool.end().catch(() => undefined);
