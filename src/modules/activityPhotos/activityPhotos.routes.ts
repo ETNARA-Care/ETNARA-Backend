@@ -28,7 +28,10 @@ const formBody = express.raw({ type: [...IMAGE_TYPES, "application/pdf"], limit:
 function fail(err: unknown, req: Request, res: Response): void {
   if (err instanceof PhotoError) { res.status(err.status).json({ error: err.code }); return; }
   if (err instanceof UnsupportedImageError) {
-    res.status(err.message === "PHOTO_UNREADABLE" || err.message === "PHOTO_TOO_SMALL" ? 422 : 415).json({ error: err.message });
+    const status = err.message === "PHOTO_BUSY" ? 503
+      : ["PHOTO_UNREADABLE", "PHOTO_TOO_SMALL", "PHOTO_TOO_LARGE"].includes(err.message) ? 422 : 415;
+    if (status === 503) res.setHeader("Retry-After", "10");
+    res.status(status).json({ error: err.message });
     return;
   }
   if (err instanceof PhotoStorageNotConfiguredError) { res.status(503).json({ error: "PHOTO_STORAGE_NOT_CONFIGURED" }); return; }

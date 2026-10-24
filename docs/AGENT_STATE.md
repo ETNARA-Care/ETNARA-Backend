@@ -2,6 +2,20 @@
 
 ## Current Status
 
+## 2026-10-24 — Activity photos PR 2: upload, review, family viewing, HEIC (claude/activity-photos-upload, #208 draft)
+
+- 116: one photo per activity, family access log (managers read), checked functions for upload, view,
+  consent form and review with optimistic concurrency (`expectedStatus` → 409 PHOTO_STATUS_CHANGED).
+- Separate private bucket `etnara-activity-photos` (Railway, ams) created 2026-10-24 with Rafa's
+  approval; `PHOTO_STORAGE_*` set on the backend only as references (no redeploy). No public links,
+  no presigned URLs; images streamed by the backend with permission checks on every request.
+- Server-side sanitising: JPEG/PNG/WebP/AVIF via sharp; iPhone HEIC/HEIF via libheif (WASM, heic-decode
+  2.1.0) in a worker thread (2 at once + 8 queued, then 503 PHOTO_BUSY; 30 s timeout; > 50 MP refused
+  before decoding). Output always re-encoded JPEG, no EXIF/GPS/XMP/ICC (checked).
+- Tests (synthetic images only, fixtures in tests/fixtures/*.heic): upload verifier 25/25, security
+  31/31, npm test 500/500, full regression green. ACTIVITY_PHOTOS off everywhere; 180-day deletion off.
+- Next: Rafa's authorization to merge/deploy #208; frontend PR 3 (Caregiver Portal capture/upload).
+
 ## 2026-10-23 — Security & production-readiness audit, SmartMatch Gates 4-7 (claude/smartmatch-gate1-rls)
 
 - Three independent reviews (RLS/permissions, integrity/concurrency, frontend/deps) + own checks of

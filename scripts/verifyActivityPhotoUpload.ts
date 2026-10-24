@@ -8,6 +8,7 @@
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  *   optional: PHOTO_TEST_S3_PORT (default 4568); requires `moto_server` on PATH.
  */
+import { readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -153,7 +154,7 @@ async function main() {
     (await q<{ id: string }>(`INSERT INTO care_events (organization_id,shift_id,care_recipient_id,organization_worker_membership_id,care_event_type_id,note_text,occurred_at,created_at)
       VALUES ($1,$2,$3,$4,$5,'Paseo sintetico',now()-make_interval(hours=>$6::int),now()-make_interval(hours=>$6::int)) RETURNING id`, [o, shift, rec, owm, noteType, ageHours])).rows[0].id;
   const ev = { a: await activity(orgA, sA1, r1, A.cg1.owm!), b: await activity(orgA, sA1, r1, A.cg1.owm!), c: await activity(orgA, sA1, r1, A.cg1.owm!),
-    d: await activity(orgA, sA1, r1, A.cg1.owm!), race: await activity(orgA, sA1, r1, A.cg1.owm!), old: await activity(orgA, sA1, r1, A.cg1.owm!, 13),
+    d: await activity(orgA, sA1, r1, A.cg1.owm!), race: await activity(orgA, sA1, r1, A.cg1.owm!), heic: await activity(orgA, sA1, r1, A.cg1.owm!), old: await activity(orgA, sA1, r1, A.cg1.owm!, 13),
     r2: await activity(orgA, sA2, r2, A.cg2.owm!), bEv: await activity(orgB, sB, rB, B.cg.owm!) };
   for (const p of [...Object.values(A), ...Object.values(B)]) {
     const r = await call("POST", "/auth/login", "", { email: p.email, password });
@@ -239,10 +240,20 @@ async function main() {
       huge: await upload(A.cg1, ev.race, Buffer.concat([jpeg, randomBytes(7 * 1024 * 1024)]), "image/jpeg"),
       svg: await upload(A.cg1, ev.race, Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), "image/svg+xml"),
     };
-    check("U5 rejected by content, not by declared type: HEIC 415, script-as-jpeg 415, truncated 422, empty 400, too large 413, SVG 415 — and nothing left in the bucket",
-      bad.heic.status === 415 && bad.heic.body.error === "PHOTO_HEIC_NOT_SUPPORTED" && bad.text.status === 415 && bad.truncated.status === 422
+    check("U5 rejected by content, not by declared type: corrupt HEIC 422, script-as-jpeg 415, truncated 422, empty 400, too large 413, SVG 415 — and nothing left in the bucket",
+      bad.heic.status === 422 && bad.heic.body.error === "PHOTO_UNREADABLE" && bad.text.status === 415 && bad.truncated.status === 422
         && bad.empty.status === 400 && bad.huge.status === 413 && bad.svg.status === 415 && (await objects(`activity-photos/${orgA}/${r1}/`)) === 4,
       Object.entries(bad).map(([k, v]) => `${k}=${v.status}`).join(" ") + ` objects=${await objects(`activity-photos/${orgA}/${r1}/`)}`);
+    // Synthetic iPhone HEIC (generated pixels, fake camera, fake GPS in EXIF and XMP).
+    const iphone = readFileSync("tests/fixtures/synthetic-gps.heic");
+    const heicUp = await upload(A.cg1, ev.heic, iphone, "image/heic");
+    const heicImg = heicUp.status === 201 ? await image(A.cg1, heicUp.body.photo.id) : { status: 0, bytes: Buffer.alloc(0) };
+    const heicMeta = heicImg.status === 200 ? await sharp(heicImg.bytes).metadata() : null;
+    const heicRaw = heicImg.bytes.toString("latin1");
+    check("U6 iPhone HEIC accepted automatically: converted to JPEG on the server, no EXIF/XMP/GPS, no camera or hidden strings",
+      iphone.toString("latin1").includes("SyntheticPhone") && heicUp.status === 201 && heicMeta?.format === "jpeg" && !heicMeta.exif && !heicMeta.xmp && !heicMeta.icc
+        && !/SyntheticPhone|SyntheticSecret|FakeModel|xmpmeta|GPS/.test(heicRaw) && !heicImg.bytes.includes(Buffer.from([0xff, 0xe1])),
+      `${heicUp.status} ${heicUp.body?.error ?? ""} format=${heicMeta?.format} exif=${Boolean(heicMeta?.exif)}`);
 
     // ---------------------------------------------------------------- id tampering and isolation
     const tamper = {
@@ -275,7 +286,7 @@ async function main() {
 
     // ---------------------------------------------------------------- review → family
     const queue = await call("GET", `${O}/activity-photos?status=pending`, A.admin.token);
-    check("R1 the agency queue lists the 4 pending photos with resident, activity and caregiver", queue.status === 200 && queue.body.photos.length === 4,
+    check("R1 the agency queue lists the 5 pending photos with resident, activity and caregiver", queue.status === 200 && queue.body.photos.length === 5,
       `${queue.status} ${queue.body.photos?.length}`);
     const byCg = await review(A.cg1, photoId, "APPROVE");
     const noReason = await review(A.admin, photoId, "REJECT");
@@ -322,7 +333,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 300));
     const raceObjs = await objects(`activity-photos/${orgA}/${r1}/`);
     check("K1 four simultaneous uploads for one activity: exactly one 201, the rest 409, no orphan object left in the bucket",
-      raceUp.filter((r) => r.status === 201).length === 1 && raceUp.filter((r) => r.status === 409).length === 3 && raceObjs === 5,
+      raceUp.filter((r) => r.status === 201).length === 1 && raceUp.filter((r) => r.status === 409).length === 3 && raceObjs === 6,
       `${raceUp.map((r) => r.status).join(",")} objects=${raceObjs}`);
     const racePhoto = raceUp.find((r) => r.status === 201)!.body.photo.id as string;
     // Both managers are looking at the same «pending» photo.

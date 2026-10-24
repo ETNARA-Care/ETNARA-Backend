@@ -30,8 +30,59 @@ describe("image sanitiser (synthetic images only)", () => {
     expect(out.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("rejects HEIC, non-images and tiny images", async () => {
-    await expect(sanitizeImage(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypheic"), Buffer.alloc(32)]))).rejects.toThrow("PHOTO_HEIC_NOT_SUPPORTED");
+  it("converts iPhone HEIC to JPEG without EXIF, GPS or XMP (synthetic fixture)", async () => {
+    const heic = readFileSync("tests/fixtures/synthetic-gps.heic");
+    expect(detectKind(heic)).toBe("heic");
+    expect(heic.toString("latin1")).toContain("SyntheticPhone");
+    const out = await sanitizeImage(heic);
+    const meta = await sharp(out.body).metadata();
+    expect(meta.format).toBe("jpeg");
+    expect([meta.exif, meta.xmp, meta.iptc, meta.icc]).toEqual([undefined, undefined, undefined, undefined]);
+    expect(out.body.toString("latin1")).not.toMatch(/Synthetic|GPS|xmpmeta/);
+    const { data } = await sharp(out.body).raw().toBuffer({ resolveWithObject: true });
+    expect(data[0]).toBeGreaterThan(200); // left half red: pixels not mirrored
+  });
+
+  it("keeps the iPhone rotation (HEIC irot) in the pixels", async () => {
+    const out = await sanitizeImage(readFileSync("tests/fixtures/synthetic-rotated.heic"));
+    expect([out.width, out.height]).toEqual([240, 320]);
+    const { data, info } = await sharp(out.body).raw().toBuffer({ resolveWithObject: true });
+    const bottom = ((info.height - 3) * info.width + 2) * 3;
+    expect(data[0]).toBeGreaterThan(200); // top red
+    expect(data[bottom + 2]).toBeGreaterThan(200); // bottom blue
+  });
+
+  it("HEIC decoding does not block the server and is limited under load", async () => {
+    const heic = readFileSync("tests/fixtures/synthetic-gps.heic");
+    let ticks = 0;
+    const timer = setInterval(() => { ticks += 1; }, 5);
+    const results = await Promise.allSettled(Array.from({ length: 12 }, () => sanitizeImage(heic)));
+    clearInterval(timer);
+    expect(ticks).toBeGreaterThan(0);
+    const ok = results.filter((r) => r.status === "fulfilled").length;
+    const busy = results.filter((r) => r.status === "rejected" && (r.reason as Error).message === "PHOTO_BUSY").length;
+    expect(ok).toBe(10); // 2 decoding + 8 queued
+    expect(busy).toBe(2);
+    await expect(sanitizeImage(heic)).resolves.toBeDefined(); // the queue drains
+  });
+
+  it("refuses a HEIC that declares more than 50 megapixels before decoding it", async () => {
+    const started = Date.now();
+    await expect(sanitizeImage(readFileSync("tests/fixtures/synthetic-oversize.heic"))).rejects.toThrow("PHOTO_TOO_LARGE");
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("decodes AVIF through sharp", async () => {
+    const avif = await sharp({ create: { width: 64, height: 48, channels: 3, background: "#336699" } }).avif().withExif({ IFD0: { Make: "SyntheticCam" } }).toBuffer();
+    expect(detectKind(avif)).toBe("avif");
+    const out = await sanitizeImage(avif);
+    expect((await sharp(out.body).metadata()).exif).toBeUndefined();
+  });
+
+  it("rejects corrupt HEIC, non-images and tiny images", async () => {
+    await expect(sanitizeImage(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypheic"), Buffer.alloc(32)]))).rejects.toThrow("PHOTO_UNREADABLE");
+    const truncated = readFileSync("tests/fixtures/synthetic-gps.heic").subarray(0, 600);
+    await expect(sanitizeImage(truncated)).rejects.toBeInstanceOf(UnsupportedImageError);
     await expect(sanitizeImage(Buffer.from("hola"))).rejects.toBeInstanceOf(UnsupportedImageError);
     const tiny = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#000" } }).png().toBuffer();
     await expect(sanitizeImage(tiny)).rejects.toThrow("PHOTO_TOO_SMALL");
