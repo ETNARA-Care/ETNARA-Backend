@@ -21,6 +21,8 @@ async function main() {
   if (!runtimePassword) throw new Error("APP_RUNTIME_PASSWORD is required for bootstrap.");
 
   const client = new Client({ connectionString: adminUrl });
+  // Migration summaries meant for the deploy log ("NNN ...": counts only, never personal data).
+  client.on("notice", (n) => { if (/^\d{3} /.test(n.message ?? "")) console.log(`  NOTICE ${n.message}`); });
   await client.connect();
 
   console.log("Aplicando migraciones pendientes (idempotente, no borra ni resetea nada)...");

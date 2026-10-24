@@ -162,3 +162,24 @@ export async function sendPasswordResetEmail(
     return { status: "failed", error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+/**
+ * Security notice after the phone linked to the account changes (migration 117).
+ * Only the last 4 digits; no link that could be phished; tells the person what to do.
+ */
+export async function sendPhoneChangedEmail(recipientEmail: string, last4: string, config: EmailConfig): Promise<EmailDeliveryResult> {
+  if (!config.apiKey) return { status: "failed", error: "EMAIL_NOT_CONFIGURED" };
+  const html = `<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><h1>${escapeHtml(config.senderName)}</h1><p>El teléfono vinculado a tu cuenta cambió. Ahora termina en <strong>${escapeHtml(last4)}</strong>.</p><p>Por seguridad, la recuperación de contraseña por SMS queda pausada 72 horas. Puedes seguir recuperándola por correo.</p><p>Si no hiciste este cambio, recupera tu contraseña por correo de inmediato y avisa a tu agencia.</p></div></body></html>`;
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: `${config.senderName} <${config.senderEmail}>`, to: [recipientEmail], subject: `Tu teléfono en ${config.senderName} cambió`, html }),
+    });
+    if (!response.ok) return { status: "failed", error: `HTTP_${response.status}` };
+    const data = (await response.json().catch(() => ({}))) as { id?: string };
+    return { status: "sent", messageId: data.id };
+  } catch {
+    return { status: "failed", error: "NETWORK" };
+  }
+}

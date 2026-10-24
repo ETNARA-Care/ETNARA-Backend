@@ -2,6 +2,21 @@
 
 ## Current Status
 
+## 2026-10-24 — Teléfono vinculado + recuperación por SMS, backend (claude/phone-verification-backend, apilado sobre PR 0)
+
+- 117: users.phone_verified_at / phone_changed_at / email_verified_at (backfill), sessions.reauthenticated_at;
+  account_phone_challenges (HMAC del código, 10 min, 5 intentos), sms_send_log (límites en la base por número,
+  IP y día, iguales con o sin cuenta), account_security_events (solo últimos 4 dígitos). app_runtime sin privilegios
+  sobre esas tablas: solo funciones SECURITY DEFINER. Invitaciones familiares por teléfono: solo teléfono verificado.
+- API: GET /me/account-security, POST /me/reauthenticate, POST /me/phone/verification(+/confirm),
+  POST /auth/password-reset/sms/request (misma respuesta y tiempo siempre) y /sms/verify (token de 10 min para el
+  confirm existente). Login por teléfono solo si está verificado. Cambio de número: contraseña < 10 min, código al
+  número nuevo, aviso por correo, recuperación por SMS pausada 72 h.
+- Proveedores: "test" (nada sale; prohibido en producción) y adaptador Twilio Verify (probado con un falso; NO
+  contratado). Todo apagado por defecto (PHONE_VERIFICATION_ENABLED=false).
+- verifyPhoneVerification 18/18 (ambos CI), unitarias 516/516, regresión completa verde, rollback 117 OK.
+- Siguiente: frontend PR 2 (paso de teléfono en la activación, Seguridad de la cuenta, recuperación por SMS).
+
 ## 2026-10-24 — PR 0: recuperación de contraseña por correo (claude/password-recovery-email)
 
 - POST /auth/password-reset/request ahora responde de inmediato y crea el token y envía el correo después

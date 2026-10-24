@@ -1,3 +1,4 @@
+import { normalizeNanpPhone } from "../accountSecurity/phone.js";
 import { sql } from "kysely";
 import {
   withLoginLookupContext,
@@ -37,13 +38,25 @@ interface UserRow {
 const DUMMY_HASH = `scrypt$${"00".repeat(16)}$${"00".repeat(64)}`;
 
 async function findUserByIdentifier(identifier: string): Promise<UserRow | null> {
-  return withLoginLookupContext(identifier, async (trx) => {
-    const result = await sql<UserRow>`
-      SELECT id, email, phone, password_hash, status
-      FROM users
-      WHERE lower(email) = ${identifier} OR phone = ${identifier}
-      LIMIT 1
-    `.execute(trx);
+  // An e-mail is looked up as typed (lower-case); anything else must be a +1 number and
+  // only matches a VERIFIED phone (migration 117): an unverified number never opens an account.
+  const phone = identifier.includes("@") ? null : normalizeNanpPhone(identifier);
+  if (!identifier.includes("@") && !phone) return null;
+  const lookup = phone ?? identifier;
+  return withLoginLookupContext(lookup, async (trx) => {
+    const result = phone
+      ? await sql<UserRow>`
+          SELECT id, email, phone, password_hash, status
+          FROM users
+          WHERE phone = ${phone} AND phone_verified_at IS NOT NULL
+          LIMIT 1
+        `.execute(trx)
+      : await sql<UserRow>`
+          SELECT id, email, phone, password_hash, status
+          FROM users
+          WHERE lower(email) = ${identifier}
+          LIMIT 1
+        `.execute(trx);
     return result.rows[0] ?? null;
   });
 }
@@ -101,13 +114,14 @@ export async function login(
     keepSignedIn = await isCaregiverOnly(trx, user.id);
     if (keepSignedIn) expiresAt = new Date(Date.now() + env.WORKER_SESSION_DURATION_HOURS * 3600 * 1000);
     await sql`
-      INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, device_metadata)
+      INSERT INTO sessions (user_id, token_hash, expires_at, ip_address, device_metadata, reauthenticated_at)
       VALUES (
         ${user.id},
         ${tokenHash},
         ${expiresAt.toISOString()},
         ${meta.ipAddress ?? null},
-        ${meta.deviceMetadata ? JSON.stringify(meta.deviceMetadata) : null}
+        ${meta.deviceMetadata ? JSON.stringify(meta.deviceMetadata) : null},
+        now()
       )
     `.execute(trx);
   });

@@ -165,8 +165,9 @@ export async function acceptFamilyInvitation(
     // token is necessary but not sufficient -- someone who obtained the
     // token without being the intended recipient (forwarded, leaked) must
     // never be able to accept on someone else's behalf.
+    // A phone only counts once it is verified (migration 117).
     const selfUser = await sql<{ email: string | null; phone: string | null }>`
-      SELECT email, phone FROM users WHERE id = ${userId} LIMIT 1
+      SELECT email, CASE WHEN phone_verified_at IS NOT NULL THEN phone END AS phone FROM users WHERE id = ${userId} LIMIT 1
     `.execute(trx);
     const self = selfUser.rows[0];
     const emailMatches =
