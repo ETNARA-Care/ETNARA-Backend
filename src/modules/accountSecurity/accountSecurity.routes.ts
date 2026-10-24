@@ -4,7 +4,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { respondInternalError } from "../../observability/internalError.js";
 import { checkLimit, recordAttempt } from "../auth/auth.rateLimit.js";
 import {
-  AccountSecurityError, beginSmsReset, confirmPhoneVerification, getAccountSecurity, phoneFeature, reauthenticate,
+  AccountSecurityError, beginSmsReset, confirmPhoneVerification, getAccountSecurity, phoneFeature, reauthenticate, smsOfferedPublicly,
   startPhoneVerification, verifySmsReset,
 } from "./accountSecurity.service.js";
 
@@ -64,9 +64,7 @@ router.post("/me/phone/verification/confirm", requireAuth, async (req: Authentic
 // Which recovery methods the app may offer (nothing about any account).
 router.get("/auth/recovery-options", (_req: Request, res: Response) => {
   noStore(res);
-  let sms = false;
-  try { phoneFeature(); sms = true; } catch { sms = false; }
-  res.json({ email: true, sms });
+  res.json({ email: true, sms: smsOfferedPublicly() });
 });
 
 router.post("/auth/password-reset/sms/request", async (req: Request, res: Response) => {

@@ -293,6 +293,28 @@ async function main() {
       lp.token && lpState.phoneVerified === false && lpState.phone === null && lpByPhone.status === 401 && lpSms.status === 200 && lastCode(`+1${AREA}5550142`) === null
         && !!link && lpConfirm.status === 200 && lpLogin.status === 200 && lpKept === oldStyle && badVerified === "23514",
       `confirm=${lpConfirm.status} login=${lpLogin.status} phoneLogin=${lpByPhone.status} verify=${badVerified}`);
+
+    // ------------------------------------------------------------ pilot with real numbers: allow-list
+    ip = "203.0.113.10";
+    await resetLimits();
+    const pilot = await person("pilot", ["SUPERVISOR"]);
+    const outsider = await person("outsider", ["WORKER"]);
+    (env as { PHONE_PILOT_USER_IDS: string[] | null }).PHONE_PILOT_USER_IDS = [pilot.userId];
+    const sentBefore = outbox().length;
+    const pState = (await call("GET", "/me/account-security", pilot.token)).body.security;
+    const oState = (await call("GET", "/me/account-security", outsider.token)).body.security;
+    const oStart = await call("POST", "/me/phone/verification", outsider.token, { phone: N(60) });
+    const oConfirm = await call("POST", "/me/phone/verification/confirm", outsider.token, { code: "123456" });
+    const pubOptions = await call("GET", "/auth/recovery-options", "");
+    const pStart = await call("POST", "/me/phone/verification", pilot.token, { phone: N(61) });
+    (env as { PHONE_PILOT_USER_IDS: string[] | null }).PHONE_PILOT_USER_IDS = null;
+    const pubAfter = await call("GET", "/auth/recovery-options", "");
+    check("V19 pilot allow-list: only listed accounts can link a phone (others: unavailable, never required, 404, no SMS); the public login does not offer SMS during the pilot",
+      pState.phoneVerificationAvailable === true && oState.phoneVerificationAvailable === false && oState.phoneRequired === false
+        && oStart.status === 404 && oStart.body.error === "FEATURE_NOT_ENABLED" && oConfirm.status === 404
+        && pubOptions.text === '{"email":true,"sms":false}' && pStart.status === 202 && outbox().length === sentBefore + 1 && lastCode(N(61)) !== null
+        && pubAfter.text === '{"email":true,"sms":true}',
+      `pilot=${pState.phoneVerificationAvailable} outsider=${oState.phoneVerificationAvailable}/${oStart.status} public=${pubOptions.text} start=${pStart.status}`);
   } finally {
     server.close();
     await pool.end().catch(() => undefined);

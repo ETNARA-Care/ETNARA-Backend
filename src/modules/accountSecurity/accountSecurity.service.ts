@@ -35,6 +35,17 @@ function mapDbError(err: unknown): never {
   throw err;
 }
 
+/** During a pilot (PHONE_PILOT_USER_IDS) only the listed accounts may link a phone. */
+export function phonePilotAllows(userId: string): boolean {
+  return !env.PHONE_PILOT_USER_IDS || env.PHONE_PILOT_USER_IDS.includes(userId.toLowerCase());
+}
+
+/** The public login screen offers SMS only when it is on for everyone (not during a pilot). */
+export function smsOfferedPublicly(): boolean {
+  try { phoneFeature(); } catch { return false; }
+  return !env.PHONE_PILOT_USER_IDS;
+}
+
 export function phoneFeature(): { provider: SmsProvider; secret: string } {
   const provider = activeSmsProvider();
   if (!provider || !env.PHONE_CODE_SECRET) throw new AccountSecurityError("FEATURE_NOT_ENABLED", 404);
@@ -73,17 +84,19 @@ export async function getAccountSecurity(userId: string) {
   if (!row) throw new AccountSecurityError("NOT_FOUND", 404);
   const verified = !!row.phone_verified_at;
   const since = env.PHONE_REQUIRED_SINCE ? new Date(env.PHONE_REQUIRED_SINCE) : null;
+  const available = !!activeSmsProvider() && !!env.PHONE_CODE_SECRET && phonePilotAllows(userId);
   const pausedUntil = row.phone_changed_at ? new Date(new Date(row.phone_changed_at).getTime() + 72 * 3600 * 1000) : null;
   return {
     email: maskEmail(row.email),
     phone: verified ? maskPhone(row.phone) : null,
     phoneVerified: verified,
     // Staff accounts created after the cut-off must link a phone; everyone else is only reminded.
-    phoneRequired: !verified && row.staff && !!since && new Date(row.created_at) >= since,
+    // Never required while linking is unavailable to this person (switched off, or not in the pilot).
+    phoneRequired: available && !verified && row.staff && !!since && new Date(row.created_at) >= since,
     phoneRecommended: !verified,
     smsRecoveryAvailable: verified && (!pausedUntil || pausedUntil <= new Date()),
     smsRecoveryPausedUntil: verified && pausedUntil && pausedUntil > new Date() ? pausedUntil.toISOString() : null,
-    phoneVerificationAvailable: !!activeSmsProvider(),
+    phoneVerificationAvailable: available,
   };
 }
 
@@ -98,6 +111,7 @@ export async function reauthenticate(userId: string, sessionId: string, password
 // ------------------------------------------------------------------ link / change (signed in)
 export async function startPhoneVerification(userId: string, sessionId: string, rawPhone: string, ip: string | undefined): Promise<void> {
   const { provider, secret } = phoneFeature();
+  if (!phonePilotAllows(userId)) throw new AccountSecurityError("FEATURE_NOT_ENABLED", 404);
   const phone = normalizeNanpPhone(rawPhone);
   if (!phone) throw new AccountSecurityError("PHONE_INVALID", 400);
   const code = provider.ownCodes ? newSixDigitCode() : null;
@@ -110,6 +124,7 @@ export async function startPhoneVerification(userId: string, sessionId: string, 
 
 export async function confirmPhoneVerification(userId: string, rawCode: string): Promise<{ result: "VERIFIED" | "CHANGED"; last4: string }> {
   const { provider, secret } = phoneFeature();
+  if (!phonePilotAllows(userId)) throw new AccountSecurityError("FEATURE_NOT_ENABLED", 404);
   const code = /^\d{6}$/.test(rawCode) ? rawCode : "000000x";
   const attempt = await asUser(userId, async (trx) => (await sql<{ challenge_id: string; code_hash: string | null; phone: string }>`
     SELECT * FROM app_phone_challenge_attempt('VERIFY'::account_phone_purpose, NULL)`.execute(trx)).rows[0]);

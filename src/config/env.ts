@@ -68,6 +68,11 @@ const envSchema = z.object({
   SMS_DAILY_CAP: z.string().default("200").transform((v) => Number.parseInt(v, 10)).pipe(z.number().int().positive().max(100000)),
   // Accounts created from this date on must link a phone (staff); older ones are only reminded.
   PHONE_REQUIRED_SINCE: z.string().datetime({ offset: true }).optional(),
+  // Pilot with real numbers: when set (comma-separated user ids), ONLY these accounts can link a phone,
+  // and the public login screen does not offer SMS. Unset = everyone (once SMS is on).
+  PHONE_PILOT_USER_IDS: z.string().optional()
+    .transform((v) => (v && v.trim() ? v.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : null))
+    .pipe(z.array(z.string().uuid()).nullable()),
   TWILIO_ACCOUNT_SID: z.string().regex(/^AC[0-9a-f]{32}$/).optional(),
   TWILIO_AUTH_TOKEN: z.string().min(16).optional(),
   TWILIO_VERIFY_SERVICE_SID: z.string().regex(/^VA[0-9a-f]{32}$/).optional(),
