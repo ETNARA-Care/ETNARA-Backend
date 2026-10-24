@@ -61,6 +61,14 @@ router.post("/me/phone/verification/confirm", requireAuth, async (req: Authentic
 });
 
 // ------------------------------------------------------------------ signed out: SMS recovery
+// Which recovery methods the app may offer (nothing about any account).
+router.get("/auth/recovery-options", (_req: Request, res: Response) => {
+  noStore(res);
+  let sms = false;
+  try { phoneFeature(); sms = true; } catch { sms = false; }
+  res.json({ email: true, sms });
+});
+
 router.post("/auth/password-reset/sms/request", async (req: Request, res: Response) => {
   const body = z.object({ phone: z.string().min(7).max(32) }).safeParse(req.body);
   if (!body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });

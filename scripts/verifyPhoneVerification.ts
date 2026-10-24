@@ -99,9 +99,12 @@ async function main() {
     const offs = [await call("POST", "/me/phone/verification", cg.token, { phone: N(1) }), await call("POST", "/auth/password-reset/sms/request", "", { phone: N(1) }),
       await call("POST", "/auth/password-reset/sms/verify", "", { phone: N(1), code: "123456" })];
     const offState = await call("GET", "/me/account-security", cg.token);
+    const offOptions = await call("GET", "/auth/recovery-options", "");
     env.PHONE_VERIFICATION_ENABLED = true;
-    check("V0 switched off (default): every phone route answers 404 FEATURE_NOT_ENABLED, nothing sent; state says verification unavailable",
-      offs.every((r) => r.status === 404 && r.body.error === "FEATURE_NOT_ENABLED") && outbox().length === 0 && offState.body.security?.phoneVerificationAvailable === false,
+    const onOptions = await call("GET", "/auth/recovery-options", "");
+    check("V0 switched off (default): every phone route answers 404 FEATURE_NOT_ENABLED, nothing sent; state and the public options say SMS is unavailable (and available once on)",
+      offs.every((r) => r.status === 404 && r.body.error === "FEATURE_NOT_ENABLED") && outbox().length === 0 && offState.body.security?.phoneVerificationAvailable === false
+        && offOptions.text === '{"email":true,"sms":false}' && onOptions.text === '{"email":true,"sms":true}',
       offs.map((r) => r.status).join(","));
 
     // ------------------------------------------------------------ state
