@@ -15,6 +15,7 @@ on:
       - 'scripts/verifyProductionHotfix.ts'
       - 'scripts/verifyOrgFeatures.ts'
       - 'scripts/verifySmartMatchCancelExpiry.ts'
+      - 'scripts/verifySmartMatchFixes.ts'
       - 'src/middleware/**'
       - 'src/modules/platformOrganizations/**'
       - 'src/modules/careRecipients/**'
@@ -88,3 +89,5 @@ jobs:
         run: npx tsx scripts/verifyOrgFeatures.ts
       - name: SmartMatch cancel + expiry over HTTP
         run: npx tsx scripts/verifySmartMatchCancelExpiry.ts
+      - name: SmartMatch fixes (conflicts, races, overnight, limits, reset tokens) over HTTP
+        run: npx tsx scripts/verifySmartMatchFixes.ts

@@ -170,11 +170,23 @@ export async function createAssignment(
  * Used by POST .../shifts/:id/assignments and by SmartMatch "Crear turno",
  * so both paths enforce exactly the same rules.
  */
+/**
+ * Serialize every schedule decision for one worker membership (Turnos
+ * assignment, SmartMatch approval, SmartMatch "Crear turno") until the end of
+ * the caller's transaction, so two concurrent decisions cannot both pass the
+ * overlap checks. Callers that also lock a SmartMatch opportunity row take that
+ * row lock FIRST, then this one (consistent order: no deadlock).
+ */
+export async function lockWorkerSchedule(trx: Trx, organizationWorkerMembershipId: string): Promise<void> {
+  await sql`SELECT pg_advisory_xact_lock(hashtextextended(${"worker-schedule:" + organizationWorkerMembershipId}, 0))`.execute(trx);
+}
+
 export async function assignWorkerToShiftInTransaction(
   trx: Trx,
   organizationId: string,
   shiftId: string,
-  input: CreateAssignmentInput
+  input: CreateAssignmentInput,
+  options: { exceptSmartMatchOpportunityId?: string } = {}
 ) {
   assertUuid(shiftId, "shiftId");
   {
@@ -204,6 +216,7 @@ export async function assignWorkerToShiftInTransaction(
     `.execute(trx);
     const membership = membershipRow.rows[0];
     if (!membership) throw new MembershipNotInOrgError();
+    await lockWorkerSchedule(trx, membership.id);
 
     const eligibility = await evaluateWorkerEligibilityInTransaction(trx, organizationId, input.organizationWorkerMembershipId);
     if (eligibility.eligibilityStatus !== "eligible") {
@@ -229,6 +242,14 @@ export async function assignWorkerToShiftInTransaction(
       LIMIT 1
     `.execute(trx);
     if (overlap.rows[0]) throw new ScheduleConflictError();
+
+    // An approved SmartMatch opportunity without its shift yet is also a commitment.
+    const committed = await sql<{ busy: boolean }>`
+      SELECT public.app_smartmatch_worker_has_commitment(
+        ${input.organizationWorkerMembershipId}, ${shift.scheduled_start}::timestamptz, ${shift.scheduled_end}::timestamptz,
+        ${options.exceptSmartMatchOpportunityId ?? null}::uuid) AS busy
+    `.execute(trx);
+    if (committed.rows[0]?.busy) throw new ScheduleConflictError();
 
     const result = await sql<AssignmentRow>`
       INSERT INTO assignments (organization_id, shift_id, organization_worker_membership_id, care_recipient_id, role_in_shift)

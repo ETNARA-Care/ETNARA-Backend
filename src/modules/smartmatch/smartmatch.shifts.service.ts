@@ -145,9 +145,10 @@ export async function createShiftFromSmartMatch(
       requiredRole: opp.role_label,
       ...(input.serviceLocationId ? { serviceLocationId: input.serviceLocationId } : {}),
     });
+    // This opportunity's own approval is the commitment being turned into the shift.
     const saved = await assignWorkerToShiftInTransaction(trx, organizationId, shift.id, {
       organizationWorkerMembershipId: live.caregiver.membershipId,
-    });
+    }, { exceptSmartMatchOpportunityId: opportunityId });
 
     const instructions = input.instructions?.trim();
     if (instructions) {

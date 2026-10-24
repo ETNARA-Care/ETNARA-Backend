@@ -6,6 +6,7 @@ import {
   MembershipNotFoundError,
 } from "../eligibility/eligibility.service.js";
 import { SmartMatchForbiddenError } from "./smartmatch.service.js";
+import { lockWorkerSchedule } from "../assignments/assignments.service.js";
 
 type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
 
@@ -40,6 +41,8 @@ export interface SmartMatchApprovalChecks {
   availabilityConfigured: boolean;
   availabilityCovers: boolean;
   noUnavailabilityConflict: boolean;
+  /** No other shift (pending/accepted, not cancelled) or approved SmartMatch visit overlaps. */
+  noScheduleConflict: boolean;
   consentRecorded: boolean;
   opportunityOpen: boolean;
   applicationPending: boolean;
@@ -159,6 +162,7 @@ export interface LockedOpportunity {
  */
 export async function computeApprovalChecks(
   trx: Trx, organizationId: string, app: LockedApplication, opp: LockedOpportunity,
+  options: { lockSchedule?: boolean } = {},
 ): Promise<{ checks: SmartMatchApprovalChecks; caregiver: { membershipId: string | null; displayName: string | null } }> {
   const worker = await sql<{ membership_id: string; worker_status: string; display_name: string | null; has_worker_role: boolean }>`
     SELECT owm.id AS membership_id, owm.status AS worker_status, w.display_name,
@@ -176,6 +180,10 @@ export async function computeApprovalChecks(
     LIMIT 1
   `.execute(trx);
   const w = worker.rows[0];
+  // Decisions that change the caregiver's schedule are serialized per caregiver (same lock
+  // as Turnos assignments), taken BEFORE the eligibility evaluation (which writes
+  // worker_eligibility), so the checks below cannot be stale and cannot deadlock.
+  if (w && options.lockSchedule) await lockWorkerSchedule(trx, w.membership_id);
   const membershipActive = Boolean(w && w.worker_status === "active" && w.has_worker_role);
 
   let credentialsEligible = false;
@@ -197,35 +205,39 @@ export async function computeApprovalChecks(
   let availabilityConfigured = false;
   let availabilityCovers = false;
   let noUnavailabilityConflict = false;
+  let noScheduleConflict = false;
   if (w) {
-    const availability = await sql<{ configured: boolean; covers: boolean; conflict: boolean }>`
-      WITH s AS (
-        SELECT timezone FROM worker_availability_settings
-        WHERE organization_worker_membership_id = ${w.membership_id}
-      ), local AS (
-        SELECT s.timezone, (${opp.starts_at}::timestamptz AT TIME ZONE s.timezone)::date AS day FROM s
-      )
+    const availability = await sql<{ configured: boolean; covers: boolean; conflict: boolean; busy_shift: boolean; busy_smartmatch: boolean }>`
       SELECT
-        EXISTS (SELECT 1 FROM s) AS configured,
-        EXISTS (
-          SELECT 1 FROM local
-          JOIN worker_weekly_availability wa
-            ON wa.organization_worker_membership_id = ${w.membership_id}
-           AND wa.weekday = extract(dow FROM local.day)::int
-          WHERE ((local.day + wa.start_time) AT TIME ZONE local.timezone) <= ${opp.starts_at}::timestamptz
-            AND ((local.day + wa.end_time) AT TIME ZONE local.timezone) >= ${opp.ends_at}::timestamptz
-        ) AS covers,
+        EXISTS (SELECT 1 FROM worker_availability_settings
+                WHERE organization_worker_membership_id = ${w.membership_id}) AS configured,
+        public.app_availability_covers(${w.membership_id}, ${opp.starts_at}::timestamptz, ${opp.ends_at}::timestamptz) AS covers,
         EXISTS (
           SELECT 1 FROM worker_unavailability_periods u
           WHERE u.organization_worker_membership_id = ${w.membership_id}
             AND u.starts_at < ${opp.ends_at}::timestamptz
             AND u.ends_at > ${opp.starts_at}::timestamptz
-        ) AS conflict
+        ) AS conflict,
+        EXISTS (
+          SELECT 1 FROM assignments a
+          JOIN shifts s ON s.id = a.shift_id AND s.organization_id = a.organization_id
+          WHERE a.organization_worker_membership_id = ${w.membership_id}
+            AND a.organization_id = ${organizationId}
+            AND a.response_status IN ('pending', 'accepted')
+            AND s.status <> 'cancelled'
+            AND s.scheduled_start < ${opp.ends_at}::timestamptz
+            AND s.scheduled_end > ${opp.starts_at}::timestamptz
+            AND s.id IS DISTINCT FROM (SELECT o.shift_id FROM smartmatch_opportunities o
+                                       WHERE o.id = ${opp.id} AND o.organization_id = ${organizationId})
+        ) AS busy_shift,
+        public.app_smartmatch_worker_has_commitment(
+          ${w.membership_id}, ${opp.starts_at}::timestamptz, ${opp.ends_at}::timestamptz, ${opp.id}::uuid) AS busy_smartmatch
     `.execute(trx);
     const a = availability.rows[0];
     availabilityConfigured = Boolean(a?.configured);
     availabilityCovers = availabilityConfigured && Boolean(a?.covers);
     noUnavailabilityConflict = availabilityConfigured && !a?.conflict;
+    noScheduleConflict = Boolean(a) && !a.busy_shift && !a.busy_smartmatch;
   }
 
   const consentRecorded = app.consented_at !== null;
@@ -238,13 +250,14 @@ export async function computeApprovalChecks(
     availabilityConfigured,
     availabilityCovers: availabilityCovers && noUnavailabilityConflict,
     noUnavailabilityConflict,
+    noScheduleConflict,
     consentRecorded,
     opportunityOpen: opp.open,
     applicationPending,
     approvable: false,
   };
   checks.approvable = membershipActive && credentialsVerifiable && credentialsEligible &&
-    checks.availabilityCovers && consentRecorded && opp.open && applicationPending;
+    checks.availabilityCovers && noScheduleConflict && consentRecorded && opp.open && applicationPending;
   return { checks, caregiver: { membershipId: w?.membership_id ?? null, displayName: w?.display_name ?? null } };
 }
 
@@ -368,7 +381,7 @@ export async function decideSmartMatchApplication(
     }
 
     if (!opp.open) throw new SmartMatchConflictError("OPPORTUNITY_NOT_OPEN");
-    const { checks } = await computeApprovalChecks(trx, organizationId, locked, opp);
+    const { checks } = await computeApprovalChecks(trx, organizationId, locked, opp, { lockSchedule: true });
     if (!checks.approvable) {
       return { outcome: "BLOCKED" as const, checks };
     }

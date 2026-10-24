@@ -17,7 +17,9 @@ router.post("/organizations/:organizationId/smartmatch/opportunities",
     const org = uuid.safeParse(req.params.organizationId);
     const body = smartMatchPublishSchema.safeParse(req.body);
     if (!org.success || !body.success) {
-      res.status(400).json({ error: "INVALID_REQUEST" }); return;
+      const issue = body.success ? undefined
+        : body.error.issues.map((i) => i.message).find((m) => m === "OPPORTUNITY_TOO_LONG" || m === "OPPORTUNITY_IN_PAST");
+      res.status(400).json({ error: issue ?? "INVALID_REQUEST" }); return;
     }
     try {
       const opportunity = await publishInternalOpportunity(req.auth!.userId, org.data, body.data);
