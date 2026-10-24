@@ -1,14 +1,14 @@
--- ROLLBACK of migration 112 (En Camino: cancel/reassign notices, offline journey).
+-- ROLLBACK of migration 113 (En Camino: cancel/reassign notices, offline journey).
 --
--- Use only if 112 blocks a legitimate flow. Rolling the frontend back alone is
--- safe with 112 in place (the new notices simply show the generic bell text).
+-- Use only if 113 blocks a legitimate flow. Rolling the frontend back alone is
+-- safe with 113 in place (the new notices simply show the generic bell text).
 -- Removes the new triggers, functions and index, and restores the exact previous
 -- definitions (106 / 107 / 108), verified by diffing pg_get_functiondef and
--- triggers against a database that never had 112. Notifications already sent are
+-- triggers against a database that never had 113. Notifications already sent are
 -- kept (they are user-visible history). Does not touch other data.
 -- Run as the database owner in one transaction:
---   psql "$MIGRATIONS_DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f ops/112_journey_cancel_reassign_offline.rollback.sql
--- schema_migrations keeps its 112 row on purpose: the next deploy must NOT
+--   psql "$MIGRATIONS_DATABASE_URL" -v ON_ERROR_STOP=1 -1 -f ops/113_journey_cancel_reassign_offline.rollback.sql
+-- schema_migrations keeps its 113 row on purpose: the next deploy must NOT
 -- silently re-apply it; re-apply manually with psql -f once the cause is fixed.
 
 -- A. New triggers and functions
@@ -137,6 +137,6 @@ BEGIN
 END;
 $$;
 
--- C. Helpers used only by the 112 versions above (now unreferenced)
+-- C. Helpers used only by the 113 versions above (now unreferenced)
 DROP FUNCTION IF EXISTS app_journey_event_is_stale(uuid, uuid, timestamptz, boolean);
 DROP FUNCTION IF EXISTS app_shift_declared_delay_minutes(uuid, uuid);

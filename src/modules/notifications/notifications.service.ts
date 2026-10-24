@@ -89,7 +89,7 @@ function summarizeType(notificationType: string): string {
       return "La cuidadora informó un retraso";
     case "FAMILY_CAREGIVER_ARRIVED":
       return "Llegada registrada";
-    // Migration 112: cancellations and reassignments (never an address or a name).
+    // Migration 113: cancellations and reassignments (never an address or a name).
     case "SHIFT_CANCELLED":
       return "La agencia canceló uno de tus turnos";
     case "SHIFT_UNASSIGNED":

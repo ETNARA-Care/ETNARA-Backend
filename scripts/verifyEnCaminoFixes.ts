@@ -1,5 +1,5 @@
 /**
- * «En camino» / «Llegué» fixes (migration 112): cancellation and reassignment
+ * «En camino» / «Llegué» fixes (migration 113): cancellation and reassignment
  * notices, journey invalidation, offline sync (12 h, no stale notices, no
  * overwrite), delay-aware late alert, privacy and pilot-only scope.
  * Real HTTP with the server connected as app_runtime. Synthetic data only.

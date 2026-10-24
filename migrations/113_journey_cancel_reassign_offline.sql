@@ -1,4 +1,4 @@
--- Migration 112: «En camino» / «Llegué» operational safety (audit 24-oct-2026).
+-- Migration 113: «En camino» / «Llegué» operational safety (audit 24-oct-2026).
 --
 -- 1. Cancellation tells people: when a shift becomes cancelled, every caregiver
 --    still assigned (pending/accepted) gets SHIFT_CANCELLED and the relatives of
