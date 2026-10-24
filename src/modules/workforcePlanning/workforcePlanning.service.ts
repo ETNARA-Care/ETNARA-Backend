@@ -163,20 +163,20 @@ export async function getWorkforceForecast(
           GREATEST(
             0,
             extract(epoch FROM (
-              ((dates.day + weekly.end_time) AT TIME ZONE settings.timezone)
+              ((dates.day + weekly.end_time + CASE WHEN weekly.end_time <= weekly.start_time THEN interval '1 day' ELSE interval '0' END) AT TIME ZONE settings.timezone)
               - ((dates.day + weekly.start_time) AT TIME ZONE settings.timezone)
             )) / 60
             - COALESCE((
               SELECT sum(GREATEST(
                 0,
                 extract(epoch FROM (
-                  LEAST(unavailable.ends_at, ((dates.day + weekly.end_time) AT TIME ZONE settings.timezone))
+                  LEAST(unavailable.ends_at, ((dates.day + weekly.end_time + CASE WHEN weekly.end_time <= weekly.start_time THEN interval '1 day' ELSE interval '0' END) AT TIME ZONE settings.timezone))
                   - GREATEST(unavailable.starts_at, ((dates.day + weekly.start_time) AT TIME ZONE settings.timezone))
                 )) / 60
               ))
               FROM worker_unavailability_periods unavailable
               WHERE unavailable.organization_worker_membership_id = owm.id
-                AND unavailable.starts_at < ((dates.day + weekly.end_time) AT TIME ZONE settings.timezone)
+                AND unavailable.starts_at < ((dates.day + weekly.end_time + CASE WHEN weekly.end_time <= weekly.start_time THEN interval '1 day' ELSE interval '0' END) AT TIME ZONE settings.timezone)
                 AND unavailable.ends_at > ((dates.day + weekly.start_time) AT TIME ZONE settings.timezone)
             ), 0)
           )

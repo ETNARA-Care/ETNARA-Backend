@@ -13,7 +13,10 @@ const weeklyWindowSchema = z.object({
   weekday: z.number().int().min(0).max(6),
   startTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   endTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-}).refine((window) => window.startTime < window.endTime, { message: "startTime must precede endTime" });
+}).refine((window) => window.startTime !== window.endTime, {
+  // endTime <= startTime means the window ends the next day (overnight, e.g. 22:00 -> 06:00).
+  message: "startTime and endTime must differ",
+});
 
 const unavailablePeriodSchema = z.object({
   startsAt: z.string().datetime(),
