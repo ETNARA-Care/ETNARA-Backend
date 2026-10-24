@@ -75,6 +75,10 @@ describe("migration 117", () => {
     const start = m117.slice(m117.indexOf("FUNCTION app_phone_reset_start"), m117.indexOf("REVOKE ALL ON FUNCTION app_phone_reset_start"));
     for (const needle of ["phone = p_phone", "phone_verified_at IS NOT NULL", "status = 'active'", "phone_changed_at < now() - interval '72 hours'"]) expect(start).toContain(needle);
   });
+  it("only VERIFIED numbers must be E.164: a CHECK on every phone would block updates of accounts with an old free-text number", () => {
+    expect(m117).toMatch(/CHECK \(phone_verified_at IS NULL OR phone ~ '\^\\\+1\[2-9\]\[0-9\]\{2\}\[2-9\]\[0-9\]\{6\}\$'\);/);
+    expect(m117).not.toMatch(/CHECK \(phone IS NULL OR phone ~/);
+  });
   it("a phone change requires the password within 10 minutes in the same session", () => {
     expect(m117).toMatch(/reauthenticated_at > now\(\) - interval '10 minutes'/);
   });

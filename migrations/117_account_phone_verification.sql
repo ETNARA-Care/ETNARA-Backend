@@ -20,11 +20,15 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_verified_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_changed_at timestamptz;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
--- New or changed numbers must be E.164 +1 (Puerto Rico 787/939 and the US). Existing
--- free-text values are left untouched (NOT VALID) and count as unverified.
+-- A VERIFIED number is always E.164 +1 (Puerto Rico 787/939 and the US). Existing
+-- free-text values are left untouched and count as unverified. The rule applies only
+-- to verified numbers on purpose: a CHECK on every phone (even NOT VALID) is re-tested
+-- on ANY update of the row, so a legacy value such as '787-555-1234' would make a
+-- password reset, this migration's own e-mail backfill, or any later UPDATE of that
+-- user fail -- locking an existing person out.
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_e164_nanp;
 ALTER TABLE users ADD CONSTRAINT users_phone_e164_nanp
-  CHECK (phone IS NULL OR phone ~ '^\+1[2-9][0-9]{2}[2-9][0-9]{6}$') NOT VALID;
+  CHECK (phone_verified_at IS NULL OR phone ~ '^\+1[2-9][0-9]{2}[2-9][0-9]{6}$');
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_verified_needs_phone;
 ALTER TABLE users ADD CONSTRAINT users_phone_verified_needs_phone
   CHECK (phone_verified_at IS NULL OR phone IS NOT NULL);

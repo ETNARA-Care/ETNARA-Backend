@@ -270,6 +270,29 @@ async function main() {
     await q(`UPDATE users SET phone_verified_at=now() WHERE id=$1`, [holder.userId]);
     const verifiedMatch = await matches(holder.userId);
     check("V17 a family invitation sent to a phone only matches an account whose phone is VERIFIED", unverifiedMatch === false && verifiedMatch === true, `${unverifiedMatch} ${verifiedMatch}`);
+
+    // ------------------------------------------------------------ existing account with a legacy free-text phone
+    // A CHECK on every phone would be re-tested on ANY update of that row and lock the person out
+    // (e-mail reset, backfills). Only verified numbers must be E.164.
+    ip = "203.0.113.9";
+    const oldStyle = `${AREA}-555-0142`;
+    const lp = await person("legacyphone", ["WORKER"], { createdAt: "2026-01-01T00:00:00Z", phone: oldStyle });
+    const lpState = (await call("GET", "/me/account-security", lp.token)).body.security;
+    const lpByPhone = await call("POST", "/auth/login", "", { phone: oldStyle, password });
+    const lpSms = await call("POST", "/auth/password-reset/sms/request", "", { phone: `+1${AREA}5550142` });
+    const nMails = mails.length;
+    await call("POST", "/auth/password-reset/request", "", { email: lp.email });
+    let link: string | undefined;
+    for (let i = 0; i < 30 && !link; i++) { link = mails.slice(nMails).map((m) => /reset-password\?token=([0-9a-f]{64})/.exec(m.html)?.[1]).find(Boolean); if (!link) await new Promise((r) => setTimeout(r, 100)); }
+    const lpPw = `Legacy-${randomBytes(8).toString("hex")}`;
+    const lpConfirm = await call("POST", "/auth/password-reset/confirm", "", { token: link, password: lpPw });
+    const lpLogin = await call("POST", "/auth/login", "", { email: lp.email, password: lpPw });
+    const lpKept = (await q<{ phone: string }>(`SELECT phone FROM users WHERE id=$1`, [lp.userId])).rows[0].phone;
+    const badVerified = await q(`UPDATE users SET phone_verified_at = now() WHERE id=$1`, [lp.userId]).then(() => "accepted", (e: { code?: string }) => e.code);
+    check("V18 an existing account with an old free-text phone keeps working: e-mail login and e-mail reset succeed, the old number is untouched, counts as unverified (no phone login, no SMS); a verified number must be E.164",
+      lp.token && lpState.phoneVerified === false && lpState.phone === null && lpByPhone.status === 401 && lpSms.status === 200 && lastCode(`+1${AREA}5550142`) === null
+        && !!link && lpConfirm.status === 200 && lpLogin.status === 200 && lpKept === oldStyle && badVerified === "23514",
+      `confirm=${lpConfirm.status} login=${lpLogin.status} phoneLogin=${lpByPhone.status} verify=${badVerified}`);
   } finally {
     server.close();
     await pool.end().catch(() => undefined);
