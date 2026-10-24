@@ -159,6 +159,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifySmartMatchFixesRollback.ts
 
+      - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCheckOutFlow.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

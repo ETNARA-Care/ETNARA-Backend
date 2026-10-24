@@ -32,6 +32,7 @@ import {
   InvalidOrganizationIdError,
 } from "../organizationContext/organizationContext.service.js";
 import { MembershipNotActiveError, InvalidTenantContextError } from "../../context/errors.js";
+import { respondInternalError } from "../../observability/internalError.js";
 
 const router = Router();
 const uuidParam = z.string().uuid();
@@ -124,7 +125,7 @@ router.post(
       const { replayed, ...event } = await checkIn(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
       res.status(replayed ? 200 : 201).json({ event, replayed: replayed === true });
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) respondInternalError(res, "verification", err, req);
     }
   }
 );
@@ -147,7 +148,7 @@ router.post(
       const { replayed, ...event } = await checkOut(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
       res.status(replayed ? 200 : 201).json({ event, replayed: replayed === true });
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) respondInternalError(res, "verification", err, req);
     }
   }
 );
@@ -165,7 +166,7 @@ router.get(
       const summary = await getVerification(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
       res.status(200).json(summary);
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) respondInternalError(res, "verification", err, req);
     }
   }
 );
@@ -193,7 +194,7 @@ router.post(
       );
       res.status(201).json({ event });
     } catch (err) {
-      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+      if (!handleError(err, res)) respondInternalError(res, "verification", err, req);
     }
   }
 );
@@ -207,9 +208,8 @@ function gate6(handler: (req: AuthenticatedRequest, res: Response, orgId: string
     try { await handler(req, res, orgIdParsed.data); }
     catch (err) {
       if (handleError(err, res)) return;
-      // Bounded diagnostics: the code only, never the body (it may carry a device reading).
-      console.error("ARRIVAL_ERROR", { code: (err as { code?: string })?.code ?? "UNKNOWN" });
-      res.status(500).json({ error: "INTERNAL_ERROR" });
+      // Safe diagnostics (route template, SQLSTATE, sanitized message): never the body, which may carry a device reading.
+      respondInternalError(res, "arrival", err, req);
     }
   };
 }

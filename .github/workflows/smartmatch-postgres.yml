@@ -17,6 +17,9 @@ on:
       - 'scripts/verifySmartMatchCancelExpiry.ts'
       - 'scripts/verifySmartMatchFixes.ts'
       - 'scripts/verifySmartMatchFixesRollback.ts'
+      - 'scripts/verifyCheckOutFlow.ts'
+      - 'src/modules/verification/**'
+      - 'src/observability/**'
       - 'ops/110_111_smartmatch_fixes.rollback.sql'
       - 'src/middleware/**'
       - 'src/modules/platformOrganizations/**'
@@ -98,3 +101,6 @@ jobs:
 
       - name: PostgreSQL SmartMatch fixes rollback (never reopens password_reset_tokens to PUBLIC)
         run: npx tsx scripts/verifySmartMatchFixesRollback.ts
+
+      - name: Check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
+        run: npx tsx scripts/verifyCheckOutFlow.ts
