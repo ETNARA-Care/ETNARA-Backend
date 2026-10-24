@@ -2,6 +2,22 @@
 
 ## Current Status
 
+## 2026-10-24 — Finanzas F0: base financiera segura (claude/finanzas-f0-base-segura)
+
+- Contexto: plan en Project doc claude/finanzas-auditoria-y-plan.md; F1 (servicios y tarifas) detenido hasta el PASS de F0.
+- 118 (solo estrecha accesos, no modifica datos; no toca app_record_timesheet_from_checkout):
+  interruptor FINANZAS (apagado); audit_log: filas de acciones financieras solo para ORGANIZATION_ADMIN y nunca
+  ETNARA central (H-01: cuidadores, supervisores y central leían tarifas e importes; confirmado por ejecución);
+  finance_events append-only, solo admin; negación RESTRICTIVE a central en timesheets, worker_financial_rates,
+  pay_periods, pay_period_timesheets y finance_events; hoja aprobada y vínculo de periodo inmutables (H-03).
+- Código: tarifas, aprobación y cierre de periodo escriben valores en finance_events y en audit_log solo ids;
+  rangos de fecha en días de Puerto Rico (H-04: 21:30 AST caía en el día siguiente); periodo solapado → 409
+  PAY_PERIOD_OVERLAP (H-05: era 500 con el mensaje de PostgreSQL en la respuesta); los 500 de periodos ya no
+  devuelven el mensaje de la base de datos.
+- Corrección del informe: H-02 (supervisor en RLS) ya estaba cerrado por 085 (*_admin_only); se re-verifica.
+- verifyFinanceFoundation 22/22; control negativo sin 118: 10/22. npm test 487/487. Rollback probado (limpio y abortado).
+- Siguiente: gate PASS de Rafa → F1 (servicios y tarifas). FINANZAS sigue apagado en todas las agencias.
+
 ## 2026-10-24 — PR 0: recuperación de contraseña por correo (claude/password-recovery-email)
 
 - POST /auth/password-reset/request ahora responde de inmediato y crea el token y envía el correo después

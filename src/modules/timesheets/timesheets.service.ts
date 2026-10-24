@@ -1,6 +1,7 @@
 import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
+import { AGENCY_TIME_ZONE, recordFinanceEvent, recordFinancialAudit } from "../finance/financeEvents.js";
 
 export class TimesheetForbiddenError extends Error {
   constructor() {
@@ -198,17 +199,16 @@ export async function upsertFinancialRate(
       RETURNING organization_worker_membership_id, pay_rate_cents, bill_rate_cents, currency, updated_at
     `.execute(trx);
 
-    await sql`
-      INSERT INTO audit_log (
-        actor_user_id, organization_id, target_organization_id,
-        action, entity_type, entity_id, previous_value, new_value
-      ) VALUES (
-        ${userId}, ${organizationId}, ${organizationId},
-        'WORKER_FINANCIAL_RATE_CHANGED', 'organization_worker_membership', ${membershipId},
-        ${JSON.stringify(previous.rows[0] ?? null)}::jsonb,
-        ${JSON.stringify(saved.rows[0])}::jsonb
-      )
-    `.execute(trx);
+    // 118: values go to finance_events (admin only); audit_log gets no amounts.
+    await recordFinanceEvent(trx, {
+      organizationId, actorUserId: userId, action: "WORKER_FINANCIAL_RATE_CHANGED",
+      entityType: "organization_worker_membership", entityId: membershipId,
+      previousValue: previous.rows[0] ?? null, newValue: saved.rows[0],
+    });
+    await recordFinancialAudit(trx, {
+      organizationId, actorUserId: userId, action: "WORKER_FINANCIAL_RATE_CHANGED",
+      entityType: "organization_worker_membership", entityId: membershipId,
+    });
 
     return saved.rows[0];
   });
@@ -265,8 +265,9 @@ export async function listTimesheets(
       JOIN shifts shift ON shift.id = timesheet.shift_id
       LEFT JOIN care_recipients recipient ON recipient.id = timesheet.care_recipient_id
       WHERE timesheet.organization_id = ${organizationId}
-        AND timesheet.check_in_at >= ${filters.dateFrom}::date
-        AND timesheet.check_in_at < ${filters.dateTo}::date + interval '1 day'
+        -- 118: Puerto Rico days, not the database session's (UTC) days.
+        AND timesheet.check_in_at >= (${filters.dateFrom}::date)::timestamp AT TIME ZONE ${AGENCY_TIME_ZONE}
+        AND timesheet.check_in_at < ((${filters.dateTo}::date + 1)::timestamp AT TIME ZONE ${AGENCY_TIME_ZONE})
         AND (${filters.status ?? null}::text IS NULL OR timesheet.status = ${filters.status ?? null}::text)
       ORDER BY timesheet.check_in_at DESC
     `.execute(trx);
@@ -366,18 +367,14 @@ export async function reviewTimesheet(
       `.execute(trx);
     }
 
-    await sql`
-      INSERT INTO audit_log (
-        actor_user_id, organization_id, target_organization_id,
-        action, entity_type, entity_id, previous_value, new_value
-      ) VALUES (
-        ${userId}, ${organizationId}, ${organizationId},
-        ${input.decision === "approved" ? "TIMESHEET_APPROVED" : "TIMESHEET_DISPUTED"},
-        'timesheet', ${timesheetId},
-        ${JSON.stringify(current)}::jsonb,
-        ${JSON.stringify(saved.rows[0])}::jsonb
-      )
-    `.execute(trx);
+    const action = input.decision === "approved" ? "TIMESHEET_APPROVED" : "TIMESHEET_DISPUTED";
+    await recordFinanceEvent(trx, {
+      organizationId, actorUserId: userId, action, entityType: "timesheet", entityId: timesheetId,
+      previousValue: current, newValue: saved.rows[0],
+    });
+    await recordFinancialAudit(trx, {
+      organizationId, actorUserId: userId, action, entityType: "timesheet", entityId: timesheetId,
+    });
 
     return saved.rows[0];
   });

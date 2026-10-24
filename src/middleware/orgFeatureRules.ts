@@ -1,5 +1,5 @@
 /** Which routes belong to a pilot feature (pure; used by orgFeatureGate). */
-export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS";
+export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const RULES: { pattern: RegExp; feature: OrgFeature }[] = [

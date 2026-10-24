@@ -2,6 +2,13 @@
 
 ## In Progress
 
+### FIN-F0 — Finanzas F0 safe financial foundation (backend)
+
+- Status: ready for review (gate). Migration 118 + verifyFinanceFoundation (22/22).
+- Next: FIN-F1 services catalog and differentiated rates (client vs caregiver, per-client rates with
+  effective dates, optional per-caregiver pay exceptions, day unit: partial days left to the admin,
+  private-person payers). Pilot protection: no change to check-out, SmartMatch or En Camino; FINANZAS off.
+
 ### ETN-042 — Phase 12.4 offline mode (backend)
 
 - Status: ready for review (gate). Migration 087 + verifyOfflineCheckInOut.
