@@ -1,86 +1,80 @@
 /**
- * Pilot preflight for ONE organization in production. STRICTLY READ-ONLY:
- * the session is read-only (default_transaction_read_only) and every query runs
- * inside BEGIN READ ONLY ... ROLLBACK. Prints counts, flags and masked e-mails
- * only — never names, birth dates, addresses or any clinical field of people
- * receiving care.
+ * Pilot preflight for ONE organization in production. STRICTLY READ-ONLY and
+ * least-privilege: it must log in as etnara_preflight_ro (ops/rehearsal/
+ * preflight-ro-role.create.sql) — NOBYPASSRLS, column-level SELECT only — and
+ * refuses any other login. Reads inside BEGIN READ ONLY ... ROLLBACK with the
+ * same RLS scope ETNARA Central uses (app.is_superadmin + an active platform
+ * admin), so every row-level policy applies. Prints flags, counts and e-mail
+ * DOMAINS only: no names, birth dates, addresses or clinical fields.
  *   PILOT_ORG_ID  full uuid of the organization to inspect (required)
  *   PREFLIGHT_URL connection string (Railway variable; never logged)
  */
 import { Client } from "pg";
 
-const mask = (e: string | null) => {
-  if (!e) return "(sin correo)";
-  // domain only: tells test accounts (e.g. *.invalid) from real ones without showing who
-  return `***@${e.split("@")[1] ?? "?"}`;
-};
-
-const c = new Client({ connectionString: process.env.PREFLIGHT_URL, options: "-c default_transaction_read_only=on", connectionTimeoutMillis: 15000, statement_timeout: 20000 });
+const EXPECTED_ROLE = "etnara_preflight_ro";
+const domain = (e: string | null) => (e ? `***@${e.split("@")[1] ?? "?"}` : "(sin correo)");
+const c = new Client({ connectionString: process.env.PREFLIGHT_URL, connectionTimeoutMillis: 15000, statement_timeout: 20000 });
 
 (async () => {
   const org = process.env.PILOT_ORG_ID ?? "";
-  if (!/^[0-9a-f-]{36}$/.test(org)) throw new Error("PILOT_ORG_ID must be a full uuid");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(org)) throw new Error("PILOT_ORG_ID must be a full uuid");
   await c.connect();
-  // Refuse to run unless the login itself cannot write: not a superuser, no
-  // write privilege on any application table, read-only by default.
-  const who = (await c.query<{ u: string; su: boolean; ro: string; w: number }>(
-    `SELECT current_user u, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) su,
+
+  // Refuse unless this is the dedicated least-privilege login.
+  const who = (await c.query<{ u: string; su: boolean; bypass: boolean; createrole: boolean; ro: string; w: number }>(
+    `SELECT current_user u, r.rolsuper su, r.rolbypassrls bypass, r.rolcreaterole createrole,
             current_setting('default_transaction_read_only') ro,
             (SELECT count(*)::int FROM pg_class k JOIN pg_namespace n ON n.oid=k.relnamespace
               WHERE n.nspname='public' AND k.relkind IN ('r','p')
                 AND has_table_privilege(current_user, k.oid, 'INSERT,UPDATE,DELETE,TRUNCATE')
-                -- password_reset_tokens is granted to PUBLIC by migration 074 (every role gets it);
-                -- the read-only session + READ ONLY transaction below still block any write there.
-                AND k.relname <> 'password_reset_tokens') w`)).rows[0];
-  if (who.su || who.ro !== "on" || who.w !== 0) throw new Error(`refused: login can write (role=${who.u} superuser=${who.su} read_only=${who.ro} writable_tables=${who.w})`);
-  console.log(`PILOT_PREFLIGHT_ROLE ${who.u} superuser=${who.su} read_only=${who.ro} writable_tables=${who.w}`);
-  await c.query("BEGIN READ ONLY");
-  const txro = (await c.query<{ v: string }>(`SELECT current_setting('transaction_read_only') v`)).rows[0].v;
-  if (txro !== "on") throw new Error("refused: transaction is not read-only");
-  const q = async <T extends Record<string, unknown>>(s: string, p: unknown[] = []) => (await c.query<T>(s, p)).rows;
-  const out: Record<string, unknown> = {};
+                -- migration 074 grants this one to PUBLIC; RLS + read-only still block writes
+                AND k.relname <> 'password_reset_tokens') w
+       FROM pg_roles r WHERE r.rolname=current_user`)).rows[0];
+  if (who.u !== EXPECTED_ROLE || who.su || who.bypass || who.createrole || who.ro !== "on" || who.w !== 0)
+    throw new Error(`refused: role=${who.u} superuser=${who.su} bypassrls=${who.bypass} createrole=${who.createrole} read_only=${who.ro} writable_tables=${who.w}`);
+  console.log(`PILOT_PREFLIGHT_ROLE ${who.u} superuser=${who.su} bypassrls=${who.bypass} read_only=${who.ro} writable_tables=${who.w}`);
 
+  await c.query("BEGIN READ ONLY");
+  const q = async <T extends Record<string, unknown>>(s: string, p: unknown[] = []) => (await c.query<T>(s, p)).rows;
+  if ((await q<{ v: string }>(`SELECT current_setting('transaction_read_only') v`))[0].v !== "on") throw new Error("refused: transaction is not read-only");
+
+  // RLS scope of ETNARA Central (transaction-local settings, gone at ROLLBACK).
+  const admin = (await q<{ user_id: string }>(`SELECT user_id FROM platform_admins WHERE revoked_at IS NULL LIMIT 1`))[0];
+  if (!admin) throw new Error("no active platform admin to scope RLS");
+  await q(`SELECT set_config('app.current_user_id', $1, true), set_config('app.is_superadmin', 'true', true)`, [admin.user_id]);
+
+  const out: Record<string, unknown> = {};
   out.organization = (await q(`SELECT id, name, organization_type, status, created_at, archived_at FROM organizations WHERE id=$1`, [org]))[0] ?? null;
   out.features = await q(`SELECT feature_code, enabled, updated_at FROM organization_features WHERE organization_id=$1 ORDER BY feature_code`, [org]);
-  out.featureHistory = (await q<{ feature_code: string; enabled: boolean; reason: string; occurred_at: string; email: string | null }>(
-    `SELECT e.feature_code, e.enabled, e.reason, e.occurred_at, u.email FROM organization_feature_events e JOIN users u ON u.id=e.actor_user_id WHERE e.organization_id=$1 ORDER BY e.occurred_at`, [org]))
-    .map((h) => ({ ...h, email: mask(h.email) }));
+  out.featureHistory = await q(`SELECT feature_code, enabled, reason, occurred_at FROM organization_feature_events WHERE organization_id=$1 ORDER BY occurred_at`, [org]);
 
-  out.members = (await q<{ email: string | null; phone: boolean; status: string; user_status: string; roles: string[] }>(
-    `SELECT u.email, (u.phone IS NOT NULL) phone, m.status, u.status user_status,
+  out.members = (await q<{ email: string | null; status: string; user_status: string; roles: string[] }>(
+    `SELECT u.email, m.status, u.status user_status,
             coalesce(array_agg(r.code ORDER BY r.code) FILTER (WHERE r.code IS NOT NULL), '{}') roles
        FROM organization_memberships m JOIN users u ON u.id=m.user_id
-       LEFT JOIN user_roles ur ON ur.organization_membership_id=m.id LEFT JOIN roles r ON r.id=ur.role_id
-      WHERE m.organization_id=$1 GROUP BY u.email, u.phone, m.status, u.status ORDER BY 5, 1`, [org]))
-    .map((m) => ({ ...m, email: mask(m.email) }));
+       LEFT JOIN user_roles ur ON ur.organization_membership_id=m.id AND ur.organization_id=m.organization_id
+       LEFT JOIN roles r ON r.id=ur.role_id
+      WHERE m.organization_id=$1 GROUP BY u.id, u.email, m.status, u.status ORDER BY 4, 1`, [org]))
+    .map((m) => ({ ...m, email: domain(m.email) }));
 
-  out.workers = (await q(
+  out.workers = await q(
     `SELECT owm.status, owm.internal_role,
             EXISTS (SELECT 1 FROM credentials cr JOIN organization_credential_reviews rv ON rv.credential_id=cr.id
                      WHERE cr.worker_id=owm.worker_id AND rv.organization_id=owm.organization_id AND rv.review_status='approved') credential_approved,
-            EXISTS (SELECT 1 FROM worker_weekly_availability a WHERE a.organization_worker_membership_id=owm.id) availability_set,
             (w.user_id IS NOT NULL) has_login
        FROM organization_worker_memberships owm JOIN workers w ON w.id=owm.worker_id
-      WHERE owm.organization_id=$1 ORDER BY 1, 2`, [org]));
+      WHERE owm.organization_id=$1 ORDER BY 1, 2`, [org]);
 
   out.careRecipients = (await q(
-    `SELECT count(*) FILTER (WHERE archived_at IS NULL)::int active, count(*)::int total,
-            min(created_at) first_created, max(created_at) last_created,
-            (SELECT count(*)::int FROM care_recipient_locations l WHERE l.organization_id=$1) with_address,
-            (SELECT count(*)::int FROM care_recipient_locations l WHERE l.organization_id=$1 AND l.latitude IS NOT NULL) with_map_point
-       FROM care_recipients WHERE organization_id=$1`, [org]))[0];
+    `SELECT count(*) FILTER (WHERE archived_at IS NULL)::int active, count(*)::int total FROM care_recipients WHERE organization_id=$1`, [org]))[0];
 
   out.family = (await q<{ email: string | null; status: string; notif: boolean; addr: boolean }>(
     `SELECT u.email, f.status, f.can_receive_notifications notif, f.can_view_service_location addr
-       FROM family_relationships f JOIN users u ON u.id=f.user_id WHERE f.organization_id=$1 ORDER BY 1`, [org]))
-    .map((f) => ({ ...f, email: mask(f.email) }));
+       FROM family_relationships f LEFT JOIN users u ON u.id=f.user_id WHERE f.organization_id=$1 ORDER BY 1`, [org]))
+    .map((f) => ({ ...f, email: domain(f.email) }));
 
   out.activity = (await q(
-    `SELECT (SELECT count(*)::int FROM shifts WHERE organization_id=$1) shifts,
-            (SELECT count(*)::int FROM shifts WHERE organization_id=$1 AND scheduled_start > now()) future_shifts,
-            (SELECT count(*)::int FROM notifications WHERE organization_id=$1 AND created_at > now() - interval '7 days') notifications_7d,
-            (SELECT count(*)::int FROM smartmatch_opportunities WHERE organization_id=$1) opportunities,
-            (SELECT count(*)::int FROM shift_journey_events WHERE organization_id=$1) journey_events`, [org]))[0];
+    `SELECT (SELECT count(*)::int FROM notifications WHERE organization_id=$1 AND created_at > now() - interval '7 days') notifications_7d`, [org]))[0];
 
   out.otherOrganizations = (await q(
     `SELECT count(*)::int organizations,
