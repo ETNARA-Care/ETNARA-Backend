@@ -195,11 +195,19 @@ async function operationalHistory(trx: Trx, organizationId: string, shiftId: str
       WHERE a.shift_id = ${shiftId} AND a.organization_id = ${organizationId} AND a.responded_at IS NOT NULL
         AND a.response_status::text IN ('accepted', 'rejected')
     UNION ALL
+    -- Migration 113: removals / reassignments are part of the visit's history (who was taken off).
+    SELECT ra.removed_at, 'UNASSIGNED', jsonb_build_object('caregiver', w.display_name)
+      FROM assignment_removal_audit ra JOIN organization_worker_memberships owm ON owm.id = ra.organization_worker_membership_id
+      JOIN workers w ON w.id = owm.worker_id WHERE ra.shift_id = ${shiftId} AND ra.organization_id = ${organizationId}
+    UNION ALL
     SELECT e.occurred_at, e.event_type,
-           CASE WHEN e.event_type = 'DELAY_REPORTED' THEN jsonb_build_object('minutes', e.declared_delay_minutes, 'reason', e.delay_reason) END
+           -- Migration 113: a record made without signal keeps the phone's time and is marked so the agency can tell
+           NULLIF(jsonb_strip_nulls(jsonb_build_object('minutes', e.declared_delay_minutes, 'reason', e.delay_reason,
+             'offline', CASE WHEN e.recorded_offline THEN true END)), '{}'::jsonb)
       FROM shift_journey_events e WHERE e.shift_id = ${shiftId} AND e.organization_id = ${organizationId}
     UNION ALL
-    SELECT sa.occurred_at, 'ARRIVED', jsonb_build_object('proximity', sa.proximity, 'needsReview', sa.needs_review, 'reviewed', sa.reviewed_at IS NOT NULL)
+    SELECT sa.occurred_at, 'ARRIVED', jsonb_strip_nulls(jsonb_build_object('proximity', sa.proximity, 'needsReview', sa.needs_review,
+             'reviewed', sa.reviewed_at IS NOT NULL, 'offline', CASE WHEN sa.recorded_offline THEN true END))
       FROM shift_arrivals sa WHERE sa.shift_id = ${shiftId} AND sa.organization_id = ${organizationId}
     UNION ALL
     SELECT ve.occurred_at, CASE ve.event_type::text WHEN 'check_in' THEN 'STARTED' ELSE 'FINISHED' END, NULL
@@ -242,7 +250,9 @@ export async function listTodayJourneys(userId: string, organizationId: string) 
       const risks: JourneyRisk[] = [];
       const waiting = ["PENDING_ACCEPTANCE", "ASSIGNED"].includes(j.state);
       if (waiting && now >= start - 30 * 60_000 && now < start) risks.push("NOT_EN_ROUTE");
-      if (["PENDING_ACCEPTANCE", "ASSIGNED", "EN_ROUTE"].includes(j.state) && now >= start + 15 * 60_000) risks.push("LATE_ARRIVAL");
+      // Same rule as the agency alert (migration 113): 15 min after start + the declared delay.
+      const declared = ["ASSIGNED", "EN_ROUTE"].includes(j.state) ? (j.delay?.minutes ?? 0) : 0;
+      if (["PENDING_ACCEPTANCE", "ASSIGNED", "EN_ROUTE"].includes(j.state) && now >= start + (15 + declared) * 60_000) risks.push("LATE_ARRIVAL");
       if (j.delay && j.delay.minutes >= 30 && ["ASSIGNED", "EN_ROUTE"].includes(j.state)) risks.push("DELAY_30");
       items.push({ shiftId: s.id, scheduledStart: iso(s.scheduled_start), scheduledEnd: iso(s.scheduled_end),
         recipient: s.recipient, caregiver: s.caregiver, journey: j, risks });
