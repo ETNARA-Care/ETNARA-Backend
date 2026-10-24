@@ -57,7 +57,9 @@ async function main() {
     try { await fetch(endpoint); up = true; break; } catch { await new Promise((r) => setTimeout(r, 250)); }
   }
   if (!up) {
-    console.log(`Local S3 (moto) did not start: ${spawnError ? (spawnError as Error).message : "timeout"}\n${motoLog.join("").slice(-2000)}`);
+    const why = `Local S3 (moto) did not start: ${spawnError ? (spawnError as Error).message : "timeout"} ${motoLog.join("").slice(-1500)}`;
+    console.log(why);
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=Local S3::${why.replace(/\n/g, "%0A")}`);
     moto.kill();
     process.exit(1);
   }
@@ -371,11 +373,15 @@ async function main() {
   console.log("| Check | Result | Detail |\n|---|---|---|");
   for (const r of results) console.log(`| ${r.check} | ${r.pass ? "PASS" : "FAIL"} | ${r.detail} |`);
   const failed = results.filter((r) => !r.pass).length;
+  // GitHub annotations: readable in the PR checks without downloading logs. Never contain data.
+  const gh = (s: string) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").slice(0, 900);
+  if (process.env.GITHUB_ACTIONS) for (const r of results.filter((x) => !x.pass)) console.log(`::error title=${gh(r.check.slice(0, 60))}::${gh(r.detail)}`);
   console.log(`\nActivity photo upload: ${results.length - failed}/${results.length} PASS`);
   if (failed) process.exit(1);
 }
 
 main().catch((error) => {
+  if (process.env.GITHUB_ACTIONS) console.log(`::error title=Activity photo upload crashed::${String((error as Error)?.stack ?? error).replace(/\n/g, "%0A").slice(0, 1500)}`);
   console.error("Activity photo upload verification failed:", error);
   process.exit(1);
 });
