@@ -120,6 +120,7 @@ async function main() {
   const sup = await person(orgA, "supervisor", ["SUPERVISOR"]);
   const cg = await person(orgA, "cg", ["WORKER"], true);
   const admB = await person(orgB, "adminb", ["ORGANIZATION_ADMIN"]);
+  const fam = await person(orgA, "family", ["FAMILY"]);
   const centralUser = (await q<{ id: string }>(`INSERT INTO users (email,status) VALUES ($1,'active') RETURNING id`, [`fin-central-${tag}@example.invalid`])).rows[0].id;
   await q("INSERT INTO platform_admins (user_id) VALUES ($1)", [centralUser]);
   const recipientId = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name,status) VALUES ($1,'Sintetico',$2,'active') RETURNING id`, [orgA, `R-${tag}`])).rows[0].id;
@@ -258,6 +259,77 @@ async function main() {
     check("F21 operations center: admin sees the pending hours (no amounts), supervisor 200 without hours",
       opsAdm.status === 200 && Boolean(alert) && !Object.keys(alert ?? {}).some((k) => MONEY_KEY.test(k)) && opsSup.status === 200 && supHours === 0,
       `${opsAdm.status} ${alert ? "found" : "missing"} / ${opsSup.status} supervisor hours=${supHours}`);
+
+    // F23-F31 Negative access per role, at the database and over HTTP.
+    const roles: Array<[string, { userId: string; orgId: string; superadmin?: boolean }]> = [
+      ["caregiver", { userId: cg.userId, orgId: orgA }],
+      ["family", { userId: fam.userId, orgId: orgA }],
+      ["supervisor", { userId: sup.userId, orgId: orgA }],
+      ["central", central],
+      ["adminB(ctx A)", { userId: admB.userId, orgId: orgA }],
+    ];
+    const readLeaks: string[] = [];
+    for (const [name, ctx] of roles) {
+      for (const t of [...tables, "finance_events"]) {
+        const r = await asSession<{ n: number }>(ctx, `SELECT count(*)::int n FROM ${t}`);
+        if (r.error || r.rows[0]?.n !== 0) readLeaks.push(`${name}:${t}=${r.rows[0]?.n ?? r.error}`);
+      }
+      const a = await asSession<{ n: number }>(ctx, fin, [FINANCIAL_ACTIONS]);
+      if (a.error || a.rows[0]?.n !== 0) readLeaks.push(`${name}:audit=${a.rows[0]?.n ?? a.error}`);
+    }
+    check("F23 caregiver, family, supervisor, ETNARA central and another agency's admin read 0 financial rows (5 tables + financial audit)",
+      readLeaks.length === 0, readLeaks.join(" ") || "0 leaks");
+
+    const writeLeaks: string[] = [];
+    for (const [name, ctx] of roles) {
+      const ins = await asSession(ctx, "INSERT INTO finance_events (organization_id,actor_user_id,action,entity_type,entity_id) VALUES ($1,$2,'FINANCE_FORGED','x',$1)", [orgA, ctx.userId]);
+      if (!ins.error) writeLeaks.push(`${name}:insert finance_events`);
+      const up = await asSession(ctx, "UPDATE timesheets SET review_note='x' WHERE organization_id=$1", [orgA]);
+      if (!up.error && up.rowCount > 0) writeLeaks.push(`${name}:update timesheets=${up.rowCount}`);
+      const ur = await asSession(ctx, "UPDATE worker_financial_rates SET bill_rate_cents=1 WHERE organization_id=$1", [orgA]);
+      if (!ur.error && ur.rowCount > 0) writeLeaks.push(`${name}:update rates=${ur.rowCount}`);
+      const ir = await asSession(ctx, "INSERT INTO worker_financial_rates (organization_worker_membership_id,organization_id,pay_rate_cents,bill_rate_cents,created_by_user_id,updated_by_user_id) VALUES ($1,$2,1,1,$3,$3) ON CONFLICT DO NOTHING", [cg.owm, orgA, ctx.userId]);
+      if (!ir.error && ir.rowCount > 0) writeLeaks.push(`${name}:insert rates`);
+      const ip = await asSession(ctx, "INSERT INTO pay_periods (organization_id,date_from,date_to,cadence,status) VALUES ($1,'2030-01-01','2030-01-02','custom','open')", [orgA]);
+      if (!ip.error) writeLeaks.push(`${name}:insert pay_periods`);
+    }
+    check("F24 none of those roles can write finance_events, timesheets, rates or pay periods (database)",
+      writeLeaks.length === 0, writeLeaks.join(" ") || "all refused");
+
+    const forged = await asSession({ userId: adm.userId, orgId: orgA }, "INSERT INTO finance_events (organization_id,actor_user_id,action,entity_type,entity_id) VALUES ($1,$2,'FINANCE_FORGED','x',$1)", [orgB, adm.userId]);
+    const asOther = await asSession({ userId: adm.userId, orgId: orgA }, "INSERT INTO finance_events (organization_id,actor_user_id,action,entity_type,entity_id) VALUES ($1,$2,'FINANCE_FORGED','x',$1)", [orgA, sup.userId]);
+    check("F25 an admin cannot write finance_events for another agency or in another user's name", Boolean(forged.error) && Boolean(asOther.error),
+      `${forged.error ?? "ALLOWED"} | ${asOther.error ?? "ALLOWED"}`);
+
+    const httpPaths = [`${O}/financial-rates`, `${O}/timesheets?dateFrom=2026-03-01&dateTo=2026-03-31`, `${O}/pay-periods`, `${O}/pay-periods/preview?dateFrom=2026-03-01&dateTo=2026-03-31`];
+    const httpLeaks: string[] = [];
+    for (const [name, p] of [["caregiver", cg], ["family", fam], ["supervisor", sup], ["adminB", admB]] as const) {
+      for (const path of httpPaths) {
+        const r = await call("GET", path, p.token);
+        if (r.status !== 403 || MONEY_KEY.test(JSON.stringify(r.body))) httpLeaks.push(`${name} ${path.split("?")[0].split("/").pop()}=${r.status}`);
+      }
+      const w = await call("PUT", `${O}/financial-rates/${cg.owm}`, p.token, { payRateCents: 1, billRateCents: 1, currency: "USD" });
+      if (w.status !== 403) httpLeaks.push(`${name} PUT rate=${w.status}`);
+    }
+    check("F26 caregiver, family, supervisor and another agency's admin get 403 on every money route (HTTP, read and write)",
+      httpLeaks.length === 0, httpLeaks.join(" ") || "all 403");
+
+    const reapprove = await call("POST", `${O}/timesheets/${ts1}/review`, adm.token, { decision: "disputed", note: "reabrir" });
+    check("F27 an approved timesheet cannot be re-reviewed over HTTP (409)", reapprove.status === 409, `${reapprove.status} ${reapprove.body.error ?? ""}`);
+
+    const prev10 = await call("GET", `${O}/pay-periods/preview?dateFrom=2026-03-10&dateTo=2026-03-10&cadence=custom`, adm.token);
+    const prev11 = await call("GET", `${O}/pay-periods/preview?dateFrom=2026-03-11&dateTo=2026-03-11&cadence=custom`, adm.token);
+    check("F28 pay-period preview uses Puerto Rico days (21:30 AST pending visit counted on 10 Mar, not 11 Mar)",
+      prev10.status === 200 && prev10.body.exceptions?.pending === 1 && prev11.body.exceptions?.pending === 0,
+      `10 Mar pending=${prev10.body.exceptions?.pending} / 11 Mar pending=${prev11.body.exceptions?.pending}`);
+    const edge = await call("POST", `${O}/pay-periods/close`, adm.token, { dateFrom: "2026-03-11", dateTo: "2026-03-12", cadence: "custom" });
+    check("F29 a period starting the next PR day can close (the 21:30 AST pending visit is not in it)", edge.status === 201, `${edge.status} ${edge.body.error ?? ""}`);
+
+    // F30 Two agencies: A's admin sees only A's financial rows; B's admin only B's.
+    const isoA = await asSession<{ n: number }>({ userId: adm.userId, orgId: orgA }, "SELECT count(*)::int n FROM timesheets WHERE organization_id <> $1", [orgA]);
+    const isoBctx = await asSession<{ n: number }>({ userId: admB.userId, orgId: orgB }, "SELECT (SELECT count(*) FROM timesheets) + (SELECT count(*) FROM worker_financial_rates) + (SELECT count(*) FROM pay_periods) + (SELECT count(*) FROM finance_events WHERE organization_id <> $1) AS n", [orgB]);
+    check("F30 agency isolation: A's admin sees no other agency's timesheets; B's admin sees none of A's financial rows",
+      isoA.rows[0]?.n === 0 && Number(isoBctx.rows[0]?.n) === 0, `${isoA.rows[0]?.n ?? isoA.error} / ${isoBctx.rows[0]?.n ?? isoBctx.error}`);
 
     // F22 No 500 in the whole run.
     const fives = all.filter((r) => r.status === 500);
