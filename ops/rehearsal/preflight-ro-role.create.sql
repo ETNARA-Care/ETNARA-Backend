@@ -8,12 +8,11 @@ BEGIN;
 DO $$ BEGIN
   EXECUTE format(
     'CREATE ROLE etnara_preflight_ro LOGIN PASSWORD %L
-       NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT
+       NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
        BYPASSRLS CONNECTION LIMIT 1 VALID UNTIL %L',
     '<PASSWORD>', (now() + interval '24 hours')::text);
 END $$;
 GRANT pg_read_all_data TO etnara_preflight_ro;      -- SELECT only
-ALTER ROLE etnara_preflight_ro INHERIT;              -- needed to use pg_read_all_data
 ALTER ROLE etnara_preflight_ro SET default_transaction_read_only = on;
 ALTER ROLE etnara_preflight_ro SET statement_timeout = '30s';
 COMMIT;
