@@ -45,6 +45,21 @@ const envSchema = z.object({
     .default("10485760")
     .transform((value) => Number.parseInt(value, 10))
     .pipe(z.number().int().positive()),
+  // Activity photos (PR 2): a SEPARATE private bucket. Never falls back to STORAGE_*.
+  PHOTO_STORAGE_ENDPOINT: z.string().url().optional(),
+  PHOTO_STORAGE_REGION: z.string().min(1).optional(),
+  PHOTO_STORAGE_BUCKET: z.string().min(1).optional(),
+  PHOTO_STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
+  PHOTO_STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  PHOTO_STORAGE_FORCE_PATH_STYLE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  PHOTO_MAX_UPLOAD_BYTES: z
+    .string()
+    .default("15728640")
+    .transform((value) => Number.parseInt(value, 10))
+    .pipe(z.number().int().positive().max(20 * 1024 * 1024)),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_SENDER_ADDRESS: z.string().email().default("invitations@etnara.care"),
   EMAIL_SENDER_NAME: z.string().default("ETNARA Care"),

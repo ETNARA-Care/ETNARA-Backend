@@ -19,6 +19,9 @@ on:
       - 'scripts/verifySmartMatchFixesRollback.ts'
       - 'scripts/verifyCheckOutFlow.ts'
       - 'scripts/verifyActivityPhotoSecurity.ts'
+      - 'scripts/verifyActivityPhotoUpload.ts'
+      - 'src/modules/activityPhotos/**'
+      - 'ops/116_activity_photos_upload_view.rollback.sql'
       - 'ops/115_activity_photos_security.rollback.sql'
       - 'src/modules/careEvents/**'
       - 'src/modules/familyTimeline/**'
@@ -111,3 +114,11 @@ jobs:
 
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts
+
+      - name: Local private S3 for photo tests (moto, never a hosted service)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/moto-venv"
+          "$RUNNER_TEMP/moto-venv/bin/pip" install --quiet "moto[server]==5.2.4"
+          echo "PHOTO_TEST_PYTHON=$RUNNER_TEMP/moto-venv/bin/python" >> "$GITHUB_ENV"
+      - name: Activity photos upload (EXIF removal, review, consent, family, concurrency)
+        run: npx tsx scripts/verifyActivityPhotoUpload.ts
