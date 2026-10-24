@@ -23,7 +23,10 @@ DROP FUNCTION IF EXISTS public.app_photo_consent_form_for_view(uuid);
 DROP FUNCTION IF EXISTS public.app_create_photo_consent_form(uuid, uuid, text, text, bigint, text);
 DROP FUNCTION IF EXISTS public.app_activity_photo_for_view(uuid);
 DROP FUNCTION IF EXISTS public.app_create_activity_photo(uuid, uuid, text, bigint, text);
+DROP FUNCTION IF EXISTS public.app_activity_photo_eligibility(uuid);
+DROP FUNCTION IF EXISTS public.app_shift_photo_eligibility(uuid);
 DROP FUNCTION IF EXISTS public.app_precheck_activity_photo(uuid);
+DROP FUNCTION IF EXISTS public.app_photo_shift_target(uuid, uuid);
 DROP TABLE IF EXISTS care_event_photo_access_log;
 DROP INDEX IF EXISTS uq_care_event_photos_one_per_activity;
 

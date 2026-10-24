@@ -49,30 +49,86 @@ CREATE POLICY platform_phi_deny ON care_event_photo_access_log AS RESTRICTIVE FO
 
 -- Same checks as app_attach_activity_photo, before the bytes are stored.
 -- Returns the resident of the activity (the API builds the storage key with it).
-CREATE OR REPLACE FUNCTION public.app_precheck_activity_photo(p_care_event_id uuid)
+-- Shift-level check shared by the eligibility query and every upload: the
+-- caller is the caregiver with an ACCEPTED assignment on a non-cancelled shift
+-- of THIS agency, for THIS agency's resident. Returns the resident or raises.
+CREATE OR REPLACE FUNCTION public.app_photo_shift_target(p_shift_id uuid, p_membership_id uuid)
 RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE v_org uuid := public.app_photo_ctx_org(); v_user uuid := public.app_photo_ctx_user(); v_recipient uuid;
 BEGIN
   IF public.app_is_superadmin() OR v_org IS NULL OR v_user IS NULL THEN RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501'; END IF;
   IF NOT public.app_org_feature_enabled(v_org, 'ACTIVITY_PHOTOS') THEN RAISE EXCEPTION 'FEATURE_NOT_ENABLED' USING ERRCODE = '42501'; END IF;
-  SELECT ce.care_recipient_id INTO v_recipient
+  SELECT s.care_recipient_id INTO v_recipient
+    FROM public.shifts s
+    JOIN public.care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
+    JOIN public.assignments a ON a.shift_id = s.id AND a.organization_id = s.organization_id AND a.response_status = 'accepted'
+    JOIN public.organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id
+                                                   AND owm.organization_id = s.organization_id AND owm.status = 'active'
+    JOIN public.workers w ON w.id = owm.worker_id AND w.user_id = v_user
+   WHERE s.id = p_shift_id AND s.organization_id = v_org AND s.status <> 'cancelled'
+     AND (p_membership_id IS NULL OR owm.id = p_membership_id)
+   LIMIT 1;
+  IF v_recipient IS NULL THEN RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501'; END IF;
+  RETURN v_recipient;
+END $$;
+REVOKE ALL ON FUNCTION public.app_photo_shift_target(uuid, uuid) FROM PUBLIC;
+
+-- Every check for attaching a photo to one activity: organisation, resident,
+-- the caregiver who wrote it and is still assigned (accepted) to its shift,
+-- the activity itself (≤ 12 h old, no photo yet) and the capture consent.
+CREATE OR REPLACE FUNCTION public.app_precheck_activity_photo(p_care_event_id uuid)
+RETURNS uuid LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE v_org uuid := public.app_photo_ctx_org(); v_user uuid := public.app_photo_ctx_user(); ev record;
+BEGIN
+  IF public.app_is_superadmin() OR v_org IS NULL OR v_user IS NULL THEN RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501'; END IF;
+  IF NOT public.app_org_feature_enabled(v_org, 'ACTIVITY_PHOTOS') THEN RAISE EXCEPTION 'FEATURE_NOT_ENABLED' USING ERRCODE = '42501'; END IF;
+  SELECT ce.care_recipient_id, ce.shift_id, ce.organization_worker_membership_id AS owm INTO ev
     FROM public.care_events ce
     JOIN public.organization_worker_memberships owm ON owm.id = ce.organization_worker_membership_id AND owm.organization_id = ce.organization_id
     JOIN public.workers w ON w.id = owm.worker_id
    WHERE ce.id = p_care_event_id AND ce.organization_id = v_org AND w.user_id = v_user AND owm.status = 'active'
      AND ce.created_at > now() - interval '12 hours';
-  IF v_recipient IS NULL THEN RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.consent_records c WHERE c.organization_id = v_org AND c.care_recipient_id = v_recipient
+  IF NOT FOUND OR ev.care_recipient_id IS NULL OR ev.shift_id IS NULL THEN RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501'; END IF;
+  -- Same shift, same resident, still assigned to the author.
+  IF public.app_photo_shift_target(ev.shift_id, ev.owm) IS DISTINCT FROM ev.care_recipient_id THEN
+    RAISE EXCEPTION 'PHOTO_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.consent_records c WHERE c.organization_id = v_org AND c.care_recipient_id = ev.care_recipient_id
                  AND c.consent_type = 'PHOTO_CAPTURE' AND c.revoked_at IS NULL) THEN
     RAISE EXCEPTION 'PHOTO_CONSENT_REQUIRED' USING ERRCODE = '42501';
   END IF;
   IF EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.care_event_id = p_care_event_id) THEN
     RAISE EXCEPTION 'PHOTO_ALREADY_ATTACHED' USING ERRCODE = '23505';
   END IF;
-  RETURN v_recipient;
+  RETURN ev.care_recipient_id;
 END $$;
 REVOKE ALL ON FUNCTION public.app_precheck_activity_photo(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_precheck_activity_photo(uuid) TO app_runtime;
+
+-- Eligibility (caregiver): ONLY true/false. Nothing about the consent (form,
+-- signer, dates, type) is returned. Anything the caller may not see raises
+-- (→ 404). It grants nothing: every upload repeats all the checks.
+CREATE OR REPLACE FUNCTION public.app_shift_photo_eligibility(p_shift_id uuid)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE v_recipient uuid := public.app_photo_shift_target(p_shift_id, NULL);
+BEGIN
+  RETURN EXISTS (SELECT 1 FROM public.consent_records c WHERE c.organization_id = public.app_photo_ctx_org()
+                 AND c.care_recipient_id = v_recipient AND c.consent_type = 'PHOTO_CAPTURE' AND c.revoked_at IS NULL);
+END $$;
+REVOKE ALL ON FUNCTION public.app_shift_photo_eligibility(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_shift_photo_eligibility(uuid) TO app_runtime;
+
+CREATE OR REPLACE FUNCTION public.app_activity_photo_eligibility(p_care_event_id uuid)
+RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+BEGIN
+  PERFORM public.app_precheck_activity_photo(p_care_event_id);
+  RETURN true;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLERRM IN ('PHOTO_CONSENT_REQUIRED', 'PHOTO_ALREADY_ATTACHED') THEN RETURN false; END IF;
+  RAISE;
+END $$;
+REVOKE ALL ON FUNCTION public.app_activity_photo_eligibility(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_activity_photo_eligibility(uuid) TO app_runtime;
 
 -- Registers the stored (already sanitized) image and attaches it. The key
 -- must be exactly the one the API was entitled to write.
@@ -80,8 +136,15 @@ CREATE OR REPLACE FUNCTION public.app_create_activity_photo(p_care_event_id uuid
 RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE v_org uuid := public.app_photo_ctx_org(); v_user uuid := public.app_photo_ctx_user(); v_recipient uuid; v_photo uuid;
 BEGIN
-  v_recipient := public.app_precheck_activity_photo(p_care_event_id);
   PERFORM pg_advisory_xact_lock(hashtextextended('activity-photo:' || p_care_event_id, 0));
+  -- All checks again at upload time, whatever an earlier eligibility query said.
+  v_recipient := public.app_precheck_activity_photo(p_care_event_id);
+  -- Hold the capture consent until commit: a revocation committed first makes
+  -- this find nothing (rejected); one arriving later waits for the upload.
+  PERFORM 1 FROM public.consent_records c
+   WHERE c.organization_id = v_org AND c.care_recipient_id = v_recipient AND c.consent_type = 'PHOTO_CAPTURE' AND c.revoked_at IS NULL
+   FOR SHARE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PHOTO_CONSENT_REQUIRED' USING ERRCODE = '42501'; END IF;
   IF EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.care_event_id = p_care_event_id) THEN
     RAISE EXCEPTION 'PHOTO_ALREADY_ATTACHED' USING ERRCODE = '23505';
   END IF;

@@ -14,6 +14,11 @@
   before decoding). Output always re-encoded JPEG, no EXIF/GPS/XMP/ICC (checked).
 - Tests (synthetic images only, fixtures in tests/fixtures/*.heic): upload verifier 25/25, security
   31/31, npm test 500/500, full regression green. ACTIVITY_PHOTOS off everywhere; 180-day deletion off.
+- Eligibility (approved by Rafa 2026-10-24): GET .../shifts/:id/photo-eligibility and
+  .../care-events/:id/photo-eligibility → only { canAttach }. Upload re-checks everything (org, resident,
+  author still with an ACCEPTED assignment on a non-cancelled shift, ≤ 12 h, consent) and holds the capture
+  consent FOR SHARE until commit (revocation first → 409; revocation later waits). Verifier 33/33.
+- Storage self-check at backend start (log PHOTO_STORAGE_SELF_CHECK, yes/no only) + scripts/checkPhotoStorage.ts.
 - Next: Rafa's authorization to merge/deploy #208; frontend PR 3 (Caregiver Portal capture/upload).
 
 ## 2026-10-23 — Security & production-readiness audit, SmartMatch Gates 4-7 (claude/smartmatch-gate1-rls)

@@ -6,7 +6,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { respondInternalError } from "../../observability/internalError.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
-  consentQuerySchema, getActivityPhotoForEvent, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
+  consentQuerySchema, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
   PhotoError, readActivityPhoto, sendPrivateImage, readPhotoConsentForm, recordPhotoConsent, reviewActivityPhoto, reviewSchema, revokePhotoConsent, revokeSchema,
   uploadActivityPhoto,
 } from "./activityPhotos.service.js";
@@ -47,6 +47,22 @@ function ids(req: Request, res: Response, ...names: string[]): string[] | null {
   if (values.some((v) => !v.success)) { res.status(400).json({ error: "INVALID_ID" }); return null; }
   return values.map((v) => v.data as string);
 }
+
+// Caregiver: may a photo be attached? Only { canAttach }; 404 if the shift or
+// activity is not hers (or another agency's). Never cached.
+router.get("/organizations/:organizationId/shifts/:shiftId/photo-eligibility", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "shiftId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.json(await getShiftPhotoEligibility(req.auth!.userId, p[0], p[1])); }
+  catch (err) { fail(err, req, res); }
+});
+
+router.get("/organizations/:organizationId/care-events/:careEventId/photo-eligibility", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careEventId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.json(await getActivityPhotoEligibility(req.auth!.userId, p[0], p[1])); }
+  catch (err) { fail(err, req, res); }
+});
 
 // Caregiver: attach ONE photo to her activity (raw image body).
 router.post("/organizations/:organizationId/care-events/:careEventId/photo", requireAuth, imageBody, async (req: AuthenticatedRequest, res: Response) => {

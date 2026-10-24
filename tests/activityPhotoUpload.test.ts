@@ -93,7 +93,8 @@ describe("routes and storage", () => {
   it("every photo route is behind the ACTIVITY_PHOTOS switch", () => {
     const O = "11111111-1111-4111-8111-111111111111", X = "22222222-2222-4222-8222-222222222222";
     for (const path of [`/organizations/${O}/care-events/${X}/photo`, `/organizations/${O}/activity-photos`, `/organizations/${O}/activity-photos/${X}/image`,
-      `/organizations/${O}/care-recipients/${X}/photo-consents`, `/organizations/${O}/photo-consents/${X}/revoke`]) {
+      `/organizations/${O}/care-recipients/${X}/photo-consents`, `/organizations/${O}/photo-consents/${X}/revoke`,
+      `/organizations/${O}/shifts/${X}/photo-eligibility`, `/organizations/${O}/care-events/${X}/photo-eligibility`]) {
       expect(gatedFeatureFor(path)?.feature).toBe("ACTIVITY_PHOTOS");
     }
   });
@@ -118,6 +119,20 @@ describe("migration 116", () => {
     expect(m116).toMatch(/'activity-photos\/' \|\| v_org \|\| '\/' \|\| v_recipient \|\| '\/' \|\| p_file_id \|\| '\.jpg'/);
   });
 
+  it("eligibility returns only a boolean and the upload repeats every check, holding the consent", () => {
+    for (const fn of ["app_shift_photo_eligibility(p_shift_id uuid)", "app_activity_photo_eligibility(p_care_event_id uuid)"]) {
+      expect(m116).toMatch(new RegExp(`FUNCTION public\\.${fn.replace(/[()]/g, "\\$&")}\\s+RETURNS boolean`));
+    }
+    const target = m116.slice(m116.indexOf("FUNCTION public.app_photo_shift_target"), m116.indexOf("REVOKE ALL ON FUNCTION public.app_photo_shift_target"));
+    for (const needle of ["response_status = 'accepted'", "s.status <> 'cancelled'", "cr.organization_id = s.organization_id", "owm.status = 'active'", "app_is_superadmin()"]) {
+      expect(target).toContain(needle);
+    }
+    expect(m116).not.toMatch(/GRANT EXECUTE ON FUNCTION public\.app_photo_shift_target/);
+    const create = m116.slice(m116.indexOf("FUNCTION public.app_create_activity_photo"), m116.indexOf("REVOKE ALL ON FUNCTION public.app_create_activity_photo"));
+    expect(create.indexOf("app_precheck_activity_photo")).toBeGreaterThan(create.indexOf("pg_advisory_xact_lock"));
+    expect(create).toMatch(/consent_type = 'PHOTO_CAPTURE' AND c\.revoked_at IS NULL\s+FOR SHARE/);
+  });
+
   it("the access log is read by managers only and never written by app_runtime", () => {
     expect(m116).toMatch(/REVOKE ALL ON care_event_photo_access_log FROM app_runtime;\s+GRANT SELECT ON care_event_photo_access_log TO app_runtime;/);
     expect(m116).toMatch(/CREATE POLICY platform_phi_deny ON care_event_photo_access_log AS RESTRICTIVE/);
@@ -128,5 +143,8 @@ describe("migration 116", () => {
     expect(rollback).toMatch(/115 must stay applied/);
     expect(rollback).not.toMatch(/115_activity_photos_security\.sql'\s*;/);
     expect(rollback).not.toMatch(/GRANT/i);
+    for (const fn of ["app_activity_photo_eligibility(uuid)", "app_shift_photo_eligibility(uuid)", "app_photo_shift_target(uuid, uuid)"]) {
+      expect(rollback).toContain(`DROP FUNCTION IF EXISTS public.${fn};`);
+    }
   });
 });

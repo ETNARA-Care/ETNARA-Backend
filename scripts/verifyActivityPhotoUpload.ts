@@ -149,12 +149,12 @@ async function main() {
     await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,response_status,responded_at) VALUES ($1,$2,$3,'accepted',now())`, [o, s, owm]);
     return s;
   }
-  const sA1 = await shiftFor(orgA, r1, A.cg1.owm!), sA2 = await shiftFor(orgA, r2, A.cg2.owm!), sB = await shiftFor(orgB, rB, B.cg.owm!);
+  const sA1 = await shiftFor(orgA, r1, A.cg1.owm!), sA1c = await shiftFor(orgA, r1, A.cg1.owm!), sA2 = await shiftFor(orgA, r2, A.cg2.owm!), sB = await shiftFor(orgB, rB, B.cg.owm!);
   const activity = async (o: string, shift: string, rec: string, owm: string, ageHours = 0) =>
     (await q<{ id: string }>(`INSERT INTO care_events (organization_id,shift_id,care_recipient_id,organization_worker_membership_id,care_event_type_id,note_text,occurred_at,created_at)
       VALUES ($1,$2,$3,$4,$5,'Paseo sintetico',now()-make_interval(hours=>$6::int),now()-make_interval(hours=>$6::int)) RETURNING id`, [o, shift, rec, owm, noteType, ageHours])).rows[0].id;
   const ev = { a: await activity(orgA, sA1, r1, A.cg1.owm!), b: await activity(orgA, sA1, r1, A.cg1.owm!), c: await activity(orgA, sA1, r1, A.cg1.owm!),
-    d: await activity(orgA, sA1, r1, A.cg1.owm!), race: await activity(orgA, sA1, r1, A.cg1.owm!), heic: await activity(orgA, sA1, r1, A.cg1.owm!), old: await activity(orgA, sA1, r1, A.cg1.owm!, 13),
+    d: await activity(orgA, sA1, r1, A.cg1.owm!), race: await activity(orgA, sA1, r1, A.cg1.owm!), heic: await activity(orgA, sA1, r1, A.cg1.owm!), e1: await activity(orgA, sA1, r1, A.cg1.owm!), e2: await activity(orgA, sA1, r1, A.cg1.owm!), e3: await activity(orgA, sA1, r1, A.cg1.owm!), ec: await activity(orgA, sA1c, r1, A.cg1.owm!), old: await activity(orgA, sA1, r1, A.cg1.owm!, 13),
     r2: await activity(orgA, sA2, r2, A.cg2.owm!), bEv: await activity(orgB, sB, rB, B.cg.owm!) };
   for (const p of [...Object.values(A), ...Object.values(B)]) {
     const r = await call("POST", "/auth/login", "", { email: p.email, password });
@@ -183,6 +183,19 @@ async function main() {
     check("S1 ACTIVITY_PHOTOS off (default): every photo route answers 404 FEATURE_NOT_ENABLED and nothing is stored",
       [offUp, offList, offConsent].every((r) => r.status === 404 && r.body.error === "FEATURE_NOT_ENABLED") && (await objects("")) === 0,
       `${offUp.status} ${offList.status} ${offConsent.status} objects=${await objects("")}`);
+    // Deployment self-check against the local bucket. moto does not refuse anonymous requests,
+    // so the anonymous probe is answered by a stub: 403 (private) and then 200 (public, must FAIL).
+    const { photoStorageSelfCheck, photoStorageSelfCheckPassed } = await import("../src/modules/activityPhotos/photoStorage.js");
+    const anon: string[] = [];
+    const anonDeny = (async (url: string | URL | Request) => { anon.push(String(url)); return new Response("AccessDenied", { status: 403 }); }) as typeof fetch;
+    const anonOpen = (async () => new Response("<ListBucketResult/>", { status: 200 })) as typeof fetch;
+    const good = await photoStorageSelfCheck(anonDeny), pub = await photoStorageSelfCheck(anonOpen);
+    const selfText = JSON.stringify([good, pub]);
+    check("S2 storage self-check: credentials, write/read/delete of a synthetic probe, anonymous read and list refused; a public bucket is reported as FAIL; output has no names, keys or URLs; nothing left behind",
+      photoStorageSelfCheckPassed(good) && !photoStorageSelfCheckPassed(pub) && pub.authenticated && !pub.anonymousReadDenied && pub.cleanedUp
+        && anon.length === 2 && anon.every((u) => u.includes("/_selfcheck/") || u.endsWith("/")) && !selfText.includes(bucket) && !selfText.includes("_selfcheck")
+        && (await objects("_selfcheck/")) === 0,
+      `good=${JSON.stringify(good)} publicPassed=${photoStorageSelfCheckPassed(pub)} probes=${anon.length}`);
     await enable(orgA, true); await enable(orgB, true);
 
     // ---------------------------------------------------------------- consent
@@ -353,6 +366,105 @@ async function main() {
     check("K3 views racing a consent revocation: each one is either the image or 404 (never an error), and every view after the revocation is 404",
       viewsDuring.slice(0, 5).every((r) => r.status === 200 || r.status === 404) && viewsDuring[5].status === 200 && after.every((r) => r.status === 404),
       `${viewsDuring.map((r) => r.status).join(",")} after=${after.map((r) => r.status).join(",")}`);
+
+    // ---------------------------------------------------------------- eligibility (caregiver)
+    const eligShift = (who: P, shiftId: string, o = orgA) => call("GET", `/organizations/${o}/shifts/${shiftId}/photo-eligibility`, who.token);
+    const eligEvent = (who: P, eventId: string, o = orgA) => call("GET", `/organizations/${o}/care-events/${eventId}/photo-eligibility`, who.token);
+    const captureConsent = async () => (await call("GET", `${O}/care-recipients/${r1}/photo-consents`, A.admin.token)).body.consents
+      .find((c: Json) => c.type === "PHOTO_CAPTURE" && c.active)?.id as string | undefined;
+    const okShift = await eligShift(A.cg1, sA1), okEvent = await eligEvent(A.cg1, ev.e1), doneEvent = await eligEvent(A.cg1, ev.a);
+    check("E1 the assigned caregiver with the resident's consent gets { canAttach: true } for her shift and her activity; an activity that already has a photo → false",
+      okShift.status === 200 && okShift.body.canAttach === true && okEvent.status === 200 && okEvent.body.canAttach === true
+        && doneEvent.status === 200 && doneEvent.body.canAttach === false && okShift.headers.get("cache-control")?.includes("no-store") === true,
+      `${okShift.status}:${okShift.body.canAttach} ${okEvent.status}:${okEvent.body.canAttach} done=${doneEvent.body.canAttach}`);
+    check("E2 the answer is only canAttach: no form, signer, dates, consent type or id",
+      [okShift, okEvent, doneEvent].every((r) => JSON.stringify(Object.keys(r.body)) === '["canAttach"]'), JSON.stringify(okShift.body));
+    const deny = {
+      otherCaregiverShift: await eligShift(A.cg2, sA1), otherCaregiverEvent: await eligEvent(A.cg2, ev.e1),
+      relative: await eligShift(A.fam1, sA1), manager: await eligShift(A.admin, sA1), supervisorEvent: await eligEvent(A.sup, ev.e1),
+      otherAgencyIds: await eligShift(B.cg, sA1, orgB), otherAgencyEvent: await eligEvent(B.cg, ev.e1, orgB), foreignPath: await eligShift(B.cg, sA1),
+      ownForeignShift: await eligShift(A.cg1, sB), unknown: await eligShift(A.cg1, randomUUID()), oldEvent: await eligEvent(A.cg1, ev.old),
+      bad: await call("GET", `${O}/shifts/not-a-uuid/photo-eligibility`, A.cg1.token),
+    };
+    check("E3 nobody else learns anything: another caregiver, relative, manager, another agency (own path or ids), unknown or old → 404; a foreign agency path → 403; bad id → 400",
+      [deny.otherCaregiverShift, deny.otherCaregiverEvent, deny.relative, deny.manager, deny.supervisorEvent, deny.otherAgencyIds, deny.otherAgencyEvent,
+        deny.ownForeignShift, deny.unknown, deny.oldEvent].every((r) => r.status === 404 && r.body.canAttach === undefined)
+        && deny.foreignPath.status === 403 && deny.bad.status === 400,
+      Object.entries(deny).map(([k, v]) => `${k}=${v.status}`).join(" "));
+    // Consent revoked after a «true» answer: the stale answer grants nothing.
+    const staleElig = await eligEvent(A.cg1, ev.e1);
+    await call("POST", `${O}/photo-consents/${await captureConsent()}/revoke`, A.admin.token, { reason: "Revocacion de prueba" });
+    const afterRevoke = { shift: await eligShift(A.cg1, sA1), event: await eligEvent(A.cg1, ev.e1), upload: await upload(A.cg1, ev.e1, jpeg) };
+    const objsAfterRevoke = await objects(`activity-photos/${orgA}/${r1}/`);
+    check("E4 consent revoked after the query said «true»: eligibility turns false at once and the upload is refused (409 PHOTO_CONSENT_REQUIRED), nothing stored",
+      staleElig.body.canAttach === true && afterRevoke.shift.body.canAttach === false && afterRevoke.event.body.canAttach === false
+        && afterRevoke.upload.status === 409 && afterRevoke.upload.body.error === "PHOTO_CONSENT_REQUIRED" && objsAfterRevoke === 6,
+      `shift=${afterRevoke.shift.body.canAttach} event=${afterRevoke.event.body.canAttach} upload=${afterRevoke.upload.status}:${afterRevoke.upload.body.error} objects=${objsAfterRevoke}`);
+    const again = await addConsent(A.sup, r1, "PHOTO_CAPTURE");
+    const restored = await eligShift(A.cg1, sA1);
+    // Assignment withdrawn / shift cancelled: the author of the activity can no longer attach.
+    await q(`UPDATE assignments SET response_status='rejected' WHERE shift_id=$1 AND organization_worker_membership_id=$2`, [sA1, A.cg1.owm]);
+    const unassigned = { shift: await eligShift(A.cg1, sA1), event: await eligEvent(A.cg1, ev.e1), upload: await upload(A.cg1, ev.e1, jpeg) };
+    await q(`UPDATE assignments SET response_status='accepted' WHERE shift_id=$1 AND organization_worker_membership_id=$2`, [sA1, A.cg1.owm]);
+    const beforeCancel = await eligEvent(A.cg1, ev.ec);
+    await q(`UPDATE shifts SET status='cancelled' WHERE id=$1`, [sA1c]);
+    const cancelled = { shift: await eligShift(A.cg1, sA1c), upload: await upload(A.cg1, ev.ec, jpeg) };
+    await enable(orgA, false);
+    const off = await eligShift(A.cg1, sA1);
+    await enable(orgA, true);
+    check("E5 re-checked at upload: assignment withdrawn or shift cancelled → 404 for both the query and the upload of her own activity; switch off → 404; new consent → true again",
+      again.status === 201 && restored.body.canAttach === true && unassigned.shift.status === 404 && unassigned.event.status === 404 && unassigned.upload.status === 404
+        && beforeCancel.body.canAttach === true && cancelled.shift.status === 404 && cancelled.upload.status === 404 && off.status === 404 && (await objects(`activity-photos/${orgA}/${r1}/`)) === 6,
+      `again=${again.status} restored=${restored.body.canAttach} unassigned=${unassigned.shift.status}/${unassigned.event.status}/${unassigned.upload.status} cancelled=${cancelled.shift.status}/${cancelled.upload.status} off=${off.status}`);
+    // Upload racing a revocation: either the upload finished first (201, created before the revocation) or it is refused; never a photo after it.
+    const raceConsent = await captureConsent();
+    const raceE2 = await Promise.all([
+      upload(A.cg1, ev.e2, jpeg),
+      call("POST", `${O}/photo-consents/${raceConsent}/revoke`, A.admin.token, { reason: "Revocacion concurrente" }),
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    const racePh = (await q<{ created_at: Date; revoked_at: Date }>(`SELECT p.created_at, c.revoked_at FROM care_event_photos p JOIN consent_records c ON c.id = p.capture_consent_id WHERE p.care_event_id=$1`, [ev.e2])).rows[0];
+    const raceStored = await objects(`activity-photos/${orgA}/${r1}/`);
+    check("E6 upload racing a consent revocation: 201 only if it was saved before the revocation, otherwise 409; no orphan object either way",
+      raceE2[1].status === 200 && ((raceE2[0].status === 201 && racePh && racePh.created_at <= racePh.revoked_at && raceStored === 7)
+        || (raceE2[0].status === 409 && !racePh && raceStored === 6)),
+      `upload=${raceE2[0].status}:${raceE2[0].body.error ?? ""} revoke=${raceE2[1].status} objects=${raceStored}`);
+    await addConsent(A.sup, r1, "PHOTO_CAPTURE");
+    // Deterministic orderings with a held lock (a second connection, as the database owner).
+    const held = new pg.Client({ connectionString: process.env.MIGRATIONS_DATABASE_URL });
+    await held.connect();
+    try {
+      // (a) The revocation is in progress (not committed) when the upload arrives: the upload waits, then is refused.
+      const c1 = await captureConsent();
+      await held.query("BEGIN");
+      await held.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true), set_config('app.is_superadmin','false',true)`, [A.admin.userId, orgA]);
+      await held.query(`SELECT public.app_revoke_photo_consent($1::uuid, 'Revocacion en curso')`, [c1]);
+      let settledA = false;
+      const pendingUpload = upload(A.cg1, ev.e3, jpeg).finally(() => { settledA = true; });
+      await new Promise((r) => setTimeout(r, 1500));
+      const waitedA = !settledA;
+      await held.query("COMMIT");
+      const upA = await pendingUpload;
+      // (b) An upload holds the consent (FOR SHARE, as app_create_activity_photo does): the revocation waits for it.
+      await addConsent(A.sup, r1, "PHOTO_CAPTURE");
+      const c2 = await captureConsent();
+      await held.query("BEGIN");
+      await held.query(`SELECT 1 FROM consent_records WHERE id=$1 FOR SHARE`, [c2]);
+      let settledB = false;
+      const pendingRevoke = call("POST", `${O}/photo-consents/${c2}/revoke`, A.admin.token, { reason: "Revocacion tras subida" }).finally(() => { settledB = true; });
+      await new Promise((r) => setTimeout(r, 1500));
+      const waitedB = !settledB;
+      await held.query("COMMIT");
+      const revB = await pendingRevoke;
+      check("E7 ordering is enforced by the database: an upload arriving during an uncommitted revocation waits and is refused (409); a revocation arriving during an upload waits for it",
+        waitedA && upA.status === 409 && upA.body.error === "PHOTO_CONSENT_REQUIRED" && waitedB && revB.status === 200
+          && (await objects(`activity-photos/${orgA}/${r1}/`)) === 6,
+        `uploadWaited=${waitedA} upload=${upA.status}:${upA.body.error ?? ""} revokeWaited=${waitedB} revoke=${revB.status}`);
+    } finally {
+      await held.query("ROLLBACK").catch(() => undefined);
+      await held.end();
+    }
+    await addConsent(A.sup, r1, "PHOTO_CAPTURE");
 
     // ---------------------------------------------------------------- audit and leaks
     const hist = await call("GET", `${O}/activity-photos/${photoId}/history`, A.admin.token);

@@ -18,6 +18,17 @@
    point at the documents bucket, the API also refuses (503).
 4. Keep `ACTIVITY_PHOTOS` off for every agency until the pilot is approved.
 
+## Right after deploying: private-bucket check (no credentials leave Railway)
+- The backend runs it by itself once at start. In the backend logs look for
+  `PHOTO_STORAGE_SELF_CHECK PASS {...}`: all seven values must be `true`
+  (configured, separate from documents, credentials accepted, synthetic probe
+  written and read back, anonymous read refused, anonymous listing refused,
+  probe deleted). The line contains only yes/no values.
+- Manual re-run inside the service (optional): `railway ssh` into the backend,
+  then `npx tsx scripts/checkPhotoStorage.ts` (exit 0 = all pass).
+- `FAIL` → do not enable `ACTIVITY_PHOTOS`; photo routes stay off (404) anyway.
+  Fix the bucket/variables and redeploy; nothing else depends on it.
+
 ## Code-only rollback (recommended)
 Redeploy the previous backend. 115 and 116 stay: the previous backend never
 calls the 116 functions. Objects already in the photo bucket stay private.

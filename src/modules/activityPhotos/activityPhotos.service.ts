@@ -98,6 +98,25 @@ export async function getActivityPhotoForEvent(userId: string, organizationId: s
   });
 }
 
+// ------------------------------------------------------------------ eligibility (caregiver)
+/**
+ * Only «can this caregiver attach a photo here?». Never the consent's form,
+ * signer, dates or type. Not a permission: the upload repeats every check.
+ */
+export async function getShiftPhotoEligibility(userId: string, organizationId: string, shiftId: string): Promise<{ canAttach: boolean }> {
+  return inTenant(userId, organizationId, async (trx) => {
+    const r = await sql<{ ok: boolean }>`SELECT public.app_shift_photo_eligibility(${shiftId}::uuid) AS ok`.execute(trx);
+    return { canAttach: r.rows[0]?.ok === true };
+  });
+}
+
+export async function getActivityPhotoEligibility(userId: string, organizationId: string, careEventId: string): Promise<{ canAttach: boolean }> {
+  return inTenant(userId, organizationId, async (trx) => {
+    const r = await sql<{ ok: boolean }>`SELECT public.app_activity_photo_eligibility(${careEventId}::uuid) AS ok`.execute(trx);
+    return { canAttach: r.rows[0]?.ok === true };
+  });
+}
+
 // ------------------------------------------------------------------ viewing (agency, uploader, family)
 export async function readActivityPhoto(userId: string, organizationId: string, photoId: string) {
   const target = await inTenant(userId, organizationId, async (trx) =>
