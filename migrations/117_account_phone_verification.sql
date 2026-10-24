@@ -32,6 +32,15 @@ ALTER TABLE users ADD CONSTRAINT users_phone_e164_nanp
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_phone_verified_needs_phone;
 ALTER TABLE users ADD CONSTRAINT users_phone_verified_needs_phone
   CHECK (phone_verified_at IS NULL OR phone IS NOT NULL);
+-- Deploy log: how many accounts already had a stored phone (counts only, no numbers).
+DO $$
+DECLARE v_with int; v_old int;
+BEGIN
+  SELECT count(*) FILTER (WHERE phone IS NOT NULL),
+         count(*) FILTER (WHERE phone IS NOT NULL AND phone !~ '^\+1[2-9][0-9]{2}[2-9][0-9]{6}$')
+    INTO v_with, v_old FROM users;
+  RAISE NOTICE '117 existing phones: with_phone=% non_e164=% (all count as unverified)', v_with, v_old;
+END $$;
 -- Accounts were created by activating an invitation sent to their e-mail.
 UPDATE users SET email_verified_at = created_at
  WHERE email IS NOT NULL AND password_hash IS NOT NULL AND email_verified_at IS NULL;
