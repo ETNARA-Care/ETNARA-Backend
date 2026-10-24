@@ -11,8 +11,8 @@ import { Client } from "pg";
 
 const mask = (e: string | null) => {
   if (!e) return "(sin correo)";
-  const [u, d] = e.split("@");
-  return `${u.slice(0, 2)}***@${d ?? "?"}`;
+  // domain only: tells test accounts (e.g. *.invalid) from real ones without showing who
+  return `***@${e.split("@")[1] ?? "?"}`;
 };
 
 const c = new Client({ connectionString: process.env.PREFLIGHT_URL, options: "-c default_transaction_read_only=on", connectionTimeoutMillis: 15000, statement_timeout: 20000 });
