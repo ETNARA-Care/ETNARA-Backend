@@ -290,7 +290,7 @@ async function main() {
     const lpKept = (await q<{ phone: string }>(`SELECT phone FROM users WHERE id=$1`, [lp.userId])).rows[0].phone;
     const badVerified = await q(`UPDATE users SET phone_verified_at = now() WHERE id=$1`, [lp.userId]).then(() => "accepted", (e: { code?: string }) => e.code);
     check("V18 an existing account with an old free-text phone keeps working: e-mail login and e-mail reset succeed, the old number is untouched, counts as unverified (no phone login, no SMS); a verified number must be E.164",
-      lp.token && lpState.phoneVerified === false && lpState.phone === null && lpByPhone.status === 401 && lpSms.status === 200 && lastCode(`+1${AREA}5550142`) === null
+      !!lp.token && lpState.phoneVerified === false && lpState.phone === null && lpByPhone.status === 401 && lpSms.status === 200 && lastCode(`+1${AREA}5550142`) === null
         && !!link && lpConfirm.status === 200 && lpLogin.status === 200 && lpKept === oldStyle && badVerified === "23514",
       `confirm=${lpConfirm.status} login=${lpLogin.status} phoneLogin=${lpByPhone.status} verify=${badVerified}`);
 
