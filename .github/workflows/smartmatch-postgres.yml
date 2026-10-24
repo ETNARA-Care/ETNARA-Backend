@@ -80,6 +80,8 @@ jobs:
         run: npx tsx scripts/verifyGate6ServiceLocations.ts
       - name: Gate 7 journey (En Camino) over HTTP
         run: npx tsx scripts/verifyGate7Journey.ts
+      - name: En Camino cancel/reassign/offline over HTTP
+        run: npx tsx scripts/verifyEnCaminoFixes.ts
       - name: Security audit hardening over HTTP
         run: npx tsx scripts/verifySecurityAudit.ts
       - name: Production security hotfix (088) over HTTP

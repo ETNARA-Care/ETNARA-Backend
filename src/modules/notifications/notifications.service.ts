@@ -89,6 +89,15 @@ function summarizeType(notificationType: string): string {
       return "La cuidadora informó un retraso";
     case "FAMILY_CAREGIVER_ARRIVED":
       return "Llegada registrada";
+    // Migration 112: cancellations and reassignments (never an address or a name).
+    case "SHIFT_CANCELLED":
+      return "La agencia canceló uno de tus turnos";
+    case "SHIFT_UNASSIGNED":
+      return "Ya no tienes asignado un turno";
+    case "FAMILY_VISIT_CANCELLED":
+      return "La agencia canceló una visita";
+    case "FAMILY_CAREGIVER_CHANGED":
+      return "Cambió la cuidadora de una visita";
     case "SHIFT_NOT_EN_ROUTE":
       return "Aún no registra salida (turno en 30 min)";
     case "SHIFT_DELAY_REPORTED":
