@@ -18,6 +18,10 @@ on:
       - 'scripts/verifySmartMatchFixes.ts'
       - 'scripts/verifySmartMatchFixesRollback.ts'
       - 'scripts/verifyCheckOutFlow.ts'
+      - 'scripts/verifyFinanceFoundation.ts'
+      - 'src/modules/timesheets/**'
+      - 'src/modules/finance/**'
+      - 'ops/118_finance_foundation.rollback.sql'
       - 'scripts/verifyActivityPhotoSecurity.ts'
       - 'scripts/verifyActivityPhotoUpload.ts'
       - 'src/modules/activityPhotos/**'
@@ -114,6 +118,9 @@ jobs:
 
       - name: Check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         run: npx tsx scripts/verifyCheckOutFlow.ts
+
+      - name: Finanzas F0 safe financial foundation (audit_log, finance_events, central deny, immutability, PR days)
+        run: npx tsx scripts/verifyFinanceFoundation.ts
 
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts

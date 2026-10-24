@@ -25,7 +25,7 @@ export interface MeResult {
     type: string;
     membershipStatus: string;
     roles: string[];
-    /** Pilot features enabled for this agency (108, 115): "SMARTMATCH", "EN_CAMINO", "ACTIVITY_PHOTOS". */
+    /** Pilot features enabled for this agency (108, 115, 118): "SMARTMATCH", "EN_CAMINO", "ACTIVITY_PHOTOS", "FINANZAS". */
     features: string[];
   }>;
 }
