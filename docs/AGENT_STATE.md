@@ -2,6 +2,17 @@
 
 ## Current Status
 
+## 2026-10-24 — PR 0: recuperación de contraseña por correo (claude/password-recovery-email)
+
+- POST /auth/password-reset/request ahora responde de inmediato y crea el token y envía el correo después
+  (antes esperaba al proveedor solo si la cuenta existía: ~410 ms frente a ~6 ms, revelaba la cuenta).
+- Contador propio para las solicitudes de recuperación (`reset:<correo>`): pedir enlaces para un correo ya no
+  bloquea el inicio de sesión de esa persona durante 15 min.
+- Registro de errores: solo clase de error y SQLSTATE, nunca el correo.
+- verifyPasswordRecovery 11/11 (en ambos CI), control negativo sobre main 8/11. Dos verificadores que leían el
+  token justo después de la solicitud esperan ahora hasta 3 s.
+- Frontend: páginas /forgot-password y /reset-password (PR del frontend). Teléfono/SMS: diseño aprobado, sin implementar.
+
 ## 2026-10-24 — Activity photos PR 2: upload, review, family viewing, HEIC (claude/activity-photos-upload, #208 draft)
 
 - 116: one photo per activity, family access log (managers read), checked functions for upload, view,

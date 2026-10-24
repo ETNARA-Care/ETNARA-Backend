@@ -111,7 +111,12 @@ async function main() {
     const oldPw = randomBytes(16).toString("hex");
     const userId = (await q<{ id: string }>(`INSERT INTO users (email,password_hash,status) VALUES ($1,$2,'active') RETURNING id`, [email, await hashPassword(oldPw)])).rows[0].id;
     const reqStatus = await call("/auth/password-reset/request", { email });
-    const stored = Number((await q<{ n: string }>(`SELECT count(*) n FROM password_reset_tokens WHERE user_id=$1`, [userId])).rows[0].n);
+    // The request answers at once (no timing difference) and issues the token right after.
+    let stored = 0;
+    for (let i = 0; i < 30 && stored === 0; i++) {
+      stored = Number((await q<{ n: string }>(`SELECT count(*) n FROM password_reset_tokens WHERE user_id=$1`, [userId])).rows[0].n);
+      if (stored === 0) await new Promise((r) => setTimeout(r, 100));
+    }
     const { rawToken, tokenHash } = generateSessionToken();
     await q(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '30 minutes')`, [userId, tokenHash]);
     const newPw = randomBytes(16).toString("hex");
