@@ -165,6 +165,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyCheckOutFlow.ts
 
+      - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoSecurity.ts
+
       - name: PostgreSQL invitation activation verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

@@ -310,21 +310,19 @@ export async function createCareEvent(
     const event = result.rows[0];
 
     if (input.typeCode === "PHOTO" && input.storedFileId) {
-      const fileCheck = await sql<{ id: string; scope_type: string; organization_id: string | null }>`
-        SELECT id, scope_type, organization_id FROM stored_files WHERE id = ${input.storedFileId} LIMIT 1
-      `.execute(trx);
-      const file = fileCheck.rows[0];
-      if (!file) throw new InvalidFileForPhotoError("FILE_NOT_FOUND");
-      if (file.scope_type !== "ORGANIZATION_OPERATIONAL") {
-        throw new InvalidFileForPhotoError("FILE_MUST_BE_ORGANIZATION_OPERATIONAL");
+      // Migration 115: app_runtime cannot write care_event_photos. The definer
+      // function checks the switch, that this caregiver recorded the activity,
+      // that the file is her own activity photo of this agency, and that the
+      // resident's photo capture consent is active. It starts as «pending»:
+      // nothing reaches the family until the agency approves it.
+      try {
+        await sql`SELECT app_attach_activity_photo(${event.id}::uuid, ${input.storedFileId}::uuid)`.execute(trx);
+      } catch (err) {
+        const code = (err as { message?: string })?.message ?? "";
+        const known = ["FEATURE_NOT_ENABLED", "PHOTO_FORBIDDEN", "PHOTO_FILE_NOT_FOUND", "PHOTO_CONSENT_REQUIRED", "PHOTO_FILE_ALREADY_LINKED"];
+        if (known.includes(code)) throw new InvalidFileForPhotoError(code);
+        throw err;
       }
-      if (file.organization_id !== organizationId) {
-        throw new InvalidFileForPhotoError("FILE_OWNER_MISMATCH");
-      }
-      await sql`
-        INSERT INTO care_event_photos (organization_id, care_event_id, file_id)
-        VALUES (${organizationId}, ${event.id}, ${input.storedFileId})
-      `.execute(trx);
     }
 
     // Notify every family member currently authorized for this recipient

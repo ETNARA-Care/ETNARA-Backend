@@ -18,6 +18,10 @@ on:
       - 'scripts/verifySmartMatchFixes.ts'
       - 'scripts/verifySmartMatchFixesRollback.ts'
       - 'scripts/verifyCheckOutFlow.ts'
+      - 'scripts/verifyActivityPhotoSecurity.ts'
+      - 'ops/115_activity_photos_security.rollback.sql'
+      - 'src/modules/careEvents/**'
+      - 'src/modules/familyTimeline/**'
       - 'src/modules/verification/**'
       - 'src/observability/**'
       - 'ops/110_111_smartmatch_fixes.rollback.sql'
@@ -104,3 +108,6 @@ jobs:
 
       - name: Check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         run: npx tsx scripts/verifyCheckOutFlow.ts
+
+      - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
+        run: npx tsx scripts/verifyActivityPhotoSecurity.ts

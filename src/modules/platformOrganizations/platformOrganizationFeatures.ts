@@ -10,7 +10,7 @@ import { withPlatformContext } from "../../context/tenantContext.js";
  * admin) reads or changes them; every change needs a reason and is recorded in
  * organization_feature_events (append-only).
  */
-export const FEATURE_CODES = ["SMARTMATCH", "EN_CAMINO"] as const;
+export const FEATURE_CODES = ["SMARTMATCH", "EN_CAMINO", "ACTIVITY_PHOTOS"] as const;
 const uuid = z.string().uuid();
 const featureCode = z.enum(FEATURE_CODES);
 const setFeatureSchema = z.object({
