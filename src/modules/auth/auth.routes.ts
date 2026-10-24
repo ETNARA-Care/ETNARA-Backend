@@ -56,15 +56,21 @@ const passwordResetConfirmSchema = z.object({
 router.post("/auth/password-reset/request", async (req: Request, res: Response) => {
   const parsed = passwordResetRequestSchema.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
-  if (!checkLimit(req, res, parsed.data.email)) return;
-  recordAttempt(req, parsed.data.email);
-  try {
-    await requestPasswordReset(parsed.data.email);
-    res.status(200).json({ ok: true });
-  } catch {
-    // Do not reveal account existence or email-provider state.
-    res.status(200).json({ ok: true });
-  }
+  // Own counter: reset requests for an address must never lock that person out of logging in.
+  const limitKey = `reset:${parsed.data.email}`;
+  if (!checkLimit(req, res, limitKey)) return;
+  recordAttempt(req, limitKey);
+  // Answer at once, the same way for every address, and do the work afterwards:
+  // waiting for the token + email only when the account exists would let the
+  // response time reveal whether it does.
+  res.status(200).json({ ok: true });
+  setImmediate(() => {
+    requestPasswordReset(parsed.data.email).catch((error: unknown) => {
+      // Never log the address or the message; only the error class and SQLSTATE.
+      const e = error as { name?: string; code?: string };
+      console.error("Password reset request failed", { name: e?.name ?? "Error", code: typeof e?.code === "string" ? e.code : undefined });
+    });
+  });
 });
 
 router.post("/auth/password-reset/confirm", async (req: Request, res: Response) => {

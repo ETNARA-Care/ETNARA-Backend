@@ -357,7 +357,12 @@ async function main() {
     } finally { await probe.end().catch(() => undefined); await q(`DROP ROLE ${probeRole}`); }
     check("R2 any other database login (even impersonating a user id) is denied on password_reset_tokens", /permission denied/.test(probeResult), probeResult.slice(0, 60));
     const req = await call("POST", "/auth/password-reset/request", "", { email: A.other.email });
-    const issued = Number((await q<{ n: string }>(`SELECT count(*) n FROM password_reset_tokens WHERE user_id=$1`, [A.other.userId])).rows[0].n);
+    // The request answers at once (no timing difference) and issues the token right after.
+    let issued = 0;
+    for (let i = 0; i < 30 && issued === 0; i++) {
+      issued = Number((await q<{ n: string }>(`SELECT count(*) n FROM password_reset_tokens WHERE user_id=$1`, [A.other.userId])).rows[0].n);
+      if (issued === 0) await new Promise((r) => setTimeout(r, 100));
+    }
     const { rawToken, tokenHash } = generateSessionToken();
     await q(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '30 minutes')`, [A.other.userId, tokenHash]);
     const newPassword = randomBytes(16).toString("hex");

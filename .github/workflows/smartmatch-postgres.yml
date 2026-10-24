@@ -21,6 +21,9 @@ on:
       - 'scripts/verifyActivityPhotoSecurity.ts'
       - 'scripts/verifyActivityPhotoUpload.ts'
       - 'src/modules/activityPhotos/**'
+      - 'src/modules/auth/**'
+      - 'src/modules/email/**'
+      - 'scripts/verifyPasswordRecovery.ts'
       - 'ops/116_activity_photos_upload_view.rollback.sql'
       - 'ops/115_activity_photos_security.rollback.sql'
       - 'src/modules/careEvents/**'
@@ -115,6 +118,8 @@ jobs:
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts
 
+      - name: Password recovery by e-mail (no enumeration, timing, single use, sessions closed)
+        run: npx tsx scripts/verifyPasswordRecovery.ts
       - name: Local private S3 for photo tests (moto, never a hosted service)
         run: |
           python3 -m venv "$RUNNER_TEMP/moto-venv"
