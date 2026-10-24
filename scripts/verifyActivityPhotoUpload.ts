@@ -44,9 +44,23 @@ async function syntheticJpeg(opts: { width?: number; height?: number; orientatio
 async function main() {
   // Local private S3 (moto). Nothing leaves this machine.
   const s3Port = Number(process.env.PHOTO_TEST_S3_PORT ?? 4568);
-  const moto: ChildProcess = spawn("moto_server", ["-H", "127.0.0.1", "-p", String(s3Port)], { stdio: "ignore" });
+  // `python3 -m moto.server` does not depend on where pip put the scripts.
+  const motoLog: string[] = [];
+  const moto: ChildProcess = spawn(process.env.PHOTO_TEST_PYTHON ?? "python3", ["-m", "moto.server", "-H", "127.0.0.1", "-p", String(s3Port)], { stdio: ["ignore", "pipe", "pipe"] });
+  moto.stdout?.on("data", (d) => motoLog.push(String(d)));
+  moto.stderr?.on("data", (d) => motoLog.push(String(d)));
+  let spawnError: Error | null = null;
+  moto.on("error", (e) => { spawnError = e; });
   const endpoint = `http://127.0.0.1:${s3Port}`;
-  for (let i = 0; i < 60; i++) { try { await fetch(endpoint); break; } catch { await new Promise((r) => setTimeout(r, 250)); } }
+  let up = false;
+  for (let i = 0; i < 360 && !spawnError; i++) { // up to 90 s on a cold CI runner
+    try { await fetch(endpoint); up = true; break; } catch { await new Promise((r) => setTimeout(r, 250)); }
+  }
+  if (!up) {
+    console.log(`Local S3 (moto) did not start: ${spawnError ? (spawnError as Error).message : "timeout"}\n${motoLog.join("").slice(-2000)}`);
+    moto.kill();
+    process.exit(1);
+  }
   const bucket = `etnara-photos-test-${randomBytes(4).toString("hex")}`;
   const s3 = new S3Client({ endpoint, region: "us-east-1", forcePathStyle: true, credentials: { accessKeyId: "test", secretAccessKey: "test" } });
   await s3.send(new CreateBucketCommand({ Bucket: bucket }));
