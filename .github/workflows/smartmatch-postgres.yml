@@ -22,7 +22,7 @@ on:
       - 'scripts/verifyFinanceServicesRates.ts'
       - 'ops/119_finance_services_rates.rollback.sql'
       - 'scripts/verifyFinanceF11.ts'
-      - 'ops/120_finance_rate_cancel_holiday_deactivate.rollback.sql'
+      - 'ops/121_finance_rate_cancel_holiday_deactivate.rollback.sql'
       - 'src/modules/timesheets/**'
       - 'src/modules/finance/**'
       - 'ops/118_finance_foundation.rollback.sql'

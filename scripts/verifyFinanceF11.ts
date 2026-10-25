@@ -1,12 +1,12 @@
 /**
- * ETNARA Finanzas F1.1 (migration 120) — cancelling scheduled price changes,
+ * ETNARA Finanzas F1.1 (migration 121) — cancelling scheduled price changes,
  * deactivating holidays and the negative-margin flag, end to end over HTTP and
  * as app_runtime in PostgreSQL. Synthetic data only (.invalid e-mails).
  *
  * Covers: cancel rules (only before it takes effect, reason, admin only,
  * FINANZAS on), reopening exactly the version that had been closed (also in a
  * chain of scheduled versions), nothing forgeable in the database (admin and
- * owner), concurrency, the 120 backfill, holidays deactivated / reactivated and
+ * owner), concurrency, the 121 backfill, holidays deactivated / reactivated and
  * never deleted, per-role and per-agency isolation, ETNARA central denied,
  * history with values and audit_log without amounts, the negative margin flag
  * (never a block), invalid dates answered with 400, and no 500 in the run.
@@ -311,9 +311,9 @@ async function main() {
       offApi.status === 404 && offApi.body.error === "FEATURE_NOT_ENABLED" && Boolean(offDb.error) && (await row(bFuture)).cancelled_at === null,
       `${offApi.status} ${offApi.body.error} db=${offDb.error ?? offDb.rowCount}`);
 
-    // C12 The 120 backfill links versions closed before 120 exactly (same transaction ⇒ same timestamp).
-    const m120 = (await import("node:fs")).readFileSync(new URL("../migrations/120_finance_rate_cancel_holiday_deactivate.sql", import.meta.url), "utf8");
-    const backfill = m120.slice(m120.indexOf("ALTER TABLE finance_rates DISABLE TRIGGER"), m120.indexOf("ALTER TABLE finance_rates ENABLE TRIGGER"));
+    // C12 The 121 backfill links versions closed before 121 exactly (same transaction ⇒ same timestamp).
+    const m121 = (await import("node:fs")).readFileSync(new URL("../migrations/121_finance_rate_cancel_holiday_deactivate.sql", import.meta.url), "utf8");
+    const backfill = m121.slice(m121.indexOf("ALTER TABLE finance_rates DISABLE TRIGGER"), m121.indexOf("ALTER TABLE finance_rates ENABLE TRIGGER"));
     const svc3 = (await call("POST", `${F}/services`, adm.token, { name: "Respiro", unit: "hour" })).body.service.id as string;
     await q("BEGIN");
     let bf: Json = {};
@@ -336,7 +336,7 @@ async function main() {
       const o = await row(oldId); const un = await row(unrelated);
       bf = { linked: o.sb === newId, sp: o.sp, unrelated: un.sb };
     } finally { await q("ROLLBACK"); }
-    check("C12 120 backfill: a version closed by a newer one in the same transaction is linked to it; a version ended separately is not",
+    check("C12 121 backfill: a version closed by a newer one in the same transaction is linked to it; a version ended separately is not",
       bf.linked === true && bf.sp === null && bf.unrelated === null, JSON.stringify(bf));
 
     // H01–H06 Holidays.

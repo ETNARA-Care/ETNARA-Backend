@@ -1,4 +1,4 @@
--- ROLLBACK of migration 120 (ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays).
+-- ROLLBACK of migration 121 (ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays).
 -- Run ONLY as the database owner, in one go. A code-only rollback does NOT need
 -- it: the 119 backend ignores the new columns (it never cancels and never
 -- deactivates). Stops, changing nothing, if any rate was cancelled or any holiday
@@ -106,6 +106,6 @@ ALTER TABLE finance_rates
   DROP COLUMN IF EXISTS superseded_by_rate_id, DROP COLUMN IF EXISTS superseded_previous_to,
   DROP COLUMN IF EXISTS cancelled_at, DROP COLUMN IF EXISTS cancelled_by_user_id, DROP COLUMN IF EXISTS cancel_reason;
 
-DELETE FROM schema_migrations WHERE filename = '120_finance_rate_cancel_holiday_deactivate.sql';
+DELETE FROM schema_migrations WHERE filename = '121_finance_rate_cancel_holiday_deactivate.sql';
 
 COMMIT;

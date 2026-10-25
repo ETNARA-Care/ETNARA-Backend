@@ -366,7 +366,7 @@ export async function endRate(userId: string, organizationId: string, rateId: st
  * counting everywhere; the version it had closed is reopened up to where it
  * ended before (never past the cancelled version's own end, so later scheduled
  * versions are untouched). Reason required. The database enforces the same
- * rules (migration 120), also for the table owner.
+ * rules (migration 121), also for the table owner.
  */
 export async function cancelRate(userId: string, organizationId: string, rateId: string, input: z.infer<typeof rateCancelSchema>) {
   return inFinance(userId, organizationId, (trx) => guarded(async () => {

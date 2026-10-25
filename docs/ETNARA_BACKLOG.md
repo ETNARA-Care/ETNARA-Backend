@@ -4,7 +4,7 @@
 
 ### FIN-F1.1 — Finanzas F1.1 (cancel scheduled rates, deactivate holidays, negative margin)
 
-- Status: PR open (migration 120 + verifyFinanceF11 22/22). Not authorized: merge, deploy, FINANZAS changes, F2.
+- Status: PR open (migration 121 + verifyFinanceF11 22/22). Not authorized: merge, deploy, FINANZAS changes, F2.
 
 ### FIN-F1 — Finanzas F1 services and differentiated rates
 

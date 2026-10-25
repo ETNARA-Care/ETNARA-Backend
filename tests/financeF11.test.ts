@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
-describe("ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays (120)", () => {
-  const m120 = read("migrations/120_finance_rate_cancel_holiday_deactivate.sql");
-  const code = m120.replace(/--.*$/gm, "");
-  const rollback = read("ops/120_finance_rate_cancel_holiday_deactivate.rollback.sql");
+describe("ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays (121)", () => {
+  const m121 = read("migrations/121_finance_rate_cancel_holiday_deactivate.sql");
+  const code = m121.replace(/--.*$/gm, "");
+  const rollback = read("ops/121_finance_rate_cancel_holiday_deactivate.rollback.sql");
   const service = read("src/modules/finance/finance.service.ts");
   const routes = read("src/modules/finance/finance.routes.ts");
 
@@ -18,32 +18,32 @@ describe("ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays (
   });
 
   it("only versions that have not taken effect can be cancelled, and cancelled versions are final", () => {
-    expect(m120).toContain("IF OLD.effective_from <= v_today THEN");
-    expect(m120).toContain("RAISE EXCEPTION 'FINANCE_RATE_ALREADY_IN_FORCE'");
-    expect(m120).toContain("RAISE EXCEPTION 'FINANCE_RATE_CANCELLED'");
-    expect(m120).toContain("v_today date := (now() AT TIME ZONE 'America/Puerto_Rico')::date;");
+    expect(m121).toContain("IF OLD.effective_from <= v_today THEN");
+    expect(m121).toContain("RAISE EXCEPTION 'FINANCE_RATE_ALREADY_IN_FORCE'");
+    expect(m121).toContain("RAISE EXCEPTION 'FINANCE_RATE_CANCELLED'");
+    expect(m121).toContain("v_today date := (now() AT TIME ZONE 'America/Puerto_Rico')::date;");
   });
 
   it("reopens only the version closed by a version cancelled in the same transaction, never past its old end", () => {
-    expect(m120).toContain("v_cancelled.cancelled_at <> now()");
-    expect(m120).toContain("LEAST(OLD.superseded_previous_to, v_cancelled.effective_to)");
-    expect(m120).toContain("NEW.superseded_previous_to IS DISTINCT FROM OLD.effective_to");
+    expect(m121).toContain("v_cancelled.cancelled_at <> now()");
+    expect(m121).toContain("LEAST(OLD.superseded_previous_to, v_cancelled.effective_to)");
+    expect(m121).toContain("NEW.superseded_previous_to IS DISTINCT FROM OLD.effective_to");
   });
 
   it("cancelled versions never count: overlap check, resolution and lists skip them", () => {
-    expect(m120).toContain("AND r.cancelled_at IS NULL");
+    expect(m121).toContain("AND r.cancelled_at IS NULL");
     expect(service.match(/cancelled_at IS NULL/g)?.length).toBeGreaterThanOrEqual(9);
   });
 
   it("holidays are deactivated with a reason, never deleted, and inactive ones are ignored", () => {
-    expect(m120).toContain("RAISE EXCEPTION 'FINANCE_HOLIDAY_NO_DELETE'");
-    expect(m120).toContain("length(btrim(deactivation_reason)) BETWEEN 3 AND 300");
+    expect(m121).toContain("RAISE EXCEPTION 'FINANCE_HOLIDAY_NO_DELETE'");
+    expect(m121).toContain("length(btrim(deactivation_reason)) BETWEEN 3 AND 300");
     expect(service).toContain("holiday_date = ${params.date}::date AND active`");
   });
 
   it("the backfill runs before the deferred self-reference is added", () => {
-    expect(m120.indexOf("ALTER TABLE finance_rates ENABLE TRIGGER finance_rates_guard;"))
-      .toBeLessThan(m120.indexOf("ADD CONSTRAINT finance_rates_superseded_by_fk"));
+    expect(m121.indexOf("ALTER TABLE finance_rates ENABLE TRIGGER finance_rates_guard;"))
+      .toBeLessThan(m121.indexOf("ADD CONSTRAINT finance_rates_superseded_by_fk"));
   });
 
   it("new routes require a reason and record values in finance_events, identifiers in audit_log", () => {

@@ -1,4 +1,4 @@
--- Migration 120 — ETNARA Finanzas F1.1
+-- Migration 121 — ETNARA Finanzas F1.1
 --
 -- 1. A price change scheduled for a future date can be CANCELLED before it
 --    takes effect (reason required, admin only, FINANZAS on). The cancelled
@@ -30,7 +30,7 @@ BEGIN
   END IF;
 END $$;
 
--- Backfill: versions closed by a newer version before 120. createRate closes the
+-- Backfill: versions closed by a newer version before 121. createRate closes the
 -- covering version and inserts the new one in the same transaction, so the new
 -- version's created_at equals the old one's ended_at exactly. The window end the
 -- old version had before (null unless it had been ended earlier) comes from its
