@@ -18,6 +18,11 @@
 - Sin IVU precargado ni exenciones supuestas: la emisión real queda bloqueada hasta que la agencia valide su
   configuración contributiva y exista el bucket (no creado: requiere autorización de infraestructura).
 - verifyBillingF23 18/18 (E01–E18, con moto), en los dos flujos de CI; unitarias 588; batería completa en verde.
+- Marca ANULADA centrada (traslado al centro de la página y giro). El PDF es determinista y se construye solo con
+  datos congelados (instantáneas, líneas inmutables con el nombre del cuidador congelado, logo por hash; el
+  original nunca lleva la marca): billingRecovery + scripts/billingRecoverDocument.ts reconstruyen un PDF perdido
+  y solo lo escriben en la MISMA clave si su SHA-256 coincide (si no, se restaura de la copia diaria). No toca la
+  factura. verifyBillingF23 20/20 (E19 recuperación, E20 marca centrada).
 - Sin autorización: fusionar, desplegar, crear el bucket de producción.
 
 ## 2026-10-25 — Informe de Turno F2: revisión de la cuidadora (claude/shift-report-f2, migración 128)

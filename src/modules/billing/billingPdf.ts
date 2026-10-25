@@ -22,6 +22,8 @@ export interface PdfInvoice {
 }
 
 const NAVY = "#16213D";
+export const WATERMARK_SIZE = 96;
+export const WATERMARK_ANGLE = 35;
 const MUTED = "#5b6475";
 const money = (cents: number) => `${cents < 0 ? "-" : ""}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const day = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString("es-PR", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" });
@@ -86,8 +88,9 @@ export function renderInvoicePdf(inv: PdfInvoice): Promise<Buffer> {
       const detail: string[] = [];
       if (line.recipientName) detail.push(`Residente: ${line.recipientName}`);
       if (line.caregiverName) detail.push(`Cuidador/a: ${line.caregiverName}`);
-      if (line.segments.length > 1) {
-        for (const s of line.segments) detail.push(`${day(s.date)} ${time(s.startsAt)}–${time(s.endsAt)} · ${hours(s.minutes)} · ${money(s.amountCents)}${s.holiday ? ` · Feriado: ${s.holiday}` : ""}`);
+      const shown = line.segments.filter((s) => s.minutes > 0); // a few real seconds with no approved minute stay only in the trace
+      if (shown.length > 1) {
+        for (const s of shown) detail.push(`${day(s.date)} ${time(s.startsAt)}–${time(s.endsAt)} · ${hours(s.minutes)} · ${money(s.amountCents)}${s.holiday ? ` · Feriado: ${s.holiday}` : ""}`);
       }
       detail.push(line.taxLabel);
       const descHeight = doc.font("Helvetica").fontSize(9).heightOfString(line.description, { width: cols.qty - cols.desc - 8 })
@@ -132,9 +135,12 @@ export function renderInvoicePdf(inv: PdfInvoice): Promise<Buffer> {
       const range = doc.bufferedPageRange();
       for (let i = range.start; i < range.start + range.count; i++) {
         doc.switchToPage(i);
-        doc.save().rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] })
-          .fillColor("#b42318").opacity(0.18).font("Helvetica-Bold").fontSize(110)
-          .text("ANULADA", 0, doc.page.height / 2 - 60, { width: doc.page.width, align: "center" }).restore();
+        // Centred on the page: move the origin to the centre, rotate, and draw the word around (0, 0).
+        doc.font("Helvetica-Bold").fontSize(WATERMARK_SIZE);
+        const tw = doc.widthOfString("ANULADA");
+        const th = doc.currentLineHeight();
+        doc.save().translate(doc.page.width / 2, doc.page.height / 2).rotate(-WATERMARK_ANGLE)
+          .fillColor("#b42318").opacity(0.18).text("ANULADA", -tw / 2, -th / 2, { lineBreak: false }).restore();
         doc.opacity(1).fillColor("#b42318").font("Helvetica-Bold").fontSize(9)
           .text(`ANULADA el ${day(inv.voided.at.slice(0, 10))}. Motivo: ${inv.voided.reason}`, left, doc.page.margins.top - 30, { width });
       }

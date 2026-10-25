@@ -76,3 +76,30 @@ describe("ETNARA Facturación F2.3 — issue, numbering, PDF, void (127)", () =>
     expect(rollback).toContain("DELETE FROM schema_migrations WHERE filename = '127_billing_issue_void.sql'");
   });
 });
+
+describe("F2.3 — PDF rebuild and watermark", () => {
+  const base = {
+    numberText: "FAC-000001", issueDate: "2026-10-25", periodFrom: "2026-10-01", periodTo: "2026-10-31", issuedAt: "2026-10-25T17:00:00Z",
+    issuer: { legalName: "Agencia Ficticia, LLC", tradeName: null, address: null, phone: null, email: null, merchantRegistration: null, paymentTerms: null, footerNote: null, logo: null },
+    client: { name: "Cliente Ficticio", address: null }, notes: null, lines: [],
+    totals: { subtotalCents: 0, taxes: [], exemptBaseCents: 0, totalCents: 0, exemptBases: [] },
+  };
+  it("is deterministic for the same frozen data (a lost PDF can be rebuilt and proven identical)", async () => {
+    const a = await renderInvoicePdf(base);
+    const b = await renderInvoicePdf(base);
+    expect(a.equals(b)).toBe(true);
+  });
+  it("the void mark is centred (origin moved to the middle of the letter page) and only on the void copy", async () => {
+    const orig = (await renderInvoicePdf(base)).toString("latin1");
+    const copy = (await renderInvoicePdf({ ...base, voided: { at: "2026-10-26T12:00:00Z", reason: "Prueba" } })).toString("latin1");
+    expect(copy).toContain("1 0 0 1 306 396 cm");
+    expect(orig).not.toContain("1 0 0 1 306 396 cm");
+  });
+  it("recovery never writes a different file and never edits the invoice", () => {
+    const r = read("src/modules/billing/billingRecovery.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(r).toMatch(/if \(sha256\(rebuilt\) !== doc\.sha256\) return \{ status: "REFUSED", reason: "REBUILD_MISMATCH" \}/);
+    expect(r).toMatch(/putBillingObject\(doc\.object_key/);
+    expect(r).not.toMatch(/UPDATE invoices|UPDATE invoice_documents|INSERT INTO invoice_documents/);
+    expect(read("src/modules/billing/issue.service.ts")).toMatch(/voided: kind === "void_copy" && inv\.status === "voided"/);
+  });
+});

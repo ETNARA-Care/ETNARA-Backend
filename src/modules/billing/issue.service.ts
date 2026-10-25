@@ -188,13 +188,16 @@ async function storedLines(trx: Trx, invoiceId: string) {
   return (await sql<StoredLine>`
     SELECT l.id, l.kind, l.shift_id, to_char(l.service_date, 'YYYY-MM-DD') AS service_date, l.description, l.recipient_name, l.quantity_hundredths, l.unit,
       l.unit_price_cents, l.amount_cents, l.tax_treatment, l.tax_rate_basis_points, l.tax_legal_basis, l.needs_review,
-      (SELECT string_agg(DISTINCT w.display_name, ', ') FROM timesheets t
-         JOIN organization_worker_memberships m ON m.id = t.organization_worker_membership_id JOIN workers w ON w.id = m.worker_id
-         WHERE t.shift_id = l.shift_id AND t.status = 'approved') AS caregiver_name
+      l.caregiver_name -- frozen on the line (124): the PDF never reads a live profile
     FROM invoice_lines l WHERE l.invoice_id = ${invoiceId} AND l.removed_at IS NULL ORDER BY l.position, l.created_at`.execute(trx)).rows;
 }
 
-async function pdfInput(trx: Trx, organizationId: string, invoiceId: string): Promise<PdfInvoice> {
+/**
+ * Everything the PDF shows comes from data frozen at issue (snapshots, immutable lines and segments,
+ * content-addressed logo). The original never carries the void mark, so either document can be rebuilt
+ * byte for byte later (recovery: see rebuildDocument).
+ */
+export async function pdfInput(trx: Trx, organizationId: string, invoiceId: string, kind: "original" | "void_copy"): Promise<PdfInvoice> {
   const inv = (await sql<{ number_text: string; issue_date: string; issued_at: string; period_from: string; period_to: string; notes: string | null;
     issuer_snapshot: Record<string, unknown>; client_snapshot: Record<string, unknown>; totals_snapshot: Record<string, unknown>; status: string; voided_at: string | null; void_reason: string | null }>`
     SELECT number_text, to_char(issue_date, 'YYYY-MM-DD') AS issue_date, issued_at, to_char(period_from, 'YYYY-MM-DD') AS period_from, to_char(period_to, 'YYYY-MM-DD') AS period_to,
@@ -219,7 +222,7 @@ async function pdfInput(trx: Trx, organizationId: string, invoiceId: string): Pr
       segments: segs.filter((s) => s.line_id === l.id).map((s) => ({ date: s.segment_date, startsAt: new Date(s.starts_at).toISOString(), endsAt: new Date(s.ends_at).toISOString(), minutes: s.minutes, amountCents: s.amount_cents, holiday: s.holiday_name })),
     })),
     totals,
-    voided: inv.status === "voided" ? { at: new Date(inv.voided_at!).toISOString(), reason: inv.void_reason! } : null,
+    voided: kind === "void_copy" && inv.status === "voided" ? { at: new Date(inv.voided_at!).toISOString(), reason: inv.void_reason! } : null,
   };
 }
 
@@ -268,7 +271,7 @@ export async function issueInvoice(userId: string, organizationId: string, invoi
         row_version = row_version + 1, updated_by_user_id = ${userId}
       WHERE id = ${invoiceId}`.execute(trx);
 
-    const pdf = await renderInvoicePdf(await pdfInput(trx, organizationId, invoiceId));
+    const pdf = await renderInvoicePdf(await pdfInput(trx, organizationId, invoiceId, "original"));
     const hash = sha256(pdf);
     const key = `org/${organizationId}/invoices/${invoiceId}/original-${hash}.pdf`;
     await storageGuard(() => putBillingObject(key, "application/pdf", pdf));
@@ -293,7 +296,7 @@ export async function voidInvoice(userId: string, organizationId: string, invoic
       UPDATE invoice_shift_claims SET released_at = now(), released_by_user_id = ${userId}, release_reason = ${input.reason}, release_kind = 'invoice_voided'
       WHERE invoice_id = ${invoiceId} AND released_at IS NULL RETURNING shift_id`.execute(trx)).rows;
     for (const r of released) await event(trx, organizationId, userId, "FINANCE_BILLING_RESERVATION_RELEASED", "shift", r.shift_id, { invoiceId, kind: "invoice_voided" });
-    const pdf = await renderInvoicePdf(await pdfInput(trx, organizationId, invoiceId));
+    const pdf = await renderInvoicePdf(await pdfInput(trx, organizationId, invoiceId, "void_copy"));
     const hash = sha256(pdf);
     const key = `org/${organizationId}/invoices/${invoiceId}/void_copy-${hash}.pdf`;
     await storageGuard(() => putBillingObject(key, "application/pdf", pdf));

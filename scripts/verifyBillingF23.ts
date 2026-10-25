@@ -412,6 +412,43 @@ async function main() {
       need.every((a) => ev.includes(a)) && au.rows.every((r) => !/cents|amount|total/i.test(JSON.stringify(r.new_value ?? {}))),
       `missing=${need.filter((a) => !ev.includes(a))}`);
 
+    // E19 Recovery of a lost PDF without touching the issued invoice (verified deterministic rebuild).
+    const { recoverInvoiceDocument } = await import("../src/modules/billing/billingRecovery.js");
+    const { Kysely, PostgresDialect } = await import("kysely");
+    const ops = new Kysely<unknown>({ dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: adminUrl, max: 1 }) }) });
+    const recover = (kind: "original" | "void_copy", apply: boolean) => ops.transaction().execute((trx) => recoverInvoiceDocument(trx as never, { organizationId: orgA, invoiceId: d1, kind, actorUserId: adm.userId, apply }));
+    const rowBefore = (await q("SELECT status, number_text, row_version, issuer_snapshot, totals_snapshot, voided_at FROM invoices WHERE id=$1", [d1])).rows[0];
+    const docsBefore = (await q("SELECT kind, object_key, sha256 FROM invoice_documents WHERE invoice_id=$1 ORDER BY kind", [d1])).rows;
+    const intact = await recover("original", false);
+    const { DeleteObjectCommand } = await import("@aws-sdk/client-s3");
+    for (const d of docsBefore) await objStore.send(new DeleteObjectCommand({ Bucket: bucket, Key: d.object_key }));
+    const lost = await call("GET", `${I}/${d1}/pdf`, adm.token);
+    const dry = await recover("original", false);
+    const stillLost = await call("GET", `${I}/${d1}/pdf`, adm.token);
+    const recOrig = await recover("original", true);
+    const recVoid = await recover("void_copy", true);
+    const back = await fetch(`${base}${I}/${d1}/pdf`, { headers: { Authorization: `Bearer ${adm.token}` } });
+    const backBody = Buffer.from(await back.arrayBuffer());
+    const backVoid = await fetch(`${base}${I}/${d1}/pdf?kind=void_copy`, { headers: { Authorization: `Bearer ${adm.token}` } });
+    const backVoidBody = Buffer.from(await backVoid.arrayBuffer());
+    const rowAfter = (await q("SELECT status, number_text, row_version, issuer_snapshot, totals_snapshot, voided_at FROM invoices WHERE id=$1", [d1])).rows[0];
+    const docsAfter = (await q("SELECT kind, object_key, sha256 FROM invoice_documents WHERE invoice_id=$1 ORDER BY kind", [d1])).rows;
+    const recEvents = (await q<{ n: number }>("SELECT count(*)::int n FROM finance_events WHERE action='FINANCE_BILLING_PDF_RECOVERED' AND entity_id=$1", [d1])).rows[0].n;
+    const { createHash } = await import("node:crypto");
+    const h = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+    await ops.destroy();
+    check("E19 recovery: intact → INTACT; lost object → download fails safely, dry run RECOVERABLE writes nothing, apply RECOVERED for the original (no void mark) and the void copy; same SHA-256 and same key; invoice and document rows unchanged; recovery audited",
+      intact.status === "INTACT" && lost.status !== 200 && lost.status !== 500 && dry.status === "RECOVERABLE" && stillLost.status !== 200
+        && recOrig.status === "RECOVERED" && recVoid.status === "RECOVERED" && back.status === 200 && backVoid.status === 200
+        && h(backBody) === docsBefore.find((d) => d.kind === "original")!.sha256 && h(backVoidBody) === docsBefore.find((d) => d.kind === "void_copy")!.sha256
+        && !pdfText(backBody).includes("ANULADA") && pdfText(backVoidBody).includes("ANULADA")
+        && JSON.stringify(rowBefore) === JSON.stringify(rowAfter) && JSON.stringify(docsBefore) === JSON.stringify(docsAfter) && recEvents === 2,
+      `intact=${intact.status} lost=${S(lost)} dry=${dry.status} still=${stillLost.status} orig=${JSON.stringify(recOrig)} void=${JSON.stringify(recVoid)} back=${back.status}/${backVoid.status} rows=${JSON.stringify(rowBefore) === JSON.stringify(rowAfter)} docs=${JSON.stringify(docsBefore) === JSON.stringify(docsAfter)} events=${recEvents}`);
+
+    // E20 The ANULADA mark is drawn around the page centre (letter 612×792 → origin moved to 306,396).
+    check("E20 void copy: the ANULADA watermark is centred on the page (translate to 306,396 then rotate)",
+      backVoidBody.toString("latin1").includes("1 0 0 1 306 396 cm") && !backBody.toString("latin1").includes("1 0 0 1 306 396 cm"), "");
+
     const fives = all.filter((r) => r.status === 500);
     check("E18 no 500 in the whole run", fives.length === 0, fives.map((r) => JSON.stringify(r.body)).join(" "));
   } finally {
