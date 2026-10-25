@@ -11,7 +11,7 @@ import type { NextFunction, Request, Response } from "express";
 const WINDOW_MS = 60_000;
 const LIMIT = 120;
 const MAX_KEYS = 10_000;
-const PATTERN = /\/(smartmatch|service-locations|service-location-options|location-change-requests|family-location-permissions|arrival|journey|activity-photos|photo-consents|finance)(\/|$)|\/confirm-gps$|\/care-events\/[^/]+\/photo$/;
+const PATTERN = /\/(smartmatch|service-locations|service-location-options|location-change-requests|family-location-permissions|arrival|journey|activity-photos|photo-consents|billing|finance)(\/|$)|\/confirm-gps$|\/care-events\/[^/]+\/photo$/;
 const hits = new Map<string, number[]>();
 
 export function featureWriteLimit(req: Request, res: Response, next: NextFunction): void {
