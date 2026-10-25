@@ -17,6 +17,10 @@ const tables = [
   "assignment_history", "verification_events", "verification_overrides",
 ] as const;
 
+// Tables the runtime IS granted SELECT on (the feature reads them). For these a
+// 42501 is a broken grant, not a pass: the probe must reach RLS and get 0 rows.
+const runtimeReadable = new Set<string>(["resident_documents"]);
+
 const client = new pg.Client({ connectionString: url });
 async function main() {
   await client.connect();
@@ -34,6 +38,18 @@ async function main() {
     const resident = await client.query(
       "INSERT INTO care_recipients (organization_id, first_name, last_name) VALUES ($1,'Synthetic','Patient') RETURNING id",
       [org.rows[0].id]
+    );
+
+    // A synthetic resident document, so the resident_documents probe below
+    // meets a real row (0 rows must come from RLS, not from an empty table).
+    const establishment = await client.query(
+      "INSERT INTO locations (organization_id, name) VALUES ($1,'PHI Boundary Home') RETURNING id",
+      [org.rows[0].id]
+    );
+    await client.query(
+      `INSERT INTO resident_documents (organization_id, establishment_id, care_recipient_id, document_type, title, file_name, content_type, size_bytes, storage_key)
+       VALUES ($1,$2,$3,'other','Synthetic','synthetic.pdf','application/pdf',1,'phi-boundary-ci/' || gen_random_uuid())`,
+      [org.rows[0].id, establishment.rows[0].id, resident.rows[0].id]
     );
 
     // Prove the synthetic target exists before testing its invisibility.
@@ -107,6 +123,7 @@ async function main() {
         await client.query("ROLLBACK TO SAVEPOINT phi_table_probe");
         await client.query("RELEASE SAVEPOINT phi_table_probe");
         if (error?.code !== "42501") throw error;
+        if (runtimeReadable.has(table)) throw new Error("Runtime lacks SELECT on a table it must read: " + table);
       }
     }
     const direct = await client.query("SELECT id FROM care_recipients WHERE id=$1", [resident.rows[0].id]);
@@ -139,6 +156,13 @@ async function main() {
     );
     if (agencyRead.rowCount !== 1) {
       throw new Error("Agency member lost access to its own synthetic resident");
+    }
+    const agencyDocs = await client.query(
+      "SELECT id FROM resident_documents WHERE care_recipient_id=$1",
+      [resident.rows[0].id]
+    );
+    if (agencyDocs.rowCount !== 1) {
+      throw new Error("Agency admin lost access to its own synthetic resident document");
     }
     // A second agency must not see the first agency's resident, even when
     // the caller switches its claimed organization context.
