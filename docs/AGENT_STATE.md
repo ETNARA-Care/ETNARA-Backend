@@ -2,6 +2,23 @@
 
 ## Current Status
 
+## 2026-10-24 — Finanzas F1 backend: servicios y tarifas diferenciadas (claude/finanzas-f1-servicios-tarifas)
+
+- 119 (solo tablas nuevas; shifts, timesheets, worker_financial_rates y el check-out intactos): finance_services
+  (unidad hora/turno/día/fijo, inmutable; se desactiva, no se borra), finance_rates (cobro y pago separados; general,
+  por cliente o por cuidador; estándar o feriado; versiones por fecha PR, inmutables, sin solapes con bloqueo por línea),
+  billing_clients (+ residentes, un pagador principal), finance_holidays, recipient_finance_defaults, shift_finance_terms
+  (servicio, pagador y unidades del turno; bloqueados cuando las horas del turno están aprobadas).
+- Seguridad: admin de la agencia; escrituras solo con FINANZAS encendido (también en la base); negación RESTRICTIVE a
+  ETNARA central; valores en finance_events, audit_log solo ids (FINANCE_*).
+- Resolución: cobro = cliente → general; pago = excepción del cuidador → general; en feriado de la agencia primero las
+  versiones de feriado. financeCalc.ts: enteros, redondeo mitad hacia arriba; día incompleto según la regla (revisión,
+  proporcional o medio día fijo); margen bruto estimado (no es ganancia neta).
+- API /organizations/:id/finance/* y /shifts/:id/finance, detrás de FINANZAS y del límite de escrituras.
+- verifyFinanceServicesRates 28/28 (sobre main el verificador no llega a ejecutarse: no existen rutas ni tablas);
+  npm test 504/504; rollback probado (limpio y abortado con datos).
+- Siguiente: frontend (Finanzas → Servicios y Tarifas) en ETNARAMVP; gate F1. FINANZAS sigue apagado.
+
 ## 2026-10-24 — Finanzas F0: base financiera segura (claude/finanzas-f0-base-segura)
 
 - Contexto: plan en Project doc claude/finanzas-auditoria-y-plan.md; F1 (servicios y tarifas) detenido hasta el PASS de F0.

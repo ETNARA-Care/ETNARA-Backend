@@ -2,6 +2,11 @@
 
 ## In Progress
 
+### FIN-F1 — Finanzas F1 services and differentiated rates
+
+- Status: backend ready for review (migration 119 + verifyFinanceServicesRates 28/28); frontend in progress.
+- Next: F1 gate. Not authorized: merge, deploy, FINANZAS on, F2.
+
 ### FIN-F0 — Finanzas F0 safe financial foundation (backend)
 
 - Status: ready for review (gate). Migration 118 + verifyFinanceFoundation (22/22).
