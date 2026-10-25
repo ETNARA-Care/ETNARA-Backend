@@ -2,6 +2,28 @@
 
 ## Current Status
 
+## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 126)
+
+- **Numeración:** 126 (la 124 la tomó antes #218 Facturación F2.2 y la 125 es la corrección de documentos #220).
+- **126 (aditiva):**
+  - SHIFT_REPORTS se suma a los interruptores, apagado para todas las agencias.
+  - `shift_reports` es una foto fija de los registros existentes por visita (cuidadora y turno).
+  - `shift_report_events` es el historial, de solo añadir.
+  - Un informe aprobado es inmutable (también para el dueño) y nunca se borra.
+  - Solo administradores y supervisores autorizados (`app_can_review_shift_reports`); `platform_phi_deny` en las tres tablas; GRANT explícitos sin DELETE.
+- **API:**
+  - `GET /shift-reports` (crea borradores de visitas terminadas en los últimos 7 días);
+  - `GET /shifts/:id/shift-reports`;
+  - `POST /shift-reports/:id/refresh` (solo DRAFT);
+  - `POST /shift-reports/:id/approve` (`expectedGeneratedAt`, secciones familiares, resumen).
+- **Permiso de revisión (decisión de Rafa, 25-oct):** administradores, y supervisores solo con autorización expresa de un administrador (`shift_report_reviewers`: solo se revoca, nunca se borra). Independiente de Finanzas, SmartMatch y Horas. Nadie aprueba el informe de su propia visita (servicio y trigger).
+- **Contrato F2–F5:** `docs/SHIFT_REPORTS.md`.
+- **Pruebas:**
+  - `verifyShiftReportsF1` 41/41;
+  - batería completa en una base nueva (Gate 6 93/93, Gate 7 36/36, PHI, SmartMatch, Finanzas, Facturación…);
+  - unitarias 586/586 y `shiftReportsF1.test.ts`;
+  - rollback abortado con datos; vacío → revertido y reaplicado.
+
 ## 2026-10-25 — Documentos de residentes y del establecimiento: acceso arreglado (claude/resident-documents-access-fix)
 
 - Bug confirmado en producción: 066/067 nunca dieron GRANT a app_runtime (42501) y sus políticas leían

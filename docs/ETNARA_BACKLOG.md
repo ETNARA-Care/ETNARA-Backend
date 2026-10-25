@@ -2,6 +2,8 @@
 
 ## In Progress
 
+- Informe de Turno: F1 en PR (126), borrador. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
+
 ### DOC-ACCESS-FIX — Resident and establishment documents return 500 (grants, GUC, EXISTS)
 
 - Status: draft backend PR (migration 125 + verifyDocumentAccess 23/23, orphan audit read-only). Not authorized: merge, deploy, running the orphan audit against production, deleting any stored file.

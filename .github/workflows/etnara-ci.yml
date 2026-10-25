@@ -195,6 +195,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyBillingF21.ts
 
+      - name: PostgreSQL Informe de Turno F1 (drafts from existing records, approval, immutability, isolation, central denied)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyShiftReportsF1.ts
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
