@@ -1,4 +1,4 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../../config/env.js";
 
@@ -49,6 +49,12 @@ export async function uploadPrivateObject(storageKey: string, contentType: strin
     ContentLength: body.byteLength,
     Body: body,
   }));
+}
+
+/** Removes one object. Only used to undo an upload whose database row was never written. */
+export async function deletePrivateObject(storageKey: string) {
+  const { s3, bucket } = client();
+  await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: storageKey }));
 }
 
 export async function inspectPrivateObject(storageKey: string) {

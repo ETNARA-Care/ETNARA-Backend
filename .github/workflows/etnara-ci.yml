@@ -219,6 +219,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoUpload.ts
 
+      - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyDocumentAccess.ts
+
       - name: Password recovery by e-mail (no enumeration, timing, single use, sessions closed)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

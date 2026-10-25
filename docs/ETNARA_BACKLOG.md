@@ -4,6 +4,12 @@
 
 - Informe de Turno: F1 en PR (126), borrador. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
 
+### DOC-ACCESS-FIX — Resident and establishment documents return 500 (grants, GUC, EXISTS)
+
+- Status: draft backend PR (migration 125 + verifyDocumentAccess 23/23, orphan audit read-only). Not authorized: merge, deploy, running the orphan audit against production, deleting any stored file.
+- Next: after deploy, run scripts/auditDocumentOrphans.ts (read only, AUDIT_READ_ONLY_CONFIRM=yes) and decide on orphans separately.
+- Follow-ups: establishment admins without a manager role cannot see care_recipients (so no resident documents); document routes map a foreign-organization request to 500 instead of 403.
+
 ### BILL-F2.1 — Facturación Premium F2.1 (FACTURACION switch, billing permissions, security)
 
 - Status: backend PR (migration 123 + verifyBillingF21 12/12); frontend PR next. Not authorized: merge, deploy, FACTURACION on for any agency, F3/F4.
