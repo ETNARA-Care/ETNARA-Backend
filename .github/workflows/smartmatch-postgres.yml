@@ -39,6 +39,8 @@ on:
       - 'src/modules/storage/**'
       - 'scripts/verifyBillingF22.ts'
       - 'ops/124_billing_drafts.rollback.sql'
+      - 'scripts/verifyBillingF23.ts'
+      - 'ops/127_billing_issue_void.rollback.sql'
       - 'src/modules/billing/**'
       - 'src/modules/timesheets/**'
       - 'src/modules/finance/**'
@@ -177,6 +179,9 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/moto-venv"
           "$RUNNER_TEMP/moto-venv/bin/pip" install --quiet "moto[server]==5.2.4"
           echo "PHOTO_TEST_PYTHON=$RUNNER_TEMP/moto-venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Facturación F2.3 issue, consecutive numbering, private PDF (local S3), void, immutability, isolation
+        run: npx tsx scripts/verifyBillingF23.ts
       - name: Activity photos upload (EXIF removal, review, consent, family, concurrency)
         run: npx tsx scripts/verifyActivityPhotoUpload.ts
       - name: Resident and establishment documents (grants, RLS, agency, central, no orphan files)

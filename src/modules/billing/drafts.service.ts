@@ -5,6 +5,7 @@ import { resolveBillingRateForDate } from "../finance/finance.service.js";
 import type { FinanceUnit } from "../finance/financeCalc.js";
 import { BillingError, inBilling, mapDbError, requireAnyCapability, requireCapability, type Trx } from "./billing.service.js";
 import { invoiceTotals, priceManual, priceAllocated, allocateApproved, type LineResult, type SegmentRate, type TaxTreatment } from "./billingCalc.js";
+import { agencyIssueBlockers } from "./readiness.js";
 
 /**
  * Facturación Premium F2.2 — drafts. Invoices are built from shifts with
@@ -58,7 +59,10 @@ export const taxSetSchema = z.object({
 const KNOWN: Record<string, number> = {
   DRAFT_CHANGED: 409, INVOICE_NOT_EDITABLE: 409, LINE_IMMUTABLE: 409, CLAIM_IMMUTABLE: 409, CLAIM_LINE_MISMATCH: 409,
   TAX_TREATMENT_IMMUTABLE: 409, BILLING_NO_DELETE: 409, INVOICE_IDENTITY_IMMUTABLE: 409,
+  INVOICE_IMMUTABLE: 409, INVOICE_TRANSITION_INVALID: 409, CLAIM_INVOICED: 409, PREFIX_LOCKED: 409, NUMBER_NEVER_DECREASES: 409,
+  DOCUMENT_IMMUTABLE: 409, DOCUMENT_STATE_MISMATCH: 409, HOLIDAY_INVOICED: 409,
 };
+export const runBilling = <T>(work: () => Promise<T>) => run(work);
 async function run<T>(work: () => Promise<T>): Promise<T> {
   try { return await work(); } catch (error) {
     if (error instanceof BillingError) throw error;
@@ -67,6 +71,7 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
     if (hit) throw new BillingError(hit, KNOWN[hit]);
     if (e?.code === "23505" && e.constraint === "idx_invoice_shift_claims_live") throw new BillingError("SHIFT_ALREADY_RESERVED", 409);
     if (e?.code === "23505" && e.constraint === "finance_service_tax_service_id_effective_from_key") throw new BillingError("TAX_TREATMENT_DATE_EXISTS", 409);
+    if (e?.code === "23505" && e.constraint === "idx_invoices_org_number") throw new BillingError("NUMBER_CONFLICT", 409);
     if (e?.code === "23514" || e?.code === "23503") throw new BillingError("BILLING_INVALID_DATA", 409);
     return mapDbError(error);
   }
@@ -507,9 +512,9 @@ interface LineRow {
   warnings: { code: string; minutes?: number }[]; position: number; created_at: string; removed_at: string | null; remove_reason: string | null;
 }
 
-function blockersFor(lines: LineRow[], totals: ReturnType<typeof invoiceTotals>, rateChanged: boolean) {
+function blockersFor(agency: string[], lines: LineRow[], totals: ReturnType<typeof invoiceTotals>, rateChanged: boolean) {
   return [
-    "ISSUING_NOT_AVAILABLE", // F2.2: issuing arrives in F2.3, behind its own permission
+    ...agency, // settings, tax configuration validated, private storage (F2.3)
     ...(lines.length === 0 ? ["NO_LINES"] : []),
     ...(totals.taxPending ? ["TAX_PENDING"] : []),
     ...(lines.some((l) => l.needs_review) ? ["NEEDS_REVIEW"] : []),
@@ -518,12 +523,31 @@ function blockersFor(lines: LineRow[], totals: ReturnType<typeof invoiceTotals>,
   ];
 }
 
+/** Shift lines whose stored pricing no longer matches what the rates give today (draft only). */
+export async function rateChangedLines(trx: Trx, organizationId: string, invoiceId: string, billingClientId: string): Promise<string[]> {
+  const lines = (await sql<{ id: string; shift_id: string }>`
+    SELECT id, shift_id FROM invoice_lines WHERE invoice_id = ${invoiceId} AND kind = 'shift' AND removed_at IS NULL`.execute(trx)).rows;
+  const changed: string[] = [];
+  for (const l of lines) {
+    const [row] = await shiftRows(trx, organizationId, { shiftIds: [l.shift_id] });
+    if (!row) continue;
+    const priced = await priceRow(trx, organizationId, row, billingClientId);
+    if (!priced.line || fingerprint(priced) !== (await storedPricing(trx, l.id))) changed.push(l.id);
+  }
+  return changed;
+}
+
+const ALL_CAPS = ["view", "draft", "issue", "void", "manage"] as const;
+const can = async (trx: Trx, organizationId: string, cap: string) =>
+  (await sql<{ ok: boolean }>`SELECT app_billing_can(${organizationId}::uuid, ${cap}) AS ok`.execute(trx)).rows[0]?.ok === true;
+
 export async function listInvoices(userId: string, organizationId: string) {
   return inBilling(userId, organizationId, (trx) => run(async () => {
-    await requireAnyCapability(trx, organizationId, ["view", "draft"]);
-    const rows = (await sql<{ id: string; status: string; client_name: string; period_from: string; period_to: string; row_version: number; created_at: string; updated_at: string; created_by_email: string | null; line_count: number; subtotal: number; pending_tax: boolean; review: boolean; inactive: boolean; discard_kind: string | null }>`
+    await requireAnyCapability(trx, organizationId, [...ALL_CAPS]);
+    const rows = (await sql<{ id: string; status: string; client_name: string; period_from: string; period_to: string; row_version: number; created_at: string; updated_at: string; created_by_email: string | null; line_count: number; subtotal: number; pending_tax: boolean; review: boolean; inactive: boolean; discard_kind: string | null; number_text: string | null; issue_date: string | null; total_cents: number | null }>`
       SELECT i.id, i.status, i.client_name, to_char(i.period_from, 'YYYY-MM-DD') AS period_from, to_char(i.period_to, 'YYYY-MM-DD') AS period_to,
-        i.row_version, i.created_at, i.updated_at, u.email AS created_by_email, i.discard_kind,
+        i.row_version, i.created_at, i.updated_at, u.email AS created_by_email, i.discard_kind, i.number_text, to_char(i.issue_date, 'YYYY-MM-DD') AS issue_date,
+        (i.totals_snapshot->>'totalCents')::int AS total_cents,
         count(l.id) FILTER (WHERE l.removed_at IS NULL)::int AS line_count,
         COALESCE(sum(l.amount_cents) FILTER (WHERE l.removed_at IS NULL), 0)::int AS subtotal,
         COALESCE(bool_or(l.tax_treatment = 'pending') FILTER (WHERE l.removed_at IS NULL), false) AS pending_tax,
@@ -531,13 +555,15 @@ export async function listInvoices(userId: string, organizationId: string) {
         (i.status = 'draft' AND i.updated_at <= now() - make_interval(days => ${INACTIVE_DAYS})) AS inactive
       FROM invoices i LEFT JOIN users u ON u.id = i.created_by_user_id LEFT JOIN invoice_lines l ON l.invoice_id = i.id
       WHERE i.organization_id = ${organizationId}
-      GROUP BY i.id, u.email ORDER BY (i.status = 'draft') DESC, i.updated_at DESC LIMIT 300`.execute(trx)).rows;
+      GROUP BY i.id, u.email
+      ORDER BY (i.status = 'draft') DESC, i.invoice_number DESC NULLS LAST, i.updated_at DESC LIMIT 500`.execute(trx)).rows;
     return {
       inactiveDays: INACTIVE_DAYS,
       invoices: rows.map((r) => ({
         id: r.id, status: r.status, clientName: r.client_name, periodFrom: r.period_from, periodTo: r.period_to, version: r.row_version,
         createdAt: r.created_at, updatedAt: r.updated_at, createdByEmail: r.created_by_email, lineCount: r.line_count, subtotalCents: r.subtotal,
         taxPending: r.pending_tax, needsReview: r.review, inactive: r.inactive, discardKind: r.discard_kind,
+        numberText: r.number_text, issueDate: r.issue_date, totalCents: r.total_cents,
       })),
     };
   }));
@@ -545,13 +571,17 @@ export async function listInvoices(userId: string, organizationId: string) {
 
 export async function getInvoice(userId: string, organizationId: string, invoiceId: string) {
   return inBilling(userId, organizationId, (trx) => run(async () => {
-    await requireAnyCapability(trx, organizationId, ["view", "draft"]);
-    const canDraft = (await sql<{ ok: boolean }>`SELECT app_billing_can(${organizationId}::uuid, 'draft') AS ok`.execute(trx)).rows[0]?.ok === true;
-    const inv = (await sql<{ id: string; status: string; billing_client_id: string; client_name: string; period_from: string; period_to: string; notes: string | null; row_version: number; created_at: string; updated_at: string; created_by_email: string | null; discarded_at: string | null; discard_reason: string | null; discard_kind: string | null; inactive: boolean }>`
+    await requireAnyCapability(trx, organizationId, [...ALL_CAPS]);
+    const canDraft = await can(trx, organizationId, "draft");
+    const inv = (await sql<{ id: string; status: string; billing_client_id: string; client_name: string; period_from: string; period_to: string; notes: string | null; row_version: number; created_at: string; updated_at: string; created_by_email: string | null; discarded_at: string | null; discard_reason: string | null; discard_kind: string | null; inactive: boolean;
+      number_text: string | null; issue_date: string | null; issued_at: string | null; issued_by_email: string | null; voided_at: string | null; void_reason: string | null; voided_by_email: string | null; totals_snapshot: unknown; retention_until: string | null }>`
       SELECT i.id, i.status, i.billing_client_id, i.client_name, to_char(i.period_from, 'YYYY-MM-DD') AS period_from, to_char(i.period_to, 'YYYY-MM-DD') AS period_to,
         i.notes, i.row_version, i.created_at, i.updated_at, u.email AS created_by_email, i.discarded_at, i.discard_reason, i.discard_kind,
-        (i.status = 'draft' AND i.updated_at <= now() - make_interval(days => ${INACTIVE_DAYS})) AS inactive
-      FROM invoices i LEFT JOIN users u ON u.id = i.created_by_user_id WHERE i.id = ${invoiceId} AND i.organization_id = ${organizationId}`.execute(trx)).rows[0];
+        (i.status = 'draft' AND i.updated_at <= now() - make_interval(days => ${INACTIVE_DAYS})) AS inactive,
+        i.number_text, to_char(i.issue_date, 'YYYY-MM-DD') AS issue_date, i.issued_at, iu.email AS issued_by_email, i.voided_at, i.void_reason, vu.email AS voided_by_email,
+        i.totals_snapshot, to_char(i.retention_until, 'YYYY-MM-DD') AS retention_until
+      FROM invoices i LEFT JOIN users u ON u.id = i.created_by_user_id LEFT JOIN users iu ON iu.id = i.issued_by_user_id LEFT JOIN users vu ON vu.id = i.voided_by_user_id
+      WHERE i.id = ${invoiceId} AND i.organization_id = ${organizationId}`.execute(trx)).rows[0];
     if (!inv) throw new BillingError("INVOICE_NOT_FOUND", 404);
     const all = (await sql<LineRow>`
       SELECT id, kind, shift_id, care_recipient_id, recipient_name, service_id, description, justification, to_char(service_date, 'YYYY-MM-DD') AS service_date,
@@ -562,28 +592,31 @@ export async function getInvoice(userId: string, organizationId: string, invoice
     const segments = lines.length ? (await sql<{ line_id: string; segment_date: string; starts_at: string; ends_at: string; minutes: number; billable_minutes: number; rate_source: string | null; day_type: string | null; holiday_name: string | null; unit_price_cents: number | null; amount_cents: number }>`
       SELECT line_id, to_char(segment_date, 'YYYY-MM-DD') AS segment_date, starts_at, ends_at, minutes, billable_minutes, rate_source, day_type, holiday_name, unit_price_cents, amount_cents
       FROM invoice_line_segments WHERE line_id = ANY (${lines.map((l) => l.id)}::uuid[]) ORDER BY starts_at`.execute(trx)).rows : [];
-    // Rates changed since the line was computed? Only checked for people who can work on drafts (FINANZAS data).
-    const changedLines: string[] = [];
-    if (inv.status === "draft" && canDraft) {
-      for (const l of lines.filter((x) => x.kind === "shift")) {
-        const [row] = await shiftRows(trx, organizationId, { shiftIds: [l.shift_id!] });
-        if (!row) continue;
-        const priced = await priceRow(trx, organizationId, row, inv.billing_client_id);
-        if (!priced.line || fingerprint(priced) !== (await storedPricing(trx, l.id))) changedLines.push(l.id);
-      }
-    }
-    const totals = invoiceTotals(lines.map((l) => ({ amountCents: l.amount_cents, taxTreatment: l.tax_treatment, taxRateBasisPoints: l.tax_rate_basis_points })));
+    // Rates changed since the line was computed? Only for drafts and people who work on them (FINANZAS data).
+    const changedLines = inv.status === "draft" && (canDraft || (await can(trx, organizationId, "issue")))
+      ? await rateChangedLines(trx, organizationId, invoiceId, inv.billing_client_id) : [];
+    const totals = inv.totals_snapshot
+      ? (inv.totals_snapshot as ReturnType<typeof invoiceTotals>)
+      : invoiceTotals(lines.map((l) => ({ amountCents: l.amount_cents, taxTreatment: l.tax_treatment, taxRateBasisPoints: l.tax_rate_basis_points })));
+    const documents = (await sql<{ kind: string; size_bytes: number; created_at: string }>`
+      SELECT kind, size_bytes, created_at FROM invoice_documents WHERE invoice_id = ${invoiceId} ORDER BY created_at`.execute(trx)).rows;
+    const issueBlockers = inv.status === "draft" ? blockersFor(await agencyIssueBlockers(trx, organizationId), lines, totals, changedLines.length > 0) : [];
     return {
       invoice: {
         id: inv.id, status: inv.status, billingClientId: inv.billing_client_id, clientName: inv.client_name, periodFrom: inv.period_from, periodTo: inv.period_to,
         notes: inv.notes, version: inv.row_version, createdAt: inv.created_at, updatedAt: inv.updated_at, createdByEmail: inv.created_by_email,
         discardedAt: inv.discarded_at, discardReason: inv.discard_reason, discardKind: inv.discard_kind, inactive: inv.inactive, inactiveDays: INACTIVE_DAYS,
+        numberText: inv.number_text, issueDate: inv.issue_date, issuedAt: inv.issued_at, issuedByEmail: inv.issued_by_email,
+        voidedAt: inv.voided_at, voidReason: inv.void_reason, voidedByEmail: inv.voided_by_email, retentionUntil: inv.retention_until,
       },
       lines: lines.map((l) => ({ ...l, rateChanged: changedLines.includes(l.id), segments: segments.filter((s) => s.line_id === l.id) })),
       removedLines: all.filter((l) => l.removed_at).map((l) => ({ id: l.id, kind: l.kind, description: l.description, amountCents: l.amount_cents, removedAt: l.removed_at, reason: l.remove_reason })),
       totals,
-      issueBlockers: inv.status === "draft" ? blockersFor(lines, totals, changedLines.length > 0) : [],
+      documents: documents.map((d) => ({ kind: d.kind, sizeBytes: d.size_bytes, createdAt: d.created_at })),
+      issueBlockers,
       canEdit: inv.status === "draft" && canDraft,
+      canIssue: inv.status === "draft" && issueBlockers.length === 0 && (await can(trx, organizationId, "issue")),
+      canVoid: inv.status === "issued" && (await can(trx, organizationId, "void")),
     };
   }));
 }

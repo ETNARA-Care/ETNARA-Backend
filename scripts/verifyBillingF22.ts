@@ -212,10 +212,10 @@ async function main() {
     const l1 = g2.body.lines?.find((l: Json) => l.shift_id === s1);
     const realOk = l1 && new Date(l1.real_start).toISOString() === new Date("2026-07-03T22:00:00-04:00").toISOString() && new Date(l1.real_end).toISOString() === new Date("2026-07-04T06:00:00-04:00").toISOString();
     const segMin = l1?.segments?.reduce((a: number, x: Json) => a + x.minutes, 0);
-    check("D04 shift lines: 3 added (201), version 2; real start/end kept; segments add up to exactly 480 min; subtotal $587.00; issuing blocked (ISSUING_NOT_AVAILABLE + TAX_PENDING), nothing assumed",
+    check("D04 shift lines: 3 added (201), version 2; real start/end kept; segments add up to exactly 480 min; subtotal $587.00; issuing blocked (TAX_CONFIG_NOT_VALIDATED + TAX_PENDING), nothing assumed",
       add.status === 201 && add.body.added?.length === 3 && g2.body.invoice?.version === 2 && realOk && segMin === 480 && l1.segments.length === 2
         && g2.body.totals?.subtotalCents === 58700 && g2.body.totals?.taxCents === 0
-        && g2.body.issueBlockers?.includes("ISSUING_NOT_AVAILABLE") && g2.body.issueBlockers?.includes("TAX_PENDING") && l1.tax_treatment === "pending",
+        && g2.body.issueBlockers?.includes("TAX_CONFIG_NOT_VALIDATED") && g2.body.issueBlockers?.includes("TAX_PENDING") && l1.tax_treatment === "pending",
       `${S(add)} v=${g2.body.invoice?.version} real=${realOk} seg=${segMin} sub=${g2.body.totals?.subtotalCents} blockers=${g2.body.issueBlockers}`);
 
     // D05 Validation.
@@ -304,9 +304,9 @@ async function main() {
     const g6 = await call("GET", `${I}/${id1}`, adm.token);
     const pendLeft = g6.body.lines.filter((l: Json) => l.tax_treatment === "pending").length;
     // shift lines taxable 7 %: base 41600 → tax 2912; manual exempt 3000 + manual pending? none; discount exempt -1000
-    check("D10 tax treatment versions are immutable (owner too); after the manager sets a (fictitious) rate and the draft is recalculated, shift lines carry it: base $416.00 × 7 % = $29.12; issuing still blocked (ISSUING_NOT_AVAILABLE)",
+    check("D10 tax treatment versions are immutable (owner too); after the manager sets a (fictitious) rate and the draft is recalculated, shift lines carry it: base $416.00 × 7 % = $29.12; issuing still blocked (tax configuration not validated)",
       /TAX_TREATMENT_IMMUTABLE/.test(ownerEdit) && pendLeft === 0 && g6.body.totals?.taxes?.[0]?.baseCents === 41600 && g6.body.totals?.taxes?.[0]?.taxCents === 2912
-        && g6.body.issueBlockers?.includes("ISSUING_NOT_AVAILABLE") && !g6.body.issueBlockers?.includes("TAX_PENDING"),
+        && g6.body.issueBlockers?.includes("TAX_CONFIG_NOT_VALIDATED") && !g6.body.issueBlockers?.includes("TAX_PENDING"),
       `${ownerEdit.slice(0, 40)} pending=${pendLeft} taxes=${JSON.stringify(g6.body.totals?.taxes)} blockers=${g6.body.issueBlockers}`);
 
     // D11 Discard: releases everything, draft frozen (API and database).
@@ -381,11 +381,11 @@ async function main() {
       upd.status === 200 && need.every((a) => ev2.includes(a)) && au.rows.every((r) => !MONEY.test(JSON.stringify(r.new_value ?? {}))) && supAudit.rows[0]?.n === 0,
       `missing=${need.filter((a) => !ev2.includes(a))} before=${ev.length} audit=${au.rows.length} sup=${supAudit.rows[0]?.n}`);
 
-    // D16 No issuing in F2.2.
-    const issueRoute = await call("POST", `${I}/${id1}/issue`, adm.token, { expectedVersion: 1 });
+    // D16 (since F2.3) issuing exists but is refused while blocked; the database never accepts a half-issued invoice.
+    const issueRoute = await call("POST", `${I}/${id1}/issue`, adm.token, { expectedVersion: (await call("GET", `${I}/${id1}`, adm.token)).body.invoice.version });
     const ownerIssue = await q("UPDATE invoices SET status='issued', row_version=row_version+1 WHERE id=$1", [id1]).then(() => "updated").catch((e: Error) => e.message);
-    check("D16 no invoice can be issued in F2.2: no issue route (404) and the database only allows draft/discarded (owner refused)",
-      issueRoute.status === 404 && /invoices_status_check|violates check/.test(ownerIssue), `${S(issueRoute)} ${ownerIssue.slice(0, 60)}`);
+    check("D16 issuing a draft with blockers is refused (409 ISSUE_BLOCKED: tax configuration not validated); the database refuses an «issued» invoice without number and frozen copy (owner too)",
+      issueRoute.body.error === "ISSUE_BLOCKED" && issueRoute.body.detail?.blockers?.includes("TAX_CONFIG_NOT_VALIDATED") && /invoices_issue_shape|violates check/.test(ownerIssue), `${S(issueRoute)} ${ownerIssue.slice(0, 60)}`);
 
     // D17 Regressions: Finanzas F1 untouched.
     const finA = await call("GET", `/organizations/${orgA}/finance/services`, adm.token);

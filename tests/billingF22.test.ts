@@ -12,12 +12,11 @@ describe("ETNARA Facturación F2.2 — drafts, reservations, tax treatment (124)
   const routes = read("src/modules/billing/billing.routes.ts");
   const rollback = read("ops/124_billing_drafts.rollback.sql");
 
-  it("is additive and cannot issue: invoices only allow draft/discarded; no issue route", () => {
+  it("is additive; 124 alone only allows draft/discarded (issuing arrives with 127)", () => {
     expect(code).not.toMatch(/DROP TABLE|DROP COLUMN|TRUNCATE|DELETE FROM/i);
     expect(code).not.toMatch(/ALTER TABLE (shifts|timesheets|finance_rates|finance_services|billing_clients)\b/);
     expect(code).toContain("status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'discarded'))");
-    expect(routes).not.toMatch(/\/issue|\/void/);
-    expect(service).toContain('"ISSUING_NOT_AVAILABLE"');
+    expect(routes).toContain("/issue"); // F2.3 (127)
   });
 
   it("nothing tax-related is preloaded or assumed", () => {
