@@ -5,8 +5,12 @@ import { db } from "../../config/db.js";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { hashPassword } from "../../security/password.js";
 import { hashToken } from "../../security/sessionToken.js";
+import { loadEmailConfig, type EmailDeliveryResult } from "../email/email.service.js";
+import { sendFamilyInvitationEmail } from "../email/familyInvitationEmail.js";
 
 const INVITATION_TTL_DAYS = 7;
+/** A family invitation e-mail is not re-sent within this many seconds of the last accepted one. */
+export const FAMILY_RESEND_COOLDOWN_SECONDS = 60;
 
 export class AccessInvitationError extends Error {
   constructor(public readonly code: string) {
@@ -56,6 +60,7 @@ interface InvitationRow {
   revoked_at: string | null;
   created_at: string;
   updated_at: string;
+  email_sent_at?: string | null;
   target_name: string;
   account_linked: boolean;
 }
@@ -181,7 +186,7 @@ export async function listAccessInvitations(
              ai.worker_membership_id, ai.care_recipient_id, ai.relationship_type,
              CASE WHEN ai.status = 'pending' AND ai.expires_at <= now()
                   THEN 'expired' ELSE ai.status::text END AS status,
-             ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at, ai.updated_at,
+             ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at, ai.updated_at, ai.email_sent_at,
              CASE WHEN ai.invitation_type = 'worker'
                   THEN coalesce(w.display_name, 'Personal de cuidado')
                   ELSE coalesce(cr.preferred_name, cr.first_name || ' ' || cr.last_name)
@@ -344,4 +349,173 @@ export async function acceptAccessInvitation(userId: string, rawToken: string) {
   } catch (error) {
     return translateDatabaseError(error);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Family invitations by e-mail (migration 120).
+//
+// The token reaches the relative only by e-mail; it is never returned to the
+// agency. A new token is stored only AFTER the provider accepts the e-mail, so
+// a failed re-send never invalidates a link the relative already has. Pressing
+// «Crear enlace seguro» again for the same address and resident re-sends the
+// SAME pending invitation (no duplicates). Re-sends wait one minute.
+
+type FamilyInput = Extract<CreateAccessInvitationInput, { type: "family" }>;
+
+export interface FamilyInvitationResult {
+  invitation: InvitationRow;
+  emailDelivery: { status: "sent" | "failed"; error?: string };
+  resent: boolean;
+}
+
+interface PreparedFamilyInvitation {
+  invitation: InvitationRow;
+  organizationName: string;
+  rawToken: string;
+  tokenHash: string;
+  expiresAt: string;
+  relationshipType: string | null;
+  resent: boolean;
+}
+
+const INVITATION_COLUMNS = sql`id, organization_id, invitation_type, email, worker_membership_id,
+  care_recipient_id, relationship_type, status, expires_at, accepted_at, revoked_at,
+  created_at, updated_at, email_sent_at`;
+
+async function organizationName(trx: Parameters<Parameters<typeof withTenantContext>[1]>[0], organizationId: string) {
+  const org = await sql<{ name: string }>`SELECT name FROM organizations WHERE id = ${organizationId} LIMIT 1`.execute(trx);
+  return org.rows[0]?.name ?? "Tu agencia";
+}
+
+async function prepareFamilyInvitation(userId: string, organizationId: string, input: FamilyInput): Promise<PreparedFamilyInvitation> {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertManager(trx);
+    const email = input.email.toLowerCase();
+    // Two clicks / two admins for the same person and resident are handled one after the other.
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${`family-invitation:${organizationId}:${email}:${input.careRecipientId}`}))`.execute(trx);
+    await sql`
+      UPDATE access_invitations SET status = 'expired', updated_at = now()
+      WHERE organization_id = ${organizationId} AND status = 'pending' AND expires_at <= now()
+    `.execute(trx);
+
+    const target = await sql<{ target_name: string; status: string }>`
+      SELECT coalesce(preferred_name, first_name || ' ' || last_name) AS target_name, status
+      FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
+    `.execute(trx);
+    if (!target.rows[0]) throw new AccessInvitationError("TARGET_NOT_FOUND");
+    if (target.rows[0].status !== "active") throw new AccessInvitationError("RECIPIENT_NOT_ACTIVE");
+
+    const { rawToken, tokenHash } = invitationToken();
+    const expiresAt = new Date(Date.now() + INVITATION_TTL_DAYS * 86_400_000).toISOString();
+    const pending = await sql<Omit<InvitationRow, "target_name" | "account_linked"> & { too_soon: boolean }>`
+      SELECT ${INVITATION_COLUMNS},
+             coalesce(email_sent_at > now() - make_interval(secs => ${FAMILY_RESEND_COOLDOWN_SECONDS}), false) AS too_soon
+      FROM access_invitations
+      WHERE organization_id = ${organizationId} AND invitation_type = 'family' AND status = 'pending'
+        AND lower(email) = ${email} AND care_recipient_id = ${input.careRecipientId}
+      ORDER BY created_at DESC
+      LIMIT 1
+      FOR UPDATE
+    `.execute(trx);
+
+    let row: Omit<InvitationRow, "target_name" | "account_linked">;
+    let resent = false;
+    if (pending.rows[0]) {
+      if (pending.rows[0].too_soon) throw new AccessInvitationError("RESEND_TOO_SOON");
+      const { too_soon: _ignored, ...existing } = pending.rows[0]; // eslint-disable-line @typescript-eslint/no-unused-vars
+      row = existing;
+      resent = true;
+    } else {
+      const inserted = await sql<Omit<InvitationRow, "target_name" | "account_linked">>`
+        INSERT INTO access_invitations (
+          organization_id, invited_by_user_id, invitation_type, email,
+          care_recipient_id, relationship_type, token_hash, expires_at
+        ) VALUES (
+          ${organizationId}, ${userId}, 'family', ${email},
+          ${input.careRecipientId}, ${input.relationshipType}, ${tokenHash}, ${expiresAt}
+        )
+        RETURNING ${INVITATION_COLUMNS}
+      `.execute(trx);
+      row = inserted.rows[0];
+    }
+    return {
+      invitation: { ...row, target_name: target.rows[0].target_name, account_linked: false },
+      organizationName: await organizationName(trx, organizationId),
+      rawToken, tokenHash, expiresAt, relationshipType: input.relationshipType, resent,
+    };
+  });
+}
+
+async function deliverFamilyInvitation(userId: string, organizationId: string, prepared: PreparedFamilyInvitation): Promise<FamilyInvitationResult> {
+  const delivery: EmailDeliveryResult = await sendFamilyInvitationEmail({
+    recipientEmail: prepared.invitation.email,
+    organizationName: prepared.organizationName,
+    activationToken: prepared.rawToken,
+    expiresAt: prepared.expiresAt,
+  }, loadEmailConfig());
+
+  if (delivery.status !== "sent") {
+    // Never the address, the token or the link.
+    console.error("Family invitation email delivery failed", { error: delivery.error });
+    return { invitation: prepared.invitation, emailDelivery: { status: "failed", error: delivery.error === "EMAIL_NOT_CONFIGURED" ? "EMAIL_NOT_CONFIGURED" : "PROVIDER_REJECTED" }, resent: prepared.resent };
+  }
+
+  // Only now does the new link become the valid one (the previous link, if any, stops working).
+  const updated = await withTenantContext({ userId, organizationId }, async (trx) => sql<Omit<InvitationRow, "target_name" | "account_linked">>`
+    UPDATE access_invitations
+    SET token_hash = ${prepared.tokenHash}, expires_at = ${prepared.expiresAt}, status = 'pending',
+        relationship_type = coalesce(${prepared.relationshipType}, relationship_type),
+        email_sent_at = now(), updated_at = now()
+    WHERE id = ${prepared.invitation.id} AND organization_id = ${organizationId}
+      AND invitation_type = 'family' AND status IN ('pending', 'expired')
+    RETURNING ${INVITATION_COLUMNS}
+  `.execute(trx));
+  if (!updated.rows[0]) {
+    // Accepted or revoked while the e-mail was being sent: the link in that e-mail is not stored, so it cannot be used.
+    console.warn("Family invitation changed while sending; new link discarded");
+    throw new AccessInvitationError("INVITATION_NOT_RESENDABLE");
+  }
+  console.info("Family invitation email accepted by provider");
+  return { invitation: { ...updated.rows[0], target_name: prepared.invitation.target_name, account_linked: false }, emailDelivery: { status: "sent" }, resent: prepared.resent };
+}
+
+/** «Crear enlace seguro» for a relative: creates (or reuses the pending) invitation and e-mails it. */
+export async function inviteFamilyByEmail(userId: string, organizationId: string, input: FamilyInput): Promise<FamilyInvitationResult> {
+  const prepared = await prepareFamilyInvitation(userId, organizationId, input);
+  return deliverFamilyInvitation(userId, organizationId, prepared);
+}
+
+/** «Reenviar»: a pending or expired family invitation gets a new 7-day link by e-mail. */
+export async function resendFamilyInvitation(userId: string, organizationId: string, invitationId: string): Promise<FamilyInvitationResult> {
+  const prepared = await withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertManager(trx);
+    const current = await sql<Omit<InvitationRow, "target_name" | "account_linked"> & { too_soon: boolean; target_name: string; recipient_status: string }>`
+      SELECT ai.id, ai.organization_id, ai.invitation_type, ai.email, ai.worker_membership_id,
+             ai.care_recipient_id, ai.relationship_type,
+             CASE WHEN ai.status = 'pending' AND ai.expires_at <= now() THEN 'expired' ELSE ai.status::text END AS status,
+             ai.expires_at, ai.accepted_at, ai.revoked_at, ai.created_at, ai.updated_at, ai.email_sent_at,
+             coalesce(ai.email_sent_at > now() - make_interval(secs => ${FAMILY_RESEND_COOLDOWN_SECONDS}), false) AS too_soon,
+             coalesce(cr.preferred_name, cr.first_name || ' ' || cr.last_name) AS target_name,
+             cr.status AS recipient_status
+      FROM access_invitations ai
+      JOIN care_recipients cr ON cr.id = ai.care_recipient_id AND cr.organization_id = ai.organization_id
+      WHERE ai.id = ${invitationId} AND ai.organization_id = ${organizationId} AND ai.invitation_type = 'family'
+      LIMIT 1
+      FOR UPDATE OF ai
+    `.execute(trx);
+    const row = current.rows[0];
+    if (!row || !["pending", "expired"].includes(row.status)) throw new AccessInvitationError("INVITATION_NOT_RESENDABLE");
+    if (row.recipient_status !== "active") throw new AccessInvitationError("RECIPIENT_NOT_ACTIVE");
+    if (row.too_soon) throw new AccessInvitationError("RESEND_TOO_SOON");
+    const { too_soon: _a, recipient_status: _b, target_name, ...invitation } = row; // eslint-disable-line @typescript-eslint/no-unused-vars
+    const { rawToken, tokenHash } = invitationToken();
+    return {
+      invitation: { ...invitation, target_name, account_linked: false },
+      organizationName: await organizationName(trx, organizationId),
+      rawToken, tokenHash,
+      expiresAt: new Date(Date.now() + INVITATION_TTL_DAYS * 86_400_000).toISOString(),
+      relationshipType: null, resent: true,
+    } satisfies PreparedFamilyInvitation;
+  });
+  return deliverFamilyInvitation(userId, organizationId, prepared);
 }
