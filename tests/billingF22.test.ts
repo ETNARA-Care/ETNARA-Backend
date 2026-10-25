@@ -35,9 +35,10 @@ describe("ETNARA Facturación F2.2 — drafts, reservations, tax treatment (124)
     expect(service).not.toMatch(/setInterval|setTimeout|node-cron/);
   });
 
-  it("approved hours only, review lines never billed by default, tolerance only warns", () => {
+  it("approved hours only; review lines are added flagged and block issuing; tolerance only warns", () => {
     expect(service).toContain('exceptions.push("HOURS_NOT_APPROVED")');
-    expect(service).toContain("priced.line.needsReview) throw Object.assign(new BillingError(\"SHIFT_NOT_BILLABLE\"");
+    expect(service).toContain("if (!priced.line) throw Object.assign(new BillingError(\"SHIFT_NOT_BILLABLE\"");
+    expect(service).toContain('...(lines.some((l) => l.needs_review) ? ["NEEDS_REVIEW"] : [])');
     expect(service).toContain("export const TOLERANCE_MINUTES = 15");
     expect(read("src/modules/billing/billingCalc.ts")).toContain('warnings.push({ code: "DAY_ALMOST_COMPLETE"');
   });

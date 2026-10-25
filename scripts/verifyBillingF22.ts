@@ -199,10 +199,10 @@ async function main() {
     const el = await call("GET", `${B(orgA)}/eligible-shifts?billingClientId=${perez}&from=2026-07-01&to=2026-08-31`, adm.token);
     const E = (sid: string) => el.body.shifts?.find((x: Json) => x.shiftId === sid);
     const e1 = E(s1), e2 = E(s2), e3 = E(s3), e4 = E(s4), e5 = E(s5);
-    check("D03 eligible shifts: overnight with holiday 2 h × $25 + 6 h × $37.50 = $275.00; rate change at midnight $50 + $162 = $212; 4 h = $100; 23 h 50 min day → review + 10-min warning; pending hours not selectable; other payer and other period absent",
+    check("D03 eligible shifts: overnight with holiday 2 h × $25 + 6 h × $37.50 = $275.00; rate change at midnight $50 + $162 = $212; 4 h = $100; 23 h 50 min day → selectable but flagged for review + 10-min warning; pending hours not selectable; other payer and other period absent",
       el.status === 200 && e1?.amountCents === 27500 && e1.segments?.map((x: Json) => x.amountCents).join() === "5000,22500" && e1.segments?.[1]?.rate?.holiday === "Día de la Independencia" && e1.selectable
         && e2?.amountCents === 21200 && e2.segments?.map((x: Json) => x.amountCents).join() === "5000,16200"
-        && e3?.amountCents === 10000 && e4 && !e4.selectable && e4.exceptions.includes("PARTIAL_DAY") && e4.warnings?.[0]?.code === "DAY_ALMOST_COMPLETE" && e4.warnings?.[0]?.minutes === 10
+        && e3?.amountCents === 10000 && e4 && e4.selectable && e4.exceptions.includes("PARTIAL_DAY") && e4.warnings?.[0]?.code === "DAY_ALMOST_COMPLETE" && e4.warnings?.[0]?.minutes === 10
         && e5 && !e5.selectable && e5.exceptions.includes("HOURS_NOT_APPROVED") && !E(s6) && !E(s8),
       `${S(el)} s1=${e1?.amountCents}/${e1?.segments?.map((x: Json) => x.amountCents)} s2=${e2?.amountCents}/${e2?.segments?.map((x: Json) => x.amountCents)} s3=${e3?.amountCents} s4=${e4?.exceptions}/${JSON.stringify(e4?.warnings)} s5=${e5?.exceptions} s6=${Boolean(E(s6))} s8=${Boolean(E(s8))}`);
 
@@ -221,14 +221,20 @@ async function main() {
     // D05 Validation.
     const stale = await call("POST", `${I}/${id1}/shift-lines`, adm.token, { expectedVersion: 1, shiftIds: [s7] });
     const other = await call("POST", `${I}/${id1}/shift-lines`, adm.token, { expectedVersion: 2, shiftIds: [s6] });
-    const notBillable = await call("POST", `${I}/${id1}/shift-lines`, adm.token, { expectedVersion: 2, shiftIds: [s4] });
     const pendingHours = await call("POST", `${I}/${id1}/shift-lines`, adm.token, { expectedVersion: 2, shiftIds: [s5] });
     const outside = await call("POST", `${I}/${id1}/shift-lines`, adm.token, { expectedVersion: 2, shiftIds: [s8] });
     const v2 = (await call("GET", `${I}/${id1}`, adm.token)).body.invoice?.version;
-    check("D05 stale version 409 DRAFT_CHANGED; other payer 409; partial day and unapproved hours 409 SHIFT_NOT_BILLABLE; outside the period 409; failed requests change nothing (still version 2)",
-      stale.body.error === "DRAFT_CHANGED" && other.body.error === "SHIFT_OTHER_CLIENT" && notBillable.body.error === "SHIFT_NOT_BILLABLE" && pendingHours.body.error === "SHIFT_NOT_BILLABLE"
-        && outside.body.error === "SHIFT_OUTSIDE_PERIOD" && v2 === 2,
-      `${S(stale)} ${S(other)} ${S(notBillable)} ${S(pendingHours)} ${S(outside)} v=${v2}`);
+    // Diseño v2 §7/§14: a partial day is added FLAGGED (needs_review, amount only for what is decided) and blocks issuing.
+    const d5 = (await call("POST", I, adm.token, { billingClientId: perez, periodFrom: "2026-08-01", periodTo: "2026-08-31" })).body.invoice?.id;
+    const review = await call("POST", `${I}/${d5}/shift-lines`, adm.token, { expectedVersion: 1, shiftIds: [s4] });
+    const g5r = await call("GET", `${I}/${d5}`, adm.token);
+    const rl = g5r.body.lines?.[0];
+    check("D05 stale version 409 DRAFT_CHANGED; other payer 409; unapproved hours 409 SHIFT_NOT_BILLABLE; outside the period 409; failed requests change nothing (still version 2); a partial day is added flagged (PARTIAL_DAY, $0 decided, 10-min warning) and blocks issuing (NEEDS_REVIEW)",
+      stale.body.error === "DRAFT_CHANGED" && other.body.error === "SHIFT_OTHER_CLIENT" && pendingHours.body.error === "SHIFT_NOT_BILLABLE"
+        && outside.body.error === "SHIFT_OUTSIDE_PERIOD" && v2 === 2
+        && review.status === 201 && rl?.needs_review === true && rl.review_reasons?.includes("PARTIAL_DAY") && rl.amount_cents === 0
+        && rl.warnings?.[0]?.code === "DAY_ALMOST_COMPLETE" && g5r.body.issueBlockers?.includes("NEEDS_REVIEW"),
+      `${S(stale)} ${S(other)} ${S(pendingHours)} ${S(outside)} v=${v2} review=${S(review)} ${JSON.stringify({ nr: rl?.needs_review, rr: rl?.review_reasons, a: rl?.amount_cents, w: rl?.warnings })} ${g5r.body.issueBlockers}`);
 
     // D06 Reservations: one live draft per shift; simultaneous attempts → exactly one wins.
     const d2 = (await call("POST", I, adm2.token, { billingClientId: perez, periodFrom: "2026-07-01", periodTo: "2026-08-31" })).body.invoice?.id;

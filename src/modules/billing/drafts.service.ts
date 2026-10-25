@@ -222,7 +222,9 @@ export async function eligibleShifts(userId: string, organizationId: string, q: 
         exceptions: priced.exceptions, warnings: priced.line?.warnings ?? [],
         amountCents: priced.line?.amountCents ?? null, segments: priced.line?.segments ?? [],
         taxTreatment: priced.tax.treatment,
-        selectable: !claim && priced.line !== null && !priced.line.needsReview,
+        // Diseño v2 §7/§14: a line that needs a decision (partial day, missing rate) can be added; it is
+        // flagged and blocks issuing (NEEDS_REVIEW) until the agency resolves it and recalculates.
+        selectable: !claim && priced.line !== null,
       });
     }
     return { shifts: out };
@@ -338,8 +340,9 @@ export async function addShiftLines(userId: string, organizationId: string, invo
       if (r.client_id !== draft.billing_client_id) throw Object.assign(new BillingError("SHIFT_OTHER_CLIENT", 409), { detail: { shiftId: r.id } });
       if (r.service_date < draft.period_from || r.service_date > draft.period_to) throw Object.assign(new BillingError("SHIFT_OUTSIDE_PERIOD", 409), { detail: { shiftId: r.id } });
       const priced = await priceRow(trx, organizationId, r, draft.billing_client_id);
-      // A line that needs a decision (partial day, missing rate) is never billed by default: fix the rule or rate first.
-      if (!priced.line || priced.line.needsReview) throw Object.assign(new BillingError("SHIFT_NOT_BILLABLE", 409), { detail: { shiftId: r.id, exceptions: priced.exceptions } });
+      // Unapproved hours, no service or several timesheets: no line at all. A line that needs a decision
+      // is added flagged (needs_review) and blocks issuing (diseño v2 §7/§14).
+      if (!priced.line) throw Object.assign(new BillingError("SHIFT_NOT_BILLABLE", 409), { detail: { shiftId: r.id, exceptions: priced.exceptions } });
       const lineId = await insertShiftLine(trx, organizationId, userId, invoiceId, r, priced, ++position);
       await claim(trx, organizationId, userId, invoiceId, r.id, lineId);
       await event(trx, organizationId, userId, "FINANCE_BILLING_LINE_ADDED", "invoice_line", lineId, { invoiceId, kind: "shift", shiftId: r.id, amountCents: priced.line.amountCents });
@@ -439,7 +442,7 @@ export async function recalculate(userId: string, organizationId: string, invoic
     for (const l of lines) {
       const [row] = await shiftRows(trx, organizationId, { shiftIds: [l.shift_id] });
       const priced = await priceRow(trx, organizationId, row, draft.billing_client_id);
-      if (!priced.line || priced.line.needsReview) continue; // no longer billable as is: flagged, the agency decides
+      if (!priced.line) continue; // no longer billable (e.g. hours reopened): flagged as rate changed, the agency removes it
       const current = await storedPricing(trx, l.id);
       if (current === fingerprint(priced)) continue;
       await sql`UPDATE invoice_lines SET removed_at = now(), removed_by_user_id = ${userId}, remove_reason = 'Recalculada' WHERE id = ${l.id}`.execute(trx);
