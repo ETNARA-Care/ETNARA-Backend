@@ -33,12 +33,20 @@ describe("Informe de Turno F1 (124)", () => {
   });
 
   it("managers of the current organization only; central denied; policies use app.current_org_id", () => {
-    expect(code).toMatch(/CREATE POLICY shift_reports_manager ON shift_reports FOR ALL TO app_runtime[\s\S]*app_is_org_manager\(\)/);
+    expect(code).toMatch(/CREATE POLICY shift_reports_manager ON shift_reports FOR ALL TO app_runtime[\s\S]*app_can_review_shift_reports\(\)/);
+    expect(code).not.toMatch(/AND app_is_org_manager\(\)/); // supervisors need an express grant
+    // Reviewer = admin, or supervisor with an active grant; nothing from Finanzas / SmartMatch / Horas.
+    const fn = code.slice(code.indexOf("FUNCTION app_can_review_shift_reports"), code.indexOf("FUNCTION app_is_shift_report_admin"));
+    expect(fn).toMatch(/r\.code = 'ORGANIZATION_ADMIN'/);
+    expect(fn).toMatch(/r\.code = 'SUPERVISOR' AND EXISTS \([\s\S]*shift_report_reviewers[\s\S]*revoked_at IS NULL/);
+    expect(fn).not.toMatch(/billing|finance|smartmatch|timesheet/i);
+    expect(code).toMatch(/SHIFT_REPORT_SELF_APPROVAL/);
+    expect(code).toMatch(/SHIFT_REPORT_REVIEWER_REVOKE_ONLY/);
     expect(code).not.toMatch(/current_organization_id/); // the setting the app never sets (066 bug)
     expect(code.match(/current_setting\('app\.current_org_id', true\)/g)?.length).toBeGreaterThanOrEqual(4);
     expect(code).toMatch(/CREATE POLICY platform_phi_deny ON shift_reports AS RESTRICTIVE/);
     expect(code).toMatch(/CREATE POLICY platform_phi_deny ON shift_report_events AS RESTRICTIVE/);
-    expect(phi).toMatch(/"shift_reports", "shift_report_events"/);
+    expect(phi).toMatch(/"shift_reports", "shift_report_events", "shift_report_reviewers"/);
     // F1 gives caregivers and families no policy at all.
     expect(code).not.toMatch(/app_current_worker_ids|family_relationships/);
   });

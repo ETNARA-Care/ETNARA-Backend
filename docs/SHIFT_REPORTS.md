@@ -36,11 +36,22 @@ F1 está implementado en la migración 124 (este PR). F2–F5 están **documenta
 - `photos {count, photoEvents}`: solo conteos. Las fotos se comparten con su propio flujo de aprobación (115).
 - `totals`.
 
-## API F1 (detrás de SHIFT_REPORTS; solo gestores de la agencia)
+## Quién revisa y aprueba
+- **Siempre** el ORGANIZATION_ADMIN de la agencia.
+- **Un SUPERVISOR solo si un administrador lo autorizó** de forma expresa (`shift_report_reviewers`).
+  - La autorización nunca se edita ni se borra: solo se revoca una vez, y queda quién y cuándo.
+  - Deja de valer si la persona deja de ser supervisora activa.
+- **Permiso independiente** de Finanzas, SmartMatch, Facturación y Horas (`app_can_review_shift_reports`).
+- **Nadie aprueba el informe de su propia visita**, tampoco un administrador que trabajó el turno. Lo bloquean el servicio y la base de datos (SHIFT_REPORT_SELF_APPROVAL).
+- **«Devolver»** (RETURNED) llega con F2, cuando la cuidadora pueda enviar a revisión. Lo usarán las mismas personas.
+
+## API F1 (detrás de SHIFT_REPORTS; administradores y supervisores autorizados)
 - `GET /organizations/:org/shift-reports?status=DRAFT|APPROVED`: crea los borradores que falten de visitas terminadas en los últimos 7 días (máximo 50) y lista.
 - `GET /organizations/:org/shifts/:shiftId/shift-reports`: informes del turno con historial; crea el borrador si falta.
 - `POST /organizations/:org/shift-reports/:id/refresh`: solo DRAFT. Reconstruye el contenido (por ejemplo, un registro sin conexión que llegó tarde).
-- `POST /organizations/:org/shift-reports/:id/approve {expectedGeneratedAt, familySections?, agencySummary?}`: rechaza con 409 SHIFT_REPORT_CHANGED si el borrador cambió desde que se leyó.
+- `POST /organizations/:org/shift-reports/:id/approve {expectedGeneratedAt, familySections?, agencySummary?}`: rechaza con 409 SHIFT_REPORT_CHANGED si el borrador cambió desde que se leyó, y con 403 SHIFT_REPORT_SELF_APPROVAL si es de su propia visita.
+- `GET /organizations/:org/shift-report-access`: `{canReview, canManageReviewers}`.
+- `GET|POST /organizations/:org/shift-report-reviewers` y `POST .../shift-report-reviewers/:membershipId/revoke`: solo administradores.
 
 ## F2: revisión de la cuidadora (requiere funciones de definidor; la cuidadora pierde el acceso al turno al salir)
 - `GET /organizations/:org/me/shift-reports/:shiftId`: su propio informe, solo hasta `times.end.at + 24 h`.

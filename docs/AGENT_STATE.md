@@ -15,9 +15,10 @@
   - `GET /shifts/:id/shift-reports`;
   - `POST /shift-reports/:id/refresh` (solo DRAFT);
   - `POST /shift-reports/:id/approve` (`expectedGeneratedAt`, secciones familiares, resumen).
+- **Permiso de revisión (decisión de Rafa, 25-oct):** administradores, y supervisores solo con autorización expresa de un administrador (`shift_report_reviewers`: solo se revoca, nunca se borra). Independiente de Finanzas, SmartMatch y Horas. Nadie aprueba el informe de su propia visita (servicio y trigger).
 - **Contrato F2–F5:** `docs/SHIFT_REPORTS.md`.
 - **Pruebas:**
-  - `verifyShiftReportsF1` 34/34;
+  - `verifyShiftReportsF1` 40/40;
   - batería completa en una base nueva (Gate 6 93/93, Gate 7 36/36, PHI, SmartMatch, Finanzas, Facturación…);
   - unitarias 586/586 y `shiftReportsF1.test.ts`;
   - rollback abortado con datos; vacío → revertido y reaplicado.

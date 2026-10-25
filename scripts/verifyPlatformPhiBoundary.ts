@@ -16,7 +16,7 @@ const tables = [
   "documents", "document_versions", "shifts", "assignments",
   "assignment_history", "verification_events", "verification_overrides",
   // Informe de Turno (124): report content and its history.
-  "shift_reports", "shift_report_events",
+  "shift_reports", "shift_report_events", "shift_report_reviewers",
 ] as const;
 
 const client = new pg.Client({ connectionString: url });

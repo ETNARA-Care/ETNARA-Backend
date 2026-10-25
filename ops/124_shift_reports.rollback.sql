@@ -12,7 +12,8 @@ BEGIN;
 DO $$
 BEGIN
   IF to_regclass('public.shift_reports') IS NOT NULL THEN
-    IF EXISTS (SELECT 1 FROM shift_reports) OR EXISTS (SELECT 1 FROM shift_report_events) THEN
+    IF EXISTS (SELECT 1 FROM shift_reports) OR EXISTS (SELECT 1 FROM shift_report_events)
+       OR EXISTS (SELECT 1 FROM shift_report_reviewers) THEN
       RAISE EXCEPTION 'shift reports exist: rollback aborted (turn SHIFT_REPORTS off and fix forward)';
     END IF;
   END IF;
@@ -24,6 +25,10 @@ END $$;
 
 DROP TABLE IF EXISTS shift_report_events;
 DROP TABLE IF EXISTS shift_reports;
+DROP TABLE IF EXISTS shift_report_reviewers;
+DROP FUNCTION IF EXISTS app_can_review_shift_reports();
+DROP FUNCTION IF EXISTS app_is_shift_report_admin();
+DROP FUNCTION IF EXISTS app_shift_report_reviewers_guard();
 DROP FUNCTION IF EXISTS app_shift_report_events_append_only();
 DROP FUNCTION IF EXISTS app_shift_report_guard();
 

@@ -83,6 +83,7 @@ async function main() {
   const A = {
     admin: await person("a-admin", orgA, ["ORGANIZATION_ADMIN"]), supervisor: await person("a-sup", orgA, ["SUPERVISOR"]),
     admin2: await person("a-admin2", orgA, ["ORGANIZATION_ADMIN"]), cg: await person("a-cg", orgA, ["WORKER"], true),
+    adminCg: await person("a-admincg", orgA, ["ORGANIZATION_ADMIN", "WORKER"], true), supervisor2: await person("a-sup2", orgA, ["SUPERVISOR"]),
     family: await person("a-family", orgA, ["FAMILY"]),
   };
   const B = { admin: await person("b-admin", orgB, ["ORGANIZATION_ADMIN"]) };
@@ -94,9 +95,9 @@ async function main() {
     p.token = r.body.token;
     await call("POST", "/me/active-organization", p.token, { organizationId: o });
   }
-  const shift = async () => {
+  const shift = async (membershipId = A.cg.membershipId) => {
     const s = (await q<{ id: string }>(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now()-interval '30 minutes',now()+interval '3 hours','confirmed') RETURNING id`, [orgA, rA])).rows[0].id;
-    await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,response_status,responded_at) VALUES ($1,$2,$3,'accepted',now())`, [orgA, s, A.cg.membershipId]);
+    await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,response_status,responded_at) VALUES ($1,$2,$3,'accepted',now())`, [orgA, s, membershipId]);
     return s;
   };
   const S = `/organizations/${orgA}`;
@@ -187,8 +188,32 @@ async function main() {
       Boolean(allEmpty) && empty!.times?.arrival === null && empty!.incidents?.length === 0 && empty!.observations?.length === 0 && empty!.totals?.careEvents === 0);
 
     // ------------------------------------------------------------ P: who can read
+    // Supervisors only when an admin expressly authorized them (independent of Finanzas / SmartMatch / Horas).
+    const supBefore = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.supervisor.token);
+    const supDbBefore = await asRuntime(A.supervisor.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
+    const supAccess = await call("GET", `${S}/shift-report-access`, A.supervisor.token);
+    check("P1 a supervisor NOT authorized cannot review (API 403, database 0 rows, access=false)",
+      supBefore.status === 403 && supDbBefore === 0 && supAccess.body.canReview === false, `${supBefore.status}/${supDbBefore}`);
+    const supGrantsSelf = await call("POST", `${S}/shift-report-reviewers`, A.supervisor.token, { membershipId: A.supervisor.orgMembershipId });
+    const bGrants = await call("POST", `/organizations/${orgB}/shift-report-reviewers`, B.admin.token, { membershipId: A.supervisor.orgMembershipId });
+    const grantWorker = await call("POST", `${S}/shift-report-reviewers`, A.admin.token, { membershipId: A.cg.orgMembershipId });
+    check("R1 only an admin of the agency authorizes, and only active supervisors of that agency",
+      supGrantsSelf.status === 403 && bGrants.status === 409 && grantWorker.status === 409, `${supGrantsSelf.status}/${bGrants.status}/${grantWorker.status}`);
+    const grant = await call("POST", `${S}/shift-report-reviewers`, A.admin.token, { membershipId: A.supervisor.orgMembershipId });
+    const grantAgain = await call("POST", `${S}/shift-report-reviewers`, A.admin.token, { membershipId: A.supervisor.orgMembershipId });
+    const reviewers = await call("GET", `${S}/shift-report-reviewers`, A.admin.token);
     const sup = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.supervisor.token);
-    check("P1 a supervisor of the agency can review (manager)", sup.status === 200 && sup.body.reports?.length === 1);
+    const sup2 = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.supervisor2.token);
+    const activeGrants = (await q<{ n: number }>(`SELECT count(*)::int AS n FROM shift_report_reviewers WHERE organization_membership_id=$1 AND revoked_at IS NULL`, [A.supervisor.orgMembershipId])).rows[0].n;
+    check("R2 an authorized supervisor reviews; another supervisor still cannot; granting twice keeps one grant",
+      grant.status === 201 && grantAgain.status === 201 && sup.status === 200 && sup.body.reports?.length === 1 && sup2.status === 403 && activeGrants === 1
+      && reviewers.body.supervisors?.find((x: Json) => x.membershipId === A.supervisor.orgMembershipId)?.authorized === true,
+      `${grant.status}/${sup.status}/${sup2.status}/${activeGrants}`);
+    const supReviewersList = await call("GET", `${S}/shift-report-reviewers`, A.supervisor.token);
+    check("R3 a supervisor cannot see or manage the reviewer list", supReviewersList.status === 403, String(supReviewersList.status));
+    const otherPerms = (await q<{ n: number }>(`SELECT
+      (SELECT count(*) FROM billing_permissions WHERE organization_id=$1)::int AS n`, [orgA]).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
+    check("R4 the review permission grants nothing in Finanzas / Facturación (no rows written there)", otherPerms === 0, String(otherPerms));
     const cgApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, cg);
     const cgList = await call("GET", `${S}/shift-reports`, cg);
     const cgDb = await asRuntime(A.cg.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
@@ -255,6 +280,29 @@ async function main() {
     check("A10 history holds steps and counts only, never report text",
       history.map((h) => h.event_type).join(",") === "GENERATED,REGENERATED,APPROVED" && !JSON.stringify(history).includes("avena") && !JSON.stringify(history).includes("Tropezó"));
 
+    // ------------------------------------------------------------ R: revocation and self-approval
+    const revoke = await call("POST", `${S}/shift-report-reviewers/${A.supervisor.orgMembershipId}/revoke`, A.admin.token);
+    const supAfter = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.supervisor.token);
+    const grantRows = (await q<Json>(`SELECT revoked_at, revoked_by_user_id FROM shift_report_reviewers WHERE organization_membership_id=$1`, [A.supervisor.orgMembershipId])).rows;
+    const grantEdit = await ownerError(`UPDATE shift_report_reviewers SET revoked_at = NULL, revoked_by_user_id = NULL WHERE organization_membership_id=$1`, [A.supervisor.orgMembershipId]);
+    const grantDelete = await ownerError(`DELETE FROM shift_report_reviewers WHERE organization_membership_id=$1`, [A.supervisor.orgMembershipId]);
+    check("R5 revoking removes access at once; the grant is kept with who/when; it cannot be undone or deleted (owner included)",
+      revoke.status === 200 && supAfter.status === 403 && grantRows.length === 1 && grantRows[0].revoked_by_user_id === A.admin.userId
+      && /REVOKE_ONLY/.test(grantEdit) && /NOT_DELETABLE/.test(grantDelete), `${revoke.status}/${supAfter.status}`);
+    const s4 = await shift(A.adminCg.membershipId);
+    await call("POST", `${S}/shifts/${s4}/check-in`, A.adminCg.token, { verificationMethodCode: "CAREGIVER_SESSION" });
+    await call("POST", `${S}/shifts/${s4}/check-out`, A.adminCg.token, {});
+    const ownReport = (await call("GET", `${S}/shifts/${s4}/shift-reports`, A.adminCg.token)).body.reports?.[0] as Json | undefined;
+    const selfApprove = await call("POST", `${S}/shift-reports/${ownReport?.id}/approve`, A.adminCg.token, { expectedGeneratedAt: ownReport?.generatedAt });
+    const selfDb = await asRuntime(A.adminCg.userId, orgA, false, async (cl) => {
+      await cl.query(`UPDATE shift_reports SET status='APPROVED', approved_at=now(), approved_by_user_id=$1, family_sections='{}' WHERE id=$2`, [A.adminCg.userId, ownReport?.id]);
+      return "allowed";
+    });
+    const otherApprove = await call("POST", `${S}/shift-reports/${ownReport?.id}/approve`, A.admin.token, { expectedGeneratedAt: ownReport?.generatedAt });
+    check("R6 nobody approves the report of their own visit (API 403 and database guard); another admin can",
+      ownReport !== undefined && selfApprove.status === 403 && selfApprove.body.error === "SHIFT_REPORT_SELF_APPROVAL" && selfDb === "42501" && otherApprove.status === 200,
+      `${selfApprove.status}/${selfDb}/${otherApprove.status}`);
+
     // ------------------------------------------------------------ L: list, automatic drafts
     const s3 = await shift();
     await call("POST", `${S}/shifts/${s3}/check-in`, cg, { verificationMethodCode: "CAREGIVER_SESSION" });
@@ -263,7 +311,7 @@ async function main() {
     const listed = (list.body.reports ?? []) as Json[];
     check("L1 a finished visit gets its draft on its own in the list (never opened before)", list.status === 200 && listed.some((r) => r.shiftId === s3 && r.status === "DRAFT"), String(listed.length));
     const approvedOnly = await call("GET", `${S}/shift-reports?status=APPROVED`, A.admin.token);
-    check("L2 filter by status", approvedOnly.status === 200 && approvedOnly.body.reports?.length === 1 && approvedOnly.body.reports[0].id === report?.id);
+    check("L2 filter by status", approvedOnly.status === 200 && approvedOnly.body.reports?.length === 2 && approvedOnly.body.reports.every((r: Json) => r.status === "APPROVED"));
     check("L3 the list carries names, times and counts only (no notes or descriptions)", !JSON.stringify(list.body).includes("avena") && !JSON.stringify(list.body).includes("Tropezó"));
 
     // ------------------------------------------------------------ F: switch

@@ -4,7 +4,8 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
 import { respondInternalError } from "../../observability/internalError.js";
 import {
-  ShiftReportError, approveSchema, approveShiftReport, getShiftReports, listSchema, listShiftReports, refreshShiftReport,
+  ShiftReportError, approveSchema, approveShiftReport, getShiftReports, grantShiftReportReviewer, listSchema, listShiftReportReviewers,
+  listShiftReports, myShiftReportAccess, refreshShiftReport, reviewerGrantSchema, revokeShiftReportReviewer,
 } from "./shiftReports.service.js";
 
 /**
@@ -42,5 +43,14 @@ router.post("/organizations/:organizationId/shift-reports/:reportId/refresh", re
   handle(200, (req, org) => refreshShiftReport(user(req), org, id(req, "reportId"))));
 router.post("/organizations/:organizationId/shift-reports/:reportId/approve", requireAuth,
   handle(200, (req, org) => approveShiftReport(user(req), org, id(req, "reportId"), approveSchema.parse(req.body ?? {}))));
+
+router.get("/organizations/:organizationId/shift-report-access", requireAuth,
+  handle(200, (req, org) => myShiftReportAccess(user(req), org)));
+router.get("/organizations/:organizationId/shift-report-reviewers", requireAuth,
+  handle(200, (req, org) => listShiftReportReviewers(user(req), org)));
+router.post("/organizations/:organizationId/shift-report-reviewers", requireAuth,
+  handle(201, (req, org) => grantShiftReportReviewer(user(req), org, reviewerGrantSchema.parse(req.body ?? {}))));
+router.post("/organizations/:organizationId/shift-report-reviewers/:membershipId/revoke", requireAuth,
+  handle(200, (req, org) => revokeShiftReportReviewer(user(req), org, id(req, "membershipId"))));
 
 export default router;

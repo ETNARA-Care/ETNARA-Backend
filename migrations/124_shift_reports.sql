@@ -14,9 +14,12 @@
 --    Reports are never deleted.
 -- 4. shift_report_events: append-only history (no UPDATE/DELETE, owner included).
 --    It stores who/when/what step and counts, never report content.
--- 5. Access in F1: agency managers of the organization only (ORGANIZATION_ADMIN or
---    SUPERVISOR, app_is_org_manager). Caregivers (F2) and families (F3) get no
---    policy here. ETNARA central is denied by platform_phi_deny (078 pattern).
+-- 5. Access in F1: who may review/approve reports (app_can_review_shift_reports):
+--    the agency's ORGANIZATION_ADMIN, or a SUPERVISOR an admin expressly authorized
+--    (shift_report_reviewers). Independent of Finanzas, SmartMatch and Horas.
+--    Nobody approves a report of their own visit (database guard). Caregivers (F2)
+--    and families (F3) get no policy here. ETNARA central is denied by
+--    platform_phi_deny (078 pattern).
 -- 6. Grants are explicit (066 lesson: a table created after 017 has no runtime
 --    rights unless granted here).
 --
@@ -35,6 +38,85 @@ ALTER TABLE organization_features ADD CONSTRAINT organization_features_feature_c
 ALTER TABLE organization_feature_events DROP CONSTRAINT IF EXISTS organization_feature_events_feature_code_check;
 ALTER TABLE organization_feature_events ADD CONSTRAINT organization_feature_events_feature_code_check
   CHECK (feature_code IN ('SMARTMATCH', 'EN_CAMINO', 'ACTIVITY_PHOTOS', 'FINANZAS', 'FACTURACION', 'SHIFT_REPORTS'));
+
+-- 1b. Who may review: admins always; supervisors only when an admin authorized them --
+CREATE TABLE IF NOT EXISTS shift_report_reviewers (
+  id                          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id             uuid NOT NULL REFERENCES organizations(id),
+  organization_membership_id  uuid NOT NULL REFERENCES organization_memberships(id),
+  granted_by_user_id          uuid NOT NULL REFERENCES users(id),
+  granted_at                  timestamptz NOT NULL DEFAULT now(),
+  revoked_by_user_id          uuid NULL REFERENCES users(id),
+  revoked_at                  timestamptz NULL,
+  CONSTRAINT shift_report_reviewers_revocation_complete CHECK ((revoked_at IS NULL) = (revoked_by_user_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS shift_report_reviewers_one_active
+  ON shift_report_reviewers (organization_membership_id) WHERE revoked_at IS NULL;
+
+-- A grant is never edited or deleted, only revoked once (owner included).
+CREATE OR REPLACE FUNCTION app_shift_report_reviewers_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'SHIFT_REPORT_REVIEWER_NOT_DELETABLE' USING ERRCODE = '23514';
+  END IF;
+  IF OLD.revoked_at IS NOT NULL
+     OR NEW.organization_id <> OLD.organization_id OR NEW.organization_membership_id <> OLD.organization_membership_id
+     OR NEW.granted_by_user_id <> OLD.granted_by_user_id OR NEW.granted_at <> OLD.granted_at
+     OR NEW.revoked_at IS NULL THEN
+    RAISE EXCEPTION 'SHIFT_REPORT_REVIEWER_REVOKE_ONLY' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS shift_report_reviewers_guard ON shift_report_reviewers;
+CREATE TRIGGER shift_report_reviewers_guard BEFORE UPDATE OR DELETE ON shift_report_reviewers
+  FOR EACH ROW EXECUTE FUNCTION app_shift_report_reviewers_guard();
+
+/** Current user may review shift reports of the current organization. */
+CREATE OR REPLACE FUNCTION app_can_review_shift_reports()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.organization_memberships om
+    JOIN public.user_roles ur ON ur.organization_membership_id = om.id
+    JOIN public.roles r ON r.id = ur.role_id
+    WHERE om.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      AND om.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      AND om.status = 'active'
+      AND (r.code = 'ORGANIZATION_ADMIN'
+           OR (r.code = 'SUPERVISOR' AND EXISTS (
+                 SELECT 1 FROM public.shift_report_reviewers g
+                 WHERE g.organization_membership_id = om.id AND g.organization_id = om.organization_id
+                   AND g.revoked_at IS NULL)))
+  );
+$$;
+
+/** Current user is an ORGANIZATION_ADMIN of the current organization (manages reviewers). */
+CREATE OR REPLACE FUNCTION app_is_shift_report_admin()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.organization_memberships om
+    JOIN public.user_roles ur ON ur.organization_membership_id = om.id
+    JOIN public.roles r ON r.id = ur.role_id AND r.code = 'ORGANIZATION_ADMIN'
+    WHERE om.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      AND om.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      AND om.status = 'active');
+$$;
 
 -- 2. Reports ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS shift_reports (
@@ -72,6 +154,7 @@ CREATE INDEX IF NOT EXISTS shift_reports_shift_idx ON shift_reports (shift_id);
 CREATE OR REPLACE FUNCTION app_shift_report_guard()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
@@ -94,6 +177,12 @@ BEGIN
             AND NEW.approved_at = OLD.approved_at AND NEW.approved_by_user_id = OLD.approved_by_user_id) THEN
       RAISE EXCEPTION 'SHIFT_REPORT_APPROVED_IMMUTABLE' USING ERRCODE = '23514';
     END IF;
+  END IF;
+  -- Nobody approves the report of their own visit (also an admin who worked it).
+  IF NEW.status = 'APPROVED' AND OLD.status <> 'APPROVED' AND EXISTS (
+       SELECT 1 FROM public.organization_worker_memberships owm JOIN public.workers w ON w.id = owm.worker_id
+       WHERE owm.id = NEW.organization_worker_membership_id AND w.user_id = NEW.approved_by_user_id) THEN
+    RAISE EXCEPTION 'SHIFT_REPORT_SELF_APPROVAL' USING ERRCODE = '42501';
   END IF;
   NEW.updated_at := now();
   RETURN NEW;
@@ -141,17 +230,30 @@ ALTER TABLE shift_report_events FORCE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS shift_reports_manager ON shift_reports;
 CREATE POLICY shift_reports_manager ON shift_reports FOR ALL TO app_runtime
-  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager())
-  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager());
+  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_can_review_shift_reports())
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_can_review_shift_reports());
 
 DROP POLICY IF EXISTS shift_report_events_manager_read ON shift_report_events;
 CREATE POLICY shift_report_events_manager_read ON shift_report_events FOR SELECT TO app_runtime
-  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager());
+  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_can_review_shift_reports());
 DROP POLICY IF EXISTS shift_report_events_manager_insert ON shift_report_events;
 CREATE POLICY shift_report_events_manager_insert ON shift_report_events FOR INSERT TO app_runtime
-  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_org_manager()
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_can_review_shift_reports()
               AND actor_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
               AND EXISTS (SELECT 1 FROM shift_reports r WHERE r.id = shift_report_id AND r.organization_id = shift_report_events.organization_id));
+
+ALTER TABLE shift_report_reviewers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shift_report_reviewers FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS shift_report_reviewers_admin ON shift_report_reviewers;
+CREATE POLICY shift_report_reviewers_admin ON shift_report_reviewers FOR ALL TO app_runtime
+  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_shift_report_admin())
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid AND app_is_shift_report_admin()
+              AND EXISTS (SELECT 1 FROM organization_memberships om
+                          WHERE om.id = shift_report_reviewers.organization_membership_id
+                            AND om.organization_id = shift_report_reviewers.organization_id));
+DROP POLICY IF EXISTS platform_phi_deny ON shift_report_reviewers;
+CREATE POLICY platform_phi_deny ON shift_report_reviewers AS RESTRICTIVE FOR ALL TO app_runtime
+  USING (NOT app_is_superadmin()) WITH CHECK (NOT app_is_superadmin());
 
 -- ETNARA central never reads report content (078 pattern).
 DROP POLICY IF EXISTS platform_phi_deny ON shift_reports;
@@ -162,8 +264,14 @@ CREATE POLICY platform_phi_deny ON shift_report_events AS RESTRICTIVE FOR ALL TO
   USING (NOT app_is_superadmin()) WITH CHECK (NOT app_is_superadmin());
 
 -- 6. Grants -----------------------------------------------------------------------------
-REVOKE ALL ON shift_reports, shift_report_events FROM PUBLIC;
+REVOKE ALL ON shift_reports, shift_report_events, shift_report_reviewers FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON shift_report_reviewers TO app_runtime;
 GRANT SELECT, INSERT, UPDATE ON shift_reports TO app_runtime;
 GRANT SELECT, INSERT ON shift_report_events TO app_runtime;
 REVOKE ALL ON FUNCTION app_shift_report_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_report_events_append_only() FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_shift_report_reviewers_guard() FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_can_review_shift_reports() FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_is_shift_report_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION app_can_review_shift_reports() TO app_runtime;
+GRANT EXECUTE ON FUNCTION app_is_shift_report_admin() TO app_runtime;

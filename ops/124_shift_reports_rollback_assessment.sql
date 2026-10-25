@@ -18,6 +18,7 @@ SELECT
   (SELECT count(*) FROM shift_reports) AS reports,
   (SELECT count(*) FROM shift_reports WHERE status IN ('APPROVED', 'SUPERSEDED')) AS approved_reports,
   (SELECT count(*) FROM shift_report_events) AS history_rows,
+  (SELECT count(*) FROM shift_report_reviewers) AS reviewer_grants,
   (SELECT count(DISTINCT organization_id) FROM shift_reports) AS agencies_with_reports,
   (SELECT count(*) FROM organization_features WHERE feature_code = 'SHIFT_REPORTS') AS feature_rows,
   (SELECT count(*) FROM organization_features WHERE feature_code = 'SHIFT_REPORTS' AND enabled) AS agencies_enabled,

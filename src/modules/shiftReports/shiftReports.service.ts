@@ -52,9 +52,14 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
 
+/** Admins of the agency, or supervisors an admin expressly authorized (124). Independent of Finanzas/SmartMatch/Horas. */
 async function assertManager(trx: Trx) {
-  const ok = (await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok;
+  const ok = (await sql<{ ok: boolean }>`SELECT app_can_review_shift_reports() AS ok`.execute(trx)).rows[0]?.ok;
   if (!ok) throw new ShiftReportError("SHIFT_REPORT_FORBIDDEN", 403);
+}
+async function assertAdmin(trx: Trx) {
+  const ok = (await sql<{ ok: boolean }>`SELECT app_is_shift_report_admin() AS ok`.execute(trx)).rows[0]?.ok;
+  if (!ok) throw new ShiftReportError("SHIFT_REPORT_ADMIN_ONLY", 403);
 }
 
 interface Visit { membershipId: string; startAt: string; startOffline: boolean; endAt: string; endOffline: boolean }
@@ -287,6 +292,10 @@ export async function approveShiftReport(userId: string, organizationId: string,
     if (r.status === "APPROVED" || r.status === "SUPERSEDED") throw new ShiftReportError("SHIFT_REPORT_ALREADY_APPROVED", 409);
     if (r.status !== "DRAFT") throw new ShiftReportError("SHIFT_REPORT_NOT_DRAFT", 409);
     if (new Date(input.expectedGeneratedAt).getTime() !== new Date(r.generated_at).getTime()) throw new ShiftReportError("SHIFT_REPORT_CHANGED", 409);
+    // Nobody approves the report of their own visit (the database guards it too).
+    const own = await sql`SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.id = ${r.organization_worker_membership_id} AND w.user_id = ${userId}`.execute(trx);
+    if (own.rows[0]) throw new ShiftReportError("SHIFT_REPORT_SELF_APPROVAL", 403);
     const familySections: FamilySections = { ...FAMILY_SECTION_DEFAULTS, ...input.familySections } as FamilySections;
     await sql`UPDATE shift_reports SET status = 'APPROVED', approved_at = now(), approved_by_user_id = ${userId},
       family_sections = ${JSON.stringify(familySections)}::jsonb, agency_summary = ${input.agencySummary ?? null}
@@ -294,5 +303,65 @@ export async function approveShiftReport(userId: string, organizationId: string,
     await appendEvent(trx, organizationId, reportId, userId, "APPROVED", { familySections, summary: Boolean(input.agencySummary) });
     const fresh = await lockReport(trx, organizationId, reportId);
     return { report: toReport(fresh, await historyOf(trx, reportId)) };
+  });
+}
+
+// ------------------------------------------------------------------ who may review
+
+export const reviewerGrantSchema = z.object({ membershipId: z.string().uuid() }).strict();
+
+/** GET /shift-report-access: what the current user may do (used by the portal to show the screens). */
+export async function myShiftReportAccess(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const r = (await sql<{ review: boolean; admin: boolean }>`SELECT app_can_review_shift_reports() AS review, app_is_shift_report_admin() AS admin`.execute(trx)).rows[0];
+    return { canReview: Boolean(r?.review), canManageReviewers: Boolean(r?.admin) };
+  });
+}
+
+/** GET /shift-report-reviewers: the agency's active supervisors and whether each is authorized (admins only). */
+export async function listShiftReportReviewers(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertAdmin(trx);
+    const rows = (await sql<{ membership_id: string; email: string; grant_id: string | null; granted_at: string | null; granted_by_email: string | null }>`
+      SELECT om.id AS membership_id, u.email, g.id AS grant_id, g.granted_at, gu.email AS granted_by_email
+      FROM organization_memberships om
+      JOIN users u ON u.id = om.user_id
+      JOIN user_roles ur ON ur.organization_membership_id = om.id
+      JOIN roles r ON r.id = ur.role_id AND r.code = 'SUPERVISOR'
+      LEFT JOIN shift_report_reviewers g ON g.organization_membership_id = om.id AND g.organization_id = om.organization_id AND g.revoked_at IS NULL
+      LEFT JOIN users gu ON gu.id = g.granted_by_user_id
+      WHERE om.organization_id = ${organizationId} AND om.status = 'active'
+      ORDER BY u.email`.execute(trx)).rows;
+    return { supervisors: rows.map((r) => ({ membershipId: r.membership_id, email: r.email, authorized: Boolean(r.grant_id),
+      grantedAt: iso(r.granted_at), grantedBy: r.granted_by_email })) };
+  });
+}
+
+async function activeSupervisor(trx: Trx, organizationId: string, membershipId: string) {
+  const r = await sql`SELECT 1 FROM organization_memberships om
+    JOIN user_roles ur ON ur.organization_membership_id = om.id JOIN roles ro ON ro.id = ur.role_id AND ro.code = 'SUPERVISOR'
+    WHERE om.id = ${membershipId} AND om.organization_id = ${organizationId} AND om.status = 'active'`.execute(trx);
+  return Boolean(r.rows[0]);
+}
+
+/** POST /shift-report-reviewers: an admin authorizes one of the agency's supervisors. Idempotent. */
+export async function grantShiftReportReviewer(userId: string, organizationId: string, input: z.infer<typeof reviewerGrantSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertAdmin(trx);
+    if (!(await activeSupervisor(trx, organizationId, input.membershipId))) throw new ShiftReportError("NOT_AN_ACTIVE_SUPERVISOR", 409);
+    await sql`INSERT INTO shift_report_reviewers (organization_id, organization_membership_id, granted_by_user_id)
+      VALUES (${organizationId}, ${input.membershipId}, ${userId})
+      ON CONFLICT (organization_membership_id) WHERE revoked_at IS NULL DO NOTHING`.execute(trx);
+    return { membershipId: input.membershipId, authorized: true };
+  });
+}
+
+/** POST /shift-report-reviewers/:membershipId/revoke: the grant is kept with who and when it was revoked. */
+export async function revokeShiftReportReviewer(userId: string, organizationId: string, membershipId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertAdmin(trx);
+    await sql`UPDATE shift_report_reviewers SET revoked_at = now(), revoked_by_user_id = ${userId}
+      WHERE organization_id = ${organizationId} AND organization_membership_id = ${membershipId} AND revoked_at IS NULL`.execute(trx);
+    return { membershipId, authorized: false };
   });
 }
