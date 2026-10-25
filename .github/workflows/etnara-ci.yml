@@ -111,6 +111,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyGate6ServiceLocations.ts
 
+      - name: Pegar ubicación (family PIN proposal, agency review, short-link resolver)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyLocationPaste.ts
+
       - name: PostgreSQL Gate 7 journey verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

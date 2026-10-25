@@ -43,15 +43,24 @@ export const updateLocationSchema = z.object(locationFields).strict()
   .refine(pair, { message: "COORDINATES_PAIR" })
   .refine(noCopy, { message: "ESTABLISHMENT_NO_COPY" });
 export const reassignShiftsSchema = z.object({ shiftIds: z.array(uuid).min(1).max(200), toLocationId: uuid }).strict();
+/** Same bounds as the agency's GPS confirmation (Puerto Rico and its islands). */
+const prLatitude = z.number().min(17.5).max(18.7);
+const prLongitude = z.number().min(-68.0).max(-65.1);
 export const changeRequestSchema = z.object({
   addressLine: text(200), municipality, postalCode, accessNotes: text(500), message: text(500),
-}).strict().refine((d) => Boolean(d.addressLine || d.municipality || d.postalCode || d.accessNotes || d.message), { message: "EMPTY_REQUEST" });
+  /** Migration 122: the relative may propose the exact point (PIN). Never applied confirmed. */
+  latitude: prLatitude.nullable().optional(), longitude: prLongitude.nullable().optional(),
+}).strict()
+  .refine(pair, { message: "COORDINATES_PAIR" })
+  .refine((d) => Boolean(d.addressLine || d.municipality || d.postalCode || d.accessNotes || d.message || d.latitude != null), { message: "EMPTY_REQUEST" });
 export const resolveChangeRequestSchema = z.object({
   decision: z.enum(["APPROVE", "REJECT"]),
   note: text(300),
   apply: z.object({ addressLine: text(200), municipality, postalCode, accessNotes: text(500) }).strict().optional(),
   /** Required when upcoming shifts use the address and the approval changes where the service is. */
   confirmUpcomingShifts: z.literal(true).optional(),
+  /** Migration 122: apply the relative's proposed point (default true when there is one). It stays UNCONFIRMED. */
+  usePoint: z.boolean().optional(),
 }).strict();
 /** Gate 6 fix: explicit confirmation of the exact map point (never implied by a search). */
 export const confirmGpsSchema = z.object({
@@ -420,11 +429,16 @@ export async function createLocationChangeRequest(userId: string, recipientId: s
   const rel = await familyRelationship(userId, recipientId);
   return withTenantContext({ userId, organizationId: rel.organization_id }, async (trx) => {
     try {
+      const lat = input.latitude == null ? null : Math.round(input.latitude * 1e6) / 1e6;
+      const lng = input.longitude == null ? null : Math.round(input.longitude * 1e6) / 1e6;
+      const onlyPoint = lat != null && !(input.addressLine || input.municipality || input.postalCode || input.accessNotes || input.message);
       const r = await sql<{ id: string; status: string; created_at: string }>`
         INSERT INTO care_recipient_location_change_requests (organization_id, care_recipient_id, family_relationship_id,
-          requested_by_user_id, proposed_address_line, proposed_municipality, proposed_postal_code, proposed_access_notes, message)
+          requested_by_user_id, proposed_address_line, proposed_municipality, proposed_postal_code, proposed_access_notes, message,
+          proposed_latitude, proposed_longitude)
         VALUES (${rel.organization_id}, ${recipientId}, ${rel.id}, ${userId}, ${input.addressLine ?? null}, ${input.municipality ?? null},
-          ${input.postalCode ?? null}, ${input.accessNotes ?? null}, ${input.message ?? null})
+          ${input.postalCode ?? null}, ${input.accessNotes ?? null},
+          ${onlyPoint ? "Ubicación marcada en el mapa por el familiar." : input.message ?? null}, ${lat}, ${lng})
         RETURNING id, status, created_at`.execute(trx);
       return r.rows[0];
     } catch (e) {
@@ -435,7 +449,7 @@ export async function createLocationChangeRequest(userId: string, recipientId: s
 }
 
 const requestColumns = sql`id, status, proposed_address_line, proposed_municipality, proposed_postal_code, proposed_access_notes,
-  message, resolution_note, resolved_at, created_at`;
+  message, resolution_note, resolved_at, created_at, proposed_latitude::float8 AS proposed_latitude, proposed_longitude::float8 AS proposed_longitude`;
 
 export async function listMyLocationChangeRequests(userId: string, recipientId: string) {
   const rel = await familyRelationship(userId, recipientId);
@@ -450,7 +464,8 @@ export async function listLocationChangeRequests(userId: string, organizationId:
     await requireManager(trx);
     return (await sql`
       SELECT r.id, r.status, r.proposed_address_line, r.proposed_municipality, r.proposed_postal_code, r.proposed_access_notes,
-             r.message, r.resolution_note, r.resolved_at, r.created_at, fr.relationship_type
+             r.message, r.resolution_note, r.resolved_at, r.created_at, fr.relationship_type,
+             r.proposed_latitude::float8 AS proposed_latitude, r.proposed_longitude::float8 AS proposed_longitude
       FROM care_recipient_location_change_requests r
       JOIN family_relationships fr ON fr.id = r.family_relationship_id
       WHERE r.care_recipient_id = ${recipientId} AND r.organization_id = ${organizationId}
@@ -468,8 +483,9 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await requireManager(trx);
     const req = (await sql<{ id: string; status: string; proposed_address_line: string | null; proposed_municipality: string | null;
-      proposed_postal_code: string | null; proposed_access_notes: string | null }>`
-      SELECT id, status, proposed_address_line, proposed_municipality, proposed_postal_code, proposed_access_notes
+      proposed_postal_code: string | null; proposed_access_notes: string | null; proposed_latitude: number | null; proposed_longitude: number | null }>`
+      SELECT id, status, proposed_address_line, proposed_municipality, proposed_postal_code, proposed_access_notes,
+             proposed_latitude::float8 AS proposed_latitude, proposed_longitude::float8 AS proposed_longitude
       FROM care_recipient_location_change_requests
       WHERE id = ${requestId} AND organization_id = ${organizationId} AND care_recipient_id = ${recipientId}
       FOR UPDATE`.execute(trx)).rows[0];
@@ -482,6 +498,10 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
         addressLine: req.proposed_address_line, municipality: req.proposed_municipality,
         postalCode: req.proposed_postal_code, accessNotes: req.proposed_access_notes,
       };
+      // The relative's point is applied only on approval and stays UNCONFIRMED (trigger 105 clears
+      // gps_confirmed_at): caregivers never navigate to it until a manager confirms it.
+      const point = req.proposed_latitude != null && req.proposed_longitude != null && input.usePoint !== false
+        ? { latitude: Number(req.proposed_latitude), longitude: Number(req.proposed_longitude) } : null;
       const primary = (await sql<LocationRow>`
         SELECT ${columns} FROM care_recipient_locations
         WHERE care_recipient_id = ${recipientId} AND organization_id = ${organizationId} AND is_primary AND archived_at IS NULL
@@ -494,7 +514,8 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
           postal_code: keepEst ? null : values.postalCode ?? primary.postal_code,
           establishment_id: keepEst ? primary.establishment_id : null,
         };
-        const placeChanges = (["address_line", "municipality", "postal_code", "establishment_id"] as const)
+        const pointChanges = point !== null && (point.latitude !== Number(primary.latitude) || point.longitude !== Number(primary.longitude));
+        const placeChanges = pointChanges || (["address_line", "municipality", "postal_code", "establishment_id"] as const)
           .some((k) => (nextPlace[k] ?? null) !== (primary[k] ?? null));
         // Upcoming shifts follow the official address: the agency must authorize it explicitly.
         const affected = placeChanges
@@ -509,15 +530,16 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
             postal_code = ${keepEst ? null : values.postalCode ?? primary.postal_code},
             access_notes = ${values.accessNotes ?? primary.access_notes},
             establishment_id = ${keepEst ? primary.establishment_id : null},
+            latitude = ${point ? point.latitude : primary.latitude}, longitude = ${point ? point.longitude : primary.longitude},
             updated_at = now(), updated_by_user_id = ${userId}
           WHERE id = ${primary.id} AND organization_id = ${organizationId}`.execute(trx);
         appliedLocationId = primary.id;
       } else {
         appliedLocationId = (await sql<{ id: string }>`
           INSERT INTO care_recipient_locations (care_recipient_id, organization_id, label, address_line, municipality, postal_code,
-            access_notes, is_primary, updated_at, updated_by_user_id)
+            access_notes, latitude, longitude, is_primary, updated_at, updated_by_user_id)
           VALUES (${recipientId}, ${organizationId}, 'Principal', ${values.addressLine ?? null}, ${values.municipality ?? null},
-            ${values.postalCode ?? null}, ${values.accessNotes ?? null}, true, now(), ${userId})
+            ${values.postalCode ?? null}, ${values.accessNotes ?? null}, ${point?.latitude ?? null}, ${point?.longitude ?? null}, true, now(), ${userId})
           RETURNING id`.execute(trx)).rows[0].id;
       }
     }

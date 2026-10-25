@@ -32,6 +32,10 @@ on:
       - 'src/modules/auth/**'
       - 'src/modules/email/**'
       - 'scripts/verifyPasswordRecovery.ts'
+      - 'scripts/verifyLocationPaste.ts'
+      - 'src/modules/maps/**'
+      - 'src/modules/careRecipients/**'
+      - 'ops/122_family_location_proposed_point.rollback.sql'
       - 'ops/116_activity_photos_upload_view.rollback.sql'
       - 'ops/115_activity_photos_security.rollback.sql'
       - 'src/modules/careEvents/**'
@@ -102,6 +106,8 @@ jobs:
         run: npx tsx scripts/verifySmartMatchShifts.ts
       - name: Gate 6 service locations over HTTP
         run: npx tsx scripts/verifyGate6ServiceLocations.ts
+      - name: Pegar ubicación (family PIN proposal, agency review, short-link resolver)
+        run: npx tsx scripts/verifyLocationPaste.ts
       - name: Gate 7 journey (En Camino) over HTTP
         run: npx tsx scripts/verifyGate7Journey.ts
       - name: En Camino cancel/reassign/offline over HTTP
