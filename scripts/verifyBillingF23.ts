@@ -484,6 +484,27 @@ async function main() {
         && Array.isArray(manifest.objects) && manifest.objects.every((o: Json) => Object.keys(o).sort().join() === "key,sha256") && !/Cliente|Agencia|cents/i.test(JSON.stringify(manifest)),
       `expected=${expected.length} c1=${JSON.stringify(copy1)} c2=${copy2.alreadyPresent}/${copy2.copied} same=${sameBucket} rec=${JSON.stringify(fromCopy)} after=${afterCopy.status} c3=${JSON.stringify(copy3.conflictingCopy)}`);
 
+    // E22 AWS-style backup bucket (local): versioning + Object Lock, per-object retention = invoice retention_until,
+    // deletion of a locked version refused, and a restore that finds the good version under a bad latest one.
+    const lockBucket = `${bucket}-lock`;
+    await objStore.send(new CreateBucketCommand({ Bucket: lockBucket, ObjectLockEnabledForBucket: true }));
+    const lockRef = { s3: objStore, bucket: lockBucket, objectLock: "COMPLIANCE" as const };
+    const presentNow = expected.filter((o) => !absent.includes(o.key));
+    const lockCopy = await bk.dailyCopy(srcRef, lockRef, presentNow, "2026-10-28");
+    const invDoc = presentNow.find((o) => o.key.includes("/invoices/") && o.retainUntil)!;
+    const { HeadObjectCommand: Head2, DeleteObjectCommand: Del2 } = await import("@aws-sdk/client-s3");
+    const head = await objStore.send(new Head2({ Bucket: lockBucket, Key: `billing/${invDoc.key}` }));
+    const delLocked = await objStore.send(new Del2({ Bucket: lockBucket, Key: `billing/${invDoc.key}`, VersionId: head.VersionId })).then(() => "deleted", (e: Error) => e.name);
+    await objStore.send(new PutObjectCommand({ Bucket: lockBucket, Key: `billing/${invDoc.key}`, Body: Buffer.from("bad latest"), Metadata: { sha256: invDoc.sha256 } }));
+    await objStore.send(new DeleteObjectCommand({ Bucket: bucket, Key: invDoc.key }));
+    const fromVersion = await bk.restoreFromCopy(lockRef, srcRef, invDoc.key, invDoc.sha256);
+    const restoredBody = Buffer.from(await (await objStore.send(new GetObjectCommand({ Bucket: bucket, Key: invDoc.key }))).Body!.transformToByteArray());
+    const retainOk = head.ObjectLockMode === "COMPLIANCE" && head.ObjectLockRetainUntilDate
+      && head.ObjectLockRetainUntilDate.toISOString().slice(0, 10) === new Date(invDoc.retainUntil!).toISOString().slice(0, 10);
+    check("E22 Object Lock copy: written in COMPLIANCE mode with retain-until = the invoice retention date; deleting a locked version is refused; a bad newer version cannot hide the good one (restore by version, same SHA-256)",
+      lockCopy.copied === presentNow.length && Boolean(retainOk) && delLocked !== "deleted" && fromVersion && h(restoredBody) === invDoc.sha256,
+      `copied=${lockCopy.copied}/${presentNow.length} mode=${head.ObjectLockMode} until=${head.ObjectLockRetainUntilDate?.toISOString()} want=${invDoc.retainUntil} del=${delLocked} restore=${fromVersion}`);
+
     const fives = all.filter((r) => r.status === 500);
     check("E18 no 500 in the whole run", fives.length === 0, fives.map((r) => JSON.stringify(r.body)).join(" "));
   } finally {
