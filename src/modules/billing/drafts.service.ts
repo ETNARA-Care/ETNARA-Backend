@@ -290,10 +290,10 @@ async function insertShiftLine(trx: Trx, organizationId: string, userId: string,
   const tax = priced.tax;
   const desc = `${row.service_name ?? "Servicio"}${row.recipient_name ? ` · ${row.recipient_name}` : ""}`;
   const inserted = (await sql<{ id: string }>`
-    INSERT INTO invoice_lines (organization_id, invoice_id, kind, shift_id, care_recipient_id, recipient_name, service_id, description,
+    INSERT INTO invoice_lines (organization_id, invoice_id, kind, shift_id, care_recipient_id, recipient_name, caregiver_name, service_id, description,
       service_date, real_start, real_end, approved_minutes, timesheet_ids, unit, quantity_hundredths, unit_price_cents, amount_cents,
       tax_treatment, tax_rate_basis_points, tax_legal_basis, needs_review, review_reasons, warnings, position, created_by_user_id)
-    VALUES (${organizationId}, ${invoiceId}, 'shift', ${row.id}, ${row.care_recipient_id}, ${row.recipient_name}, ${row.service_id}, ${desc},
+    VALUES (${organizationId}, ${invoiceId}, 'shift', ${row.id}, ${row.care_recipient_id}, ${row.recipient_name}, ${row.caregiver_name?.slice(0, 300) ?? null}, ${row.service_id}, ${desc},
       ${row.service_date}::date, ${row.check_in_at}, ${row.check_out_at}, ${row.approved_minutes}, ${(row.periods ?? []).map((p) => p.id)}::uuid[], ${row.unit}, ${line.quantityHundredths},
       ${line.unitPriceCents}, ${line.amountCents}, ${tax.treatment}, ${tax.rate_basis_points}, ${tax.legal_basis},
       ${line.needsReview}, ${line.reviewReasons}::text[], ${JSON.stringify(line.warnings)}::jsonb, ${position}, ${userId})

@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
   shift_id uuid,
   care_recipient_id uuid,
   recipient_name text CHECK (recipient_name IS NULL OR length(recipient_name) <= 200),
+  -- Caregiver name(s) frozen when the shift line is computed (shown on the PDF only if the agency allows it, D9).
+  caregiver_name text CHECK (caregiver_name IS NULL OR length(caregiver_name) <= 300),
   service_id uuid,
   description text NOT NULL CHECK (length(trim(description)) BETWEEN 2 AND 300),
   justification text CHECK (justification IS NULL OR length(trim(justification)) BETWEEN 3 AND 500),
