@@ -2,6 +2,26 @@
 
 ## Current Status
 
+## 2026-10-25 — Documentos de residentes y del establecimiento: acceso arreglado (claude/resident-documents-access-fix)
+
+- Bug confirmado en producción: 066/067 nunca dieron GRANT a app_runtime (42501) y sus políticas leían
+  app.current_organization_id (el backend solo pone app.current_org_id); el EXISTS de 066 se comparaba consigo
+  mismo. Resultado: listar/subir/abrir/archivar documentos (y la revisión ETNARA Verified) daban 500.
+- 125 (aditiva, idempotente): SELECT+INSERT y UPDATE solo de columnas de archivo (y de revisión en
+  establecimiento); sin DELETE; PUBLIC cerrado; FORCE RLS. Políticas recreadas con app.current_org_id y columnas
+  calificadas. Residentes: gestores de la agencia (admin/supervisor) y admin del establecimiento; nunca
+  cuidadoras, familiares, otra agencia ni ETNARA central (platform_phi_deny se mantiene). Establecimiento: la
+  agencia igual; ETNARA central solo lee los vigentes y aprueba/rechaza (trigger: central no archiva ni edita;
+  la agencia no se autoaprueba; nuevos siempre «pending»).
+- Subida: si el INSERT falla después de subir el archivo, se borra ese archivo (best effort, log sin nombres).
+- scripts/auditDocumentOrphans.ts: auditoría SOLO LECTURA de archivos huérfanos (solo conteos por agencia);
+  pide AUDIT_READ_ONLY_CONFIRM=yes fuera de local. No se corrió contra producción.
+- verifyDocumentAccess 23/23 en los dos flujos de CI; verifyPlatformPhiBoundary ya no acepta 42501 en
+  resident_documents. Rollback ops/125 probado (vuelve a romper la función, a propósito) y reaplicado.
+- Pendiente (fuera de alcance): un admin de establecimiento sin rol de gestor no ve care_recipients, así que no
+  llega a documentos de residentes; rutas de documentos responden 500 (no 403) si se usa otra organización.
+- Sin autorización: fusionar, desplegar, correr la auditoría en producción, borrar huérfanos.
+
 ## 2026-10-25 — Facturación Premium F2.1: interruptor FACTURACION, permisos y seguridad (claude/facturacion-f2-1)
 
 - 123 (aditiva; solo cambian las dos listas CHECK de interruptores): FACTURACION apagado para todas las agencias

@@ -25,6 +25,11 @@ on:
       - 'ops/121_finance_rate_cancel_holiday_deactivate.rollback.sql'
       - 'scripts/verifyBillingF21.ts'
       - 'ops/123_billing_foundation.rollback.sql'
+      - 'scripts/verifyDocumentAccess.ts'
+      - 'ops/125_document_access_fix.rollback.sql'
+      - 'src/modules/residentDocuments/**'
+      - 'src/modules/establishmentDocuments/**'
+      - 'src/modules/storage/**'
       - 'src/modules/billing/**'
       - 'src/modules/timesheets/**'
       - 'src/modules/finance/**'
@@ -156,3 +161,5 @@ jobs:
           echo "PHOTO_TEST_PYTHON=$RUNNER_TEMP/moto-venv/bin/python" >> "$GITHUB_ENV"
       - name: Activity photos upload (EXIF removal, review, consent, family, concurrency)
         run: npx tsx scripts/verifyActivityPhotoUpload.ts
+      - name: Resident and establishment documents (grants, RLS, agency, central, no orphan files)
+        run: npx tsx scripts/verifyDocumentAccess.ts
