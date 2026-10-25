@@ -293,6 +293,7 @@ async function main() {
     await call("POST", `${S}/shifts/${s4}/check-in`, A.adminCg.token, { verificationMethodCode: "CAREGIVER_SESSION" });
     await call("POST", `${S}/shifts/${s4}/check-out`, A.adminCg.token, {});
     const ownReport = (await call("GET", `${S}/shifts/${s4}/shift-reports`, A.adminCg.token)).body.reports?.[0] as Json | undefined;
+    check("R7 the reviewer's own visit is flagged so the portal hides «Aprobar»", ownReport?.ownVisit === true && report?.ownVisit === false);
     const selfApprove = await call("POST", `${S}/shift-reports/${ownReport?.id}/approve`, A.adminCg.token, { expectedGeneratedAt: ownReport?.generatedAt });
     const selfDb = await asRuntime(A.adminCg.userId, orgA, false, async (cl) => {
       await cl.query(`UPDATE shift_reports SET status='APPROVED', approved_at=now(), approved_by_user_id=$1, family_sections='{}' WHERE id=$2`, [A.adminCg.userId, ownReport?.id]);

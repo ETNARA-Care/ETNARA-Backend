@@ -226,8 +226,11 @@ export async function getShiftReports(userId: string, organizationId: string, sh
     const { visits, open } = await ensureDrafts(trx, userId, organizationId, shiftId);
     const rows = (await sql<ReportRow>`SELECT ${REPORT_COLUMNS} FROM shift_reports r LEFT JOIN users u ON u.id = r.approved_by_user_id
       WHERE r.organization_id = ${organizationId} AND r.shift_id = ${shiftId} ORDER BY r.generated_at, r.version`.execute(trx)).rows;
+    // The portal hides «Aprobar» on the reviewer's own visit (the approval itself is refused anyway).
+    const mine = new Set((await sql<{ id: string }>`SELECT owm.id FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.organization_id = ${organizationId} AND w.user_id = ${userId}`.execute(trx)).rows.map((m) => m.id));
     const reports = [];
-    for (const r of rows) reports.push(toReport(r, await historyOf(trx, r.id)));
+    for (const r of rows) reports.push({ ...toReport(r, await historyOf(trx, r.id)), ownVisit: mine.has(r.organization_worker_membership_id) });
     return { reports, finishedVisits: visits, openVisits: open };
   });
 }
