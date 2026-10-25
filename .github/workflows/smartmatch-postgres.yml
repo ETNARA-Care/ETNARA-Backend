@@ -37,6 +37,8 @@ on:
       - 'src/modules/residentDocuments/**'
       - 'src/modules/establishmentDocuments/**'
       - 'src/modules/storage/**'
+      - 'scripts/verifyBillingF22.ts'
+      - 'ops/124_billing_drafts.rollback.sql'
       - 'src/modules/billing/**'
       - 'src/modules/timesheets/**'
       - 'src/modules/finance/**'
@@ -161,6 +163,9 @@ jobs:
 
       - name: Informe de Turno F2 (automatic draft, caregiver review within 24 h, return, isolation, revocation)
         run: npx tsx scripts/verifyShiftReportsF2.ts
+
+      - name: Facturación F2.2 drafts, reservations, overnight segments, tax treatment, isolation (no issuing)
+        run: npx tsx scripts/verifyBillingF22.ts
 
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts

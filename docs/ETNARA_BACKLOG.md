@@ -4,6 +4,12 @@
 
 - Informe de Turno: F1 desplegado (126). F2 en PR (128): revisión de la cuidadora. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
 
+### BILL-F2.2 — Facturación Premium F2.2 (drafts, reservations, overnight segments, tax treatment)
+
+- Status: backend PR (migration 124 + verifyBillingF22 18/18); portal PR next. Depends on F2.1 (deployed). Not authorized: merge, deploy, issuing (F2.3).
+
+- Informe de Turno: F1 en PR (126), borrador. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
+
 ### DOC-ACCESS-FIX — Resident and establishment documents return 500 (grants, GUC, EXISTS)
 
 - Status: draft backend PR (migration 125 + verifyDocumentAccess 23/23, orphan audit read-only). Not authorized: merge, deploy, running the orphan audit against production, deleting any stored file.
@@ -12,7 +18,7 @@
 
 ### BILL-F2.1 — Facturación Premium F2.1 (FACTURACION switch, billing permissions, security)
 
-- Status: backend PR (migration 123 + verifyBillingF21 12/12); frontend PR next. Not authorized: merge, deploy, FACTURACION on for any agency, F3/F4.
+- Status: deployed 25-oct (backend b6d02c1, portal 1b5cbdd). FACTURACION off for every agency until Rafa turns it on for Casa Demo.
 
 ### LOC-PASTE — «Pegar ubicación» (family PIN proposal, safe short-link expansion)
 
