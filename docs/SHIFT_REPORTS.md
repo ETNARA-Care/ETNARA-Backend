@@ -53,13 +53,35 @@ F1 está implementado en la migración 126 (este PR). F2–F5 están **documenta
 - `GET /organizations/:org/shift-report-access`: `{canReview, canManageReviewers}`.
 - `GET|POST /organizations/:org/shift-report-reviewers` y `POST .../shift-report-reviewers/:membershipId/revoke`: solo administradores.
 
-## F2: revisión de la cuidadora (requiere funciones de definidor; la cuidadora pierde el acceso al turno al salir)
-- `GET /organizations/:org/me/shift-reports/:shiftId`: su propio informe, solo hasta `times.end.at + 24 h`.
-- `POST .../me/shift-reports/:id/observation {text ≤ 1000}`: añade `OBSERVATION_ADDED`, con el texto en `note`. Es una observación final, no edita registros. Una por informe; reemplazarla añade otro evento.
-- `POST .../me/shift-reports/:id/submit`: DRAFT o RETURNED → SUBMITTED, dentro de la ventana.
-- Agencia: `POST /shift-reports/:id/return {note}` (SUBMITTED → RETURNED). `approve` acepta también SUBMITTED.
-- Pasadas las 24 h, solo la agencia corrige, y siempre con historial (F4).
-- Esquema: una política de definidor por función (`app_my_shift_report(...)`), sin políticas RLS directas para WORKER.
+## F2: revisión de la cuidadora (implementado en la migración 128)
+- **Un solo constructor, en la base** (`app_shift_report_build_content`). Solo lee registros existentes.
+  - Lo usan el borrador automático, la agencia y, en F3, la familia.
+  - No es ejecutable por el rol de la aplicación.
+- **Borrador automático:** un proceso cada 60 s (`app_shift_reports_generate_pending`) crea el borrador de cada visita terminada en los últimos 7 días, solo en agencias con SHIFT_REPORTS.
+  - El evento GENERATED queda con actor de sistema.
+  - La cuidadora recibe un aviso en el portal: SHIFT_REPORT_READY.
+- **Lectura de la cuidadora:** solo los informes de sus propias visitas, por RLS de solo lectura, también después del servicio.
+  - Mientras su membresía en la agencia esté activa. Si la retiran, pierde el acceso.
+  - No ve las secciones familiares ni el resumen de la agencia.
+- **Escritura, solo mediante funciones protegidas y dentro de las 24 h del final real:**
+  - **Observación final** (hasta 1000 caracteres). Reemplazarla añade otro OBSERVATION_ADDED; todas las versiones quedan en el historial.
+  - **«Enviar a revisión»:** DRAFT o RETURNED → SUBMITTED.
+  - Nunca edita la foto del turno ni sus registros, nunca aprueba y nunca borra.
+- **Agencia:**
+  - **«Devolver»** (SUBMITTED → RETURNED, con nota obligatoria), solo mientras la ventana de la cuidadora siga abierta. Ella recibe el aviso SHIFT_REPORT_RETURNED.
+  - **Aprobar:** desde DRAFT, SUBMITTED o RETURNED.
+  - **«Actualizar borrador»:** solo DRAFT o RETURNED. Lo enviado es lo que ella revisó.
+  - **«Por aprobar»** (`status=PENDING`) = DRAFT, SUBMITTED y RETURNED, con los enviados primero.
+- **Plazo vencido sin envío:** el informe **sigue DRAFT, sin cambios**. No se borra nada.
+  - La cuidadora ya no puede anotar ni enviar.
+  - La agencia ve «Plazo de la cuidadora vencido» (`caregiverWindowExpired`) y puede revisarlo, actualizarlo y aprobarlo como cualquier borrador.
+- **API de la cuidadora:**
+  - `GET /organizations/:org/me/shift-reports`
+  - `GET .../me/shift-reports/:id`
+  - `POST .../me/shift-reports/:id/observation {text}`
+  - `POST .../me/shift-reports/:id/submit`
+- **API de la agencia:** `POST /organizations/:org/shift-reports/:id/return {note}`.
+- **Recuperación:** `ops/128_shift_reports_caregiver_review.rollback.sql` se aborta si ya hay observaciones, envíos o devoluciones.
 
 ## F3: familia y PDF
 - Solo informes APPROVED del residente con relación familiar activa (`app_user_authorized_for_recipient`) y rol FAMILY activo.

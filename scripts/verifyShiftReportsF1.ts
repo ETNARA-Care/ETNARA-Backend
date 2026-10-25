@@ -84,6 +84,7 @@ async function main() {
     admin: await person("a-admin", orgA, ["ORGANIZATION_ADMIN"]), supervisor: await person("a-sup", orgA, ["SUPERVISOR"]),
     admin2: await person("a-admin2", orgA, ["ORGANIZATION_ADMIN"]), cg: await person("a-cg", orgA, ["WORKER"], true),
     adminCg: await person("a-admincg", orgA, ["ORGANIZATION_ADMIN", "WORKER"], true), supervisor2: await person("a-sup2", orgA, ["SUPERVISOR"]),
+    cg2: await person("a-cg2", orgA, ["WORKER"], true),
     family: await person("a-family", orgA, ["FAMILY"]),
   };
   const B = { admin: await person("b-admin", orgB, ["ORGANIZATION_ADMIN"]) };
@@ -217,7 +218,10 @@ async function main() {
     const cgApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, cg);
     const cgList = await call("GET", `${S}/shift-reports`, cg);
     const cgDb = await asRuntime(A.cg.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
-    check("P2 the caregiver cannot read reports in F1 (API 403, database 0 rows)", cgApi.status === 403 && cgList.status === 403 && cgDb === 0, `${cgApi.status}/${cgList.status}/${cgDb}`);
+    const cgOwn = (await q<{ n: number }>(`SELECT count(*)::int AS n FROM shift_reports WHERE organization_worker_membership_id=$1`, [A.cg.membershipId])).rows[0].n;
+    const cgOthers = await asRuntime(A.cg.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports WHERE organization_worker_membership_id <> $1", [A.cg.membershipId])).rows[0].n);
+    check("P2 the caregiver cannot use the agency routes; at the database she reads only her own visits (F2)",
+      cgApi.status === 403 && cgList.status === 403 && cgDb === cgOwn && cgOthers === 0, `${cgApi.status}/${cgList.status}/${cgDb}=${cgOwn}/${cgOthers}`);
     const famApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.family.token);
     const famDb = await asRuntime(A.family.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
     check("P3 the family cannot read drafts (API 403, database 0 rows)", famApi.status === 403 && famDb === 0, `${famApi.status}/${famDb}`);
@@ -336,6 +340,39 @@ async function main() {
       return tmp.rows[0].h;
     })();
     check("I1 source records of the visit are byte-identical after generation, refresh and approval", expectedAfter === before && careDelta === 6, `${before === expectedAfter} ${careDelta}`);
+    // ------------------------------------------------------------ AU: final F1 audit (edge cases)
+    const s5 = await shift();
+    await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,response_status,responded_at) VALUES ($1,$2,$3,'accepted',now())`, [orgA, s5, A.cg2.membershipId]);
+    await call("POST", `${S}/shifts/${s5}/check-in`, cg, { verificationMethodCode: "CAREGIVER_SESSION" });
+    await call("POST", `${S}/shifts/${s5}/check-in`, A.cg2.token, { verificationMethodCode: "CAREGIVER_SESSION" });
+    const c1 = await call("POST", `${S}/shifts/${s5}/care-events`, cg, { typeCode: "MEAL", careRecipientId: rA, payload: { mealType: "Almuerzo", amountConsumed: "Mitad" } });
+    const c2 = await call("POST", `${S}/shifts/${s5}/care-events`, A.cg2.token, { typeCode: "HYDRATION", careRecipientId: rA, payload: { amount: "Poco" } });
+    const incOther = await call("POST", `${S}/incidents`, A.cg2.token, { careRecipientId: rA, severity: "Leve", description: "Incidente de la otra cuidadora" });
+    // An incident the same caregiver filed BEFORE this visit (another day): owner insert with an earlier time.
+    await q(`INSERT INTO incidents (organization_id,care_recipient_id,organization_worker_membership_id,severity,description,created_at) VALUES ($1,$2,$3,'Leve','Incidente de otro día',now() - interval '3 days')`, [orgA, rA, A.cg.membershipId]);
+    await call("POST", `${S}/shifts/${s5}/check-out`, A.cg2.token, {});
+    await call("POST", `${S}/shifts/${s5}/check-out`, cg, {});
+    const two = await call("GET", `${S}/shifts/${s5}/shift-reports`, A.admin.token);
+    const rCg = (two.body.reports ?? []).find((r: Json) => r.membershipId === A.cg.membershipId) as Json | undefined;
+    const rCg2 = (two.body.reports ?? []).find((r: Json) => r.membershipId === A.cg2.membershipId) as Json | undefined;
+    check("AU1 two caregivers on one shift: one report each, each with only her own records",
+      c1.status === 201 && c2.status === 201 && two.body.reports?.length === 2
+      && rCg?.content?.sections?.meals?.length === 1 && rCg?.content?.sections?.hydration?.length === 0
+      && rCg2?.content?.sections?.hydration?.length === 1 && rCg2?.content?.sections?.meals?.length === 0,
+      `${two.body.reports?.length} ${JSON.stringify(rCg?.content?.totals)} ${JSON.stringify(rCg2?.content?.totals)}`);
+    check("AU2 incidents: only those she filed during her visit (not another caregiver's, not another day's)",
+      incOther.status === 201 && rCg?.content?.incidents?.length === 0 && rCg2?.content?.incidents?.length === 1
+      && rCg2?.content?.incidents?.[0]?.description === "Incidente de la otra cuidadora");
+    const ve5 = (await q<Json>(`SELECT organization_worker_membership_id AS m, event_type, occurred_at FROM verification_events WHERE shift_id=$1`, [s5])).rows;
+    const t = (m: string, e: string) => new Date(ve5.find((v) => v.m === m && v.event_type === e)!.occurred_at).toISOString();
+    check("AU3 each report carries that caregiver's own start and end, no arrival invented",
+      rCg?.content?.times?.start?.at === t(A.cg.membershipId!, "check_in") && rCg?.content?.times?.end?.at === t(A.cg.membershipId!, "check_out")
+      && rCg2?.content?.times?.start?.at === t(A.cg2.membershipId!, "check_in") && rCg2?.content?.times?.end?.at === t(A.cg2.membershipId!, "check_out")
+      && rCg?.content?.times?.arrival === null && rCg2?.content?.times?.arrival === null);
+    const s1Again = (await call("GET", `${S}/shifts/${s1}/shift-reports`, A.admin.token)).body.reports?.[0] as Json | undefined;
+    check("AU4 the approved report is unchanged after new records elsewhere (snapshot frozen)",
+      s1Again?.status === "APPROVED" && JSON.stringify(s1Again?.content) === JSON.stringify(approved.body.report?.content));
+
     const leaked = logged.filter((l) => /avena|I feel good|Tropezó|apetito|Doña Carmen|Turno tranquilo/.test(l));
     check("Z1 logs contain no report text or names", leaked.length === 0, `líneas=${leaked.length}`);
   } finally {

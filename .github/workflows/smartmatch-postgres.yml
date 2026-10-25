@@ -28,6 +28,9 @@ on:
       - 'migrations/126_shift_reports.sql'
       - 'src/modules/shiftReports/**'
       - 'scripts/verifyShiftReportsF1.ts'
+      - 'scripts/verifyShiftReportsF2.ts'
+      - 'migrations/128_shift_reports_caregiver_review.sql'
+      - 'ops/128_shift_reports_caregiver_review.rollback.sql'
       - 'ops/126_shift_reports.rollback.sql'
       - 'scripts/verifyDocumentAccess.ts'
       - 'ops/125_document_access_fix.rollback.sql'
@@ -157,6 +160,9 @@ jobs:
 
       - name: Informe de Turno F1 (drafts from existing records, approval, immutability, isolation, central denied)
         run: npx tsx scripts/verifyShiftReportsF1.ts
+
+      - name: Informe de Turno F2 (automatic draft, caregiver review within 24 h, return, isolation, revocation)
+        run: npx tsx scripts/verifyShiftReportsF2.ts
 
       - name: Facturación F2.2 drafts, reservations, overnight segments, tax treatment, isolation (no issuing)
         run: npx tsx scripts/verifyBillingF22.ts

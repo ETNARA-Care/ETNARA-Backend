@@ -2,6 +2,8 @@
 
 ## In Progress
 
+- Informe de Turno: F1 desplegado (126). F2 en PR (128): revisión de la cuidadora. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
+
 ### BILL-F2.2 — Facturación Premium F2.2 (drafts, reservations, overnight segments, tax treatment)
 
 - Status: backend PR (migration 124 + verifyBillingF22 18/18); portal PR next. Depends on F2.1 (deployed). Not authorized: merge, deploy, issuing (F2.3).
