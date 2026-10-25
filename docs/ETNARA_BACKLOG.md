@@ -2,6 +2,10 @@
 
 ## In Progress
 
+### LOC-PASTE — «Pegar ubicación» (family PIN proposal, safe short-link expansion)
+
+- Status: PR #216 (migration 122 + verifyLocationPaste 33/33) and ETNARAMVP #235 ready; final checks done. Not authorized: merge, deploy.
+
 ### FIN-F1.1 — Finanzas F1.1 (cancel scheduled rates, deactivate holidays, negative margin)
 
 - Status: PR open (migration 121 + verifyFinanceF11 22/22). Not authorized: merge, deploy, FINANZAS changes, F2.

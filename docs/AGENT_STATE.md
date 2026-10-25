@@ -2,6 +2,23 @@
 
 ## Current Status
 
+## 2026-10-25 — «Pegar ubicación»: PIN propuesto por el familiar y enlaces cortos de mapas (claude/location-paste)
+
+- 122 (solo columnas nuevas en care_recipient_location_change_requests): proposed_latitude/longitude, par
+  obligatorio y límites de Puerto Rico; GRANT INSERT por columna (nunca UPDATE). Direcciones, puntos, turnos,
+  historial y políticas intactos (huella antes/después idéntica sobre datos creados con main). Idempotente
+  (runner y SQL directo dos veces). Rollback probado (main 93/93 y 36/36 después) y reaplicado;
+  ops/122_family_location_rollback_assessment.sql (solo lectura, solo conteos) antes de revertir.
+- Aprobar aplica el PIN solo con usePoint:true (una pantalla anterior que no lo muestra nunca lo aplica) y SIN
+  confirmar (regla 105): la cuidadora no recibe coordenadas hasta que un gestor confirme el punto.
+- POST /maps/resolve-link: solo enlaces cortos de Google/Apple, hosts permitidos en cada salto, https, 5 saltos,
+  4 s, sin cookies/referer/cuerpo, nunca devuelve ni registra el enlace, 20/10 min por usuario,
+  MAP_LINK_RESOLVER=off. Parser compartido con el frontend (mapLinks.ts, copia idéntica).
+- verifyLocationPaste 33/33 (P, I, R1–R10, C1–C4 cuidadoras, M1–M7, Z1 logs), en los dos flujos de CI; unitarias
+  577; Gate 6 93/93; Gate 7 36/36; En Camino 27/27; batería completa de CI en verde.
+- Compatibilidad probada con pantallas reales: portal actual + backend nuevo y portal nuevo + backend anterior.
+- Siguiente: autorización de Rafa para fusionar #216 (migración 122) y después ETNARAMVP #235.
+
 ## 2026-10-25 — Finanzas F1.1 backend: cancelar cambios programados, desactivar feriados, margen negativo (claude/finanzas-f1-1)
 
 - 121 (solo columnas nuevas y guards; shifts, timesheets, worker_financial_rates y el check-out intactos):
