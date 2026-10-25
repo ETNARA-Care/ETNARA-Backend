@@ -200,6 +200,7 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyShiftReportsF1.ts
+
       - name: PostgreSQL Facturación F2.2 drafts, reservations, overnight segments, tax treatment, isolation (no issuing)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

@@ -157,6 +157,7 @@ jobs:
 
       - name: Informe de Turno F1 (drafts from existing records, approval, immutability, isolation, central denied)
         run: npx tsx scripts/verifyShiftReportsF1.ts
+
       - name: Facturación F2.2 drafts, reservations, overnight segments, tax treatment, isolation (no issuing)
         run: npx tsx scripts/verifyBillingF22.ts
 
