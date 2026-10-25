@@ -4,7 +4,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { MembershipNotActiveError, InvalidTenantContextError } from "../../context/errors.js";
 import { respondInternalError } from "../../observability/internalError.js";
 import {
-  FinanceError, addHoliday, clientRecipientSchema, clientSchema, clientUpdateSchema, createClient, createRate, createService,
+  FinanceError, addHoliday, cancelRate, deactivateHoliday, holidayDateSchema, holidayDeactivateSchema, rateCancelSchema, clientRecipientSchema, clientSchema, clientUpdateSchema, createClient, createRate, createService,
   endRate, getShiftFinance, holidaySchema, linkClientRecipient, listCaregiverRates, listClients, listHolidays, listRates,
   listServices, rateCreateSchema, rateEndSchema, recipientDefaultsSchema, resolveRates, resolveSchema, serviceCreateSchema,
   serviceUpdateSchema, setRecipientDefaults, setShiftFinance, shiftTermsSchema, updateClient, updateService,
@@ -47,6 +47,7 @@ router.patch(`${base}/services/:serviceId`, requireAuth, handle(200, async (req,
 router.get(`${base}/services/:serviceId/rates`, requireAuth, handle(200, (req, org) => listRates(user(req), org, id(req, "serviceId"))));
 router.post(`${base}/services/:serviceId/rates`, requireAuth, handle(201, (req, org) => createRate(user(req), org, id(req, "serviceId"), rateCreateSchema.parse(req.body))));
 router.post(`${base}/rates/:rateId/end`, requireAuth, handle(200, async (req, org) => ({ rate: await endRate(user(req), org, id(req, "rateId"), rateEndSchema.parse(req.body)) })));
+router.post(`${base}/rates/:rateId/cancel`, requireAuth, handle(200, (req, org) => cancelRate(user(req), org, id(req, "rateId"), rateCancelSchema.parse(req.body))));
 router.get(`${base}/rates/resolve`, requireAuth, handle(200, (req, org) => resolveRates(user(req), org, resolveSchema.parse(req.query))));
 
 router.get(`${base}/caregivers`, requireAuth, handle(200, (req, org) => listCaregiverRates(user(req), org)));
@@ -58,6 +59,7 @@ router.post(`${base}/clients/:clientId/recipients`, requireAuth, handle(201, asy
 
 router.get(`${base}/holidays`, requireAuth, handle(200, (req, org) => listHolidays(user(req), org)));
 router.post(`${base}/holidays`, requireAuth, handle(201, async (req, org) => ({ holiday: await addHoliday(user(req), org, holidaySchema.parse(req.body)) })));
+router.post(`${base}/holidays/:date/deactivate`, requireAuth, handle(200, async (req, org) => ({ holiday: await deactivateHoliday(user(req), org, holidayDateSchema.parse(req.params.date), holidayDeactivateSchema.parse(req.body)) })));
 
 router.put(`${base}/recipients/:recipientId/defaults`, requireAuth, handle(200, async (req, org) => ({ defaults: await setRecipientDefaults(user(req), org, id(req, "recipientId"), recipientDefaultsSchema.parse(req.body)) })));
 

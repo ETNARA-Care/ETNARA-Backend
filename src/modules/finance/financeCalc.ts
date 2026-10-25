@@ -126,13 +126,16 @@ export function computeCharge(unit: FinanceUnit, minutes: number, rules: RateRul
  * Estimated gross margin between what is billed and what is paid for the same
  * occurrence. It is NOT net profit: it ignores payroll taxes, insurance, travel
  * and every other cost. Basis points (10000 = 100 %); null when nothing is billed.
+ * `negative` is true when the bill is lower than the pay (a warning, never a block).
  */
-export function grossMargin(billCents: number, payCents: number): { differenceCents: number; marginBasisPoints: number | null } {
+export function grossMargin(billCents: number, payCents: number): { differenceCents: number; marginBasisPoints: number | null; negative: boolean } {
   if (!Number.isSafeInteger(billCents) || !Number.isSafeInteger(payCents)) throw new RangeError("AMOUNT_INVALID");
   const differenceCents = billCents - payCents;
-  if (billCents <= 0) return { differenceCents, marginBasisPoints: null };
-  const sign = differenceCents < 0 ? -1 : 1;
-  return { differenceCents, marginBasisPoints: sign * roundDiv(Math.abs(differenceCents) * 10000, billCents) };
+  // F1.1: flagged (never blocked) when what is billed is less than what is paid.
+  const negative = differenceCents < 0;
+  if (billCents <= 0) return { differenceCents, marginBasisPoints: null, negative };
+  const sign = negative ? -1 : 1;
+  return { differenceCents, marginBasisPoints: sign * roundDiv(Math.abs(differenceCents) * 10000, billCents), negative };
 }
 
 /** Parses "25", "25.5", "25.50", "$1,025.00" into cents without floats. */

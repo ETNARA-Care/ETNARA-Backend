@@ -269,9 +269,23 @@ async function main() {
     const today = await call("GET", `/organizations/${orgA}/operations/journeys`, A.admin.token);
     const byId = new Map(((today.body.journeys ?? []) as Json[]).map((j) => [j.shiftId, j]));
     const pastRow = byId.get(sPast);
-    check("A3 «Hoy en ruta»: today's visits with state and risks (late arrival flagged as a risk)",
-      today.status === 200 && byId.get(sMain)?.journey?.state === "COMPLETED" && byId.get(sSoon)?.journey?.state === "EN_ROUTE" && (pastRow?.risks ?? []).includes("LATE_ARRIVAL"),
-      `${today.status} n=${byId.size} past=${JSON.stringify(pastRow?.risks)}`);
+    // «Hoy en ruta» lists the visits that overlap the Puerto Rico day (UTC-4, no DST). Shifts created
+    // «in 20/60 minutes» fall on the next day when the run starts late in the evening, so whether each
+    // one belongs to today is computed here, independently of the module, and both cases are checked.
+    const PR_OFFSET_MS = 4 * 3_600_000;
+    const dayStart = Math.floor((Date.now() - PR_OFFSET_MS) / 86_400_000) * 86_400_000 + PR_OFFSET_MS;
+    const dayEnd = dayStart + 86_400_000;
+    const shiftWindow = async (id: string) => (await q<{ s: Date; e: Date }>(`SELECT scheduled_start s, scheduled_end e FROM shifts WHERE id=$1`, [id])).rows[0];
+    const listedAsExpected = async (id: string, state: string) => {
+      const w = await shiftWindow(id);
+      const isToday = w.s.getTime() < dayEnd && w.e.getTime() > dayStart;
+      return isToday ? byId.get(id)?.journey?.state === state : !byId.has(id);
+    };
+    const mainOk = await listedAsExpected(sMain, "COMPLETED");
+    const soonOk = await listedAsExpected(sSoon, "EN_ROUTE");
+    check("A3 «Hoy en ruta»: today's visits with state and risks (late arrival flagged as a risk); next-day visits not listed",
+      today.status === 200 && mainOk && soonOk && (pastRow?.risks ?? []).includes("LATE_ARRIVAL"),
+      `${today.status} n=${byId.size} main=${mainOk} soon=${soonOk} past=${JSON.stringify(pastRow?.risks)}`);
     const todayCg = await call("GET", `/organizations/${orgA}/operations/journeys`, A.cg1.token);
     const todayFam = await call("GET", `/organizations/${orgA}/operations/journeys`, A.family.token);
     const todayB = await call("GET", `/organizations/${orgB}/operations/journeys`, B.admin.token);
