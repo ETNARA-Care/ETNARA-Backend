@@ -64,6 +64,12 @@ describe("ETNARA Finanzas F1.1 — cancel scheduled rates, deactivate holidays (
     expect(service).toContain('if (e?.code === "40P01" || e?.code === "40001") throw new FinanceError("FINANCE_CONCURRENT_CHANGE", 409);');
   });
 
+  it("the rollback assessment is read-only", () => {
+    const assess = read("ops/121_finance_f11_rollback_assessment.sql").replace(/--.*$/gm, "");
+    expect(assess).toContain("BEGIN TRANSACTION READ ONLY;");
+    expect(assess).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|CREATE)\b/i);
+  });
+
   it("rollback refuses to run once anything was cancelled or deactivated", () => {
     expect(rollback).toContain("rollback aborted, nothing changed");
     expect(rollback).toContain("WHERE cancelled_at IS NOT NULL");
