@@ -12,9 +12,12 @@ import {
   createAccessInvitationSchema,
   deactivateInvitedAccess,
   inspectAccessInvitation,
+  inviteFamilyByEmail,
   listAccessInvitations,
   renewAccessInvitation,
+  resendFamilyInvitation,
   revokeAccessInvitation,
+  type FamilyInvitationResult,
 } from "./accessInvitations.service.js";
 
 const router = Router();
@@ -24,8 +27,21 @@ const tokenSchema = z.object({ token: z.string().length(64) });
 function statusForCode(code: string) {
   if (["INVITATION_NOT_AVAILABLE", "TARGET_NOT_FOUND"].includes(code)) return 404;
   if (code === "INVITATION_EXPIRED") return 410;
+  if (code === "RESEND_TOO_SOON") return 429;
   if (["INVITATION_IDENTITY_MISMATCH", "ACCOUNT_DISABLED", "WORKER_NOT_ACTIVE", "RECIPIENT_NOT_ACTIVE"].includes(code)) return 403;
   return 409;
+}
+
+/**
+ * Family invitation e-mails: 2xx only when the provider accepted the e-mail. Otherwise the
+ * agency gets a clear error and can retry: the invitation (if any) stays pending, without a
+ * duplicate, and no token is ever returned.
+ */
+function sendFamilyResult(res: Response, result: FamilyInvitationResult, okStatus: number) {
+  const { invitation, emailDelivery, resent } = result;
+  if (emailDelivery.status === "sent") return void res.status(okStatus).json({ invitation, emailDelivery: { status: "sent" }, resent });
+  const notConfigured = emailDelivery.error === "EMAIL_NOT_CONFIGURED";
+  res.status(notConfigured ? 503 : 502).json({ error: notConfigured ? "EMAIL_NOT_CONFIGURED" : "INVITATION_EMAIL_FAILED", invitation, resent });
 }
 
 function handleError(error: unknown, res: Response) {
@@ -82,6 +98,10 @@ router.post(
     const body = createAccessInvitationSchema.safeParse(req.body);
     if (!organizationId.success || !body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
     try {
+      if (body.data.type === "family") {
+        sendFamilyResult(res, await inviteFamilyByEmail(req.auth!.userId, organizationId.data, body.data), 201);
+        return;
+      }
       const result = await createAccessInvitation(req.auth!.userId, organizationId.data, body.data);
       res.status(201).json({ invitation: result.invitation, token: result.rawToken });
     } catch (error) {
@@ -154,6 +174,21 @@ router.post(
     try {
       const result = await renewAccessInvitation(req.auth!.userId, organizationId.data, invitationId.data);
       res.status(200).json({ invitation: result.invitation, token: result.rawToken });
+    } catch (error) {
+      handleError(error, res);
+    }
+  }
+);
+
+router.post(
+  "/organizations/:organizationId/access-invitations/:invitationId/resend",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const organizationId = uuid.safeParse(req.params.organizationId);
+    const invitationId = uuid.safeParse(req.params.invitationId);
+    if (!organizationId.success || !invitationId.success) return void res.status(400).json({ error: "INVALID_ID" });
+    try {
+      sendFamilyResult(res, await resendFamilyInvitation(req.auth!.userId, organizationId.data, invitationId.data), 200);
     } catch (error) {
       handleError(error, res);
     }

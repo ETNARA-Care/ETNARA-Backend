@@ -30,6 +30,9 @@ on:
       - 'src/modules/auth/**'
       - 'src/modules/email/**'
       - 'scripts/verifyPasswordRecovery.ts'
+      - 'scripts/verifyFamilyInvitationEmail.ts'
+      - 'src/modules/accessInvitations/**'
+      - 'ops/120_family_invitation_email.rollback.sql'
       - 'ops/116_activity_photos_upload_view.rollback.sql'
       - 'ops/115_activity_photos_security.rollback.sql'
       - 'src/modules/careEvents/**'
@@ -132,6 +135,8 @@ jobs:
 
       - name: Password recovery by e-mail (no enumeration, timing, single use, sessions closed)
         run: npx tsx scripts/verifyPasswordRecovery.ts
+      - name: Family invitations by e-mail (send, retry without duplicates, resend, single use, isolation)
+        run: npx tsx scripts/verifyFamilyInvitationEmail.ts
       - name: Local private S3 for photo tests (moto, never a hosted service)
         run: |
           python3 -m venv "$RUNNER_TEMP/moto-venv"

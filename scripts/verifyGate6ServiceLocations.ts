@@ -14,6 +14,21 @@ import pg from "pg";
 const adminUrl = process.env.MIGRATIONS_DATABASE_URL;
 if (!adminUrl || process.env.ETNARA_DISPOSABLE_DB !== "true") throw new Error("Requires MIGRATIONS_DATABASE_URL and ETNARA_DISPOSABLE_DB=true");
 if (process.env.NODE_ENV === "production") throw new Error("Production prohibited");
+
+// Family invitations arrive by e-mail (migration 120): an in-process fake provider keeps
+// the message so FP6 can read the one-time link. Nothing is sent anywhere.
+const familyInvitationMails: string[] = [];
+const realFetchForMail = globalThis.fetch;
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (url.startsWith("https://api.resend.com/")) {
+    familyInvitationMails.push(String(JSON.parse(String(init?.body ?? "{}")).html ?? ""));
+    return new Response(JSON.stringify({ id: randomUUID() }), { status: 200, headers: { "content-type": "application/json" } });
+  }
+  return realFetchForMail(input as never, init);
+}) as typeof fetch;
+process.env.RESEND_API_KEY = "test-only-not-a-key";
+process.env.ACTIVATION_BASE_URL = "https://app.example.invalid";
 if (/railway|rlwy|amazonaws|supabase|neon\.tech/i.test(adminUrl)) throw new Error("Hosted database refused");
 
 type Json = Record<string, any>;
@@ -329,7 +344,8 @@ async function main() {
     // Product path: secure access invitation (SECURITY DEFINER activation) still links the relative.
     const accInv = await call("POST", `/organizations/${orgA}/access-invitations`, A.admin.token,
       { type: "family", email: A.invitee.email, careRecipientId: rA2, relationshipType: "nieta" });
-    const accepted = await call("POST", "/access-invitations/accept", A.invitee.token, { token: accInv.body.token });
+    const mailedToken = /\/activate#token=([0-9a-f]{64})/.exec(familyInvitationMails.at(-1) ?? "")?.[1] ?? "";
+    const accepted = await call("POST", "/access-invitations/accept", A.invitee.token, { token: mailedToken });
     const newRow = (await q<Json>(`SELECT * FROM family_relationships WHERE user_id=$1 AND care_recipient_id=$2`, [A.invitee.userId, rA2])).rows[0];
     check("FP6 an invited relative still activates access through the secure invitation (default permissions)",
       accInv.status === 201 && accepted.status === 200 && newRow?.status === "active" && newRow?.can_participate_in_verification === false,
