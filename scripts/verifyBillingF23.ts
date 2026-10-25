@@ -454,7 +454,7 @@ async function main() {
     const backupBucket = `${bucket}-copy`;
     await objStore.send(new CreateBucketCommand({ Bucket: backupBucket }));
     const srcRef = { s3: objStore, bucket }; const dstRef = { s3: objStore, bucket: backupBucket };
-    const expected = (await q<{ key: string; sha256: string }>(bk.EXPECTED_OBJECTS_SQL)).rows;
+    const expected = (await q<{ key: string; sha256: string; retainUntil: Date | null }>(bk.EXPECTED_OBJECTS_SQL)).rows;
     // E08 recreated the bucket on purpose, so some earlier PDFs are really gone: the copy must report exactly those.
     const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
     const absent: string[] = [];
