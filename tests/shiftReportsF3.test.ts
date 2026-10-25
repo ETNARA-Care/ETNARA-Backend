@@ -43,7 +43,8 @@ describe("Informe de Turno F3 (129)", () => {
   });
 
   it("the projection drops internal ids and never touches photos, proximity or offline flags", () => {
-    expect(code).toMatch(/e - 'careEventId'/);
+    expect(code).toMatch(/FUNCTION app_shift_report_family_pick\(p_items jsonb, p_keys text\[\]\)/);
+    expect(code).toMatch(/ARRAY\['at', 'mealType', 'amountConsumed', 'note'\]/);
     expect(code).not.toMatch(/'proximity'|'recordedOffline'|'photos'|'totals'|'membershipId'/);
   });
 

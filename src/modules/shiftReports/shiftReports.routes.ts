@@ -62,9 +62,11 @@ router.post("/organizations/:organizationId/me/shift-reports/:reportId/submit", 
   handle(200, (req, org) => submitMyShiftReport(user(req), org, id(req, "reportId"))));
 
 // F3 (129): the family reads approved reports of her own resident and downloads the PDF.
-router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports", requireAuth,
+// Never kept in a browser or proxy cache (e.g. a shared family tablet).
+const noStore = (_req: Request, res: Response, next: () => void) => { res.setHeader("Cache-Control", "no-store, private"); res.setHeader("Pragma", "no-cache"); next(); };
+router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports", requireAuth, noStore,
   handle(200, (req, org) => listFamilyShiftReports(user(req), org, id(req, "recipientId"))));
-router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports/:reportId", requireAuth,
+router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports/:reportId", requireAuth, noStore,
   handle(200, (req, org) => getFamilyShiftReport(user(req), org, id(req, "recipientId"), id(req, "reportId"))));
 router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports/:reportId/pdf", requireAuth,
   handle(200, (req, org) => familyShiftReportPdf(user(req), org, id(req, "recipientId"), id(req, "reportId")), sendShiftReportPdf));

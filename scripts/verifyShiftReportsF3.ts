@@ -58,7 +58,7 @@ async function main() {
     const text = await res.text();
     let parsed: Json = {};
     try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text.slice(0, 40) }; }
-    return { status: res.status, body: parsed };
+    return { status: res.status, body: parsed, headers: res.headers.get("cache-control") ?? "" };
   }
   const org = async (name: string, features: string[]) => {
     const id = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
@@ -197,6 +197,7 @@ async function main() {
       raw.includes(MEAL_NOTE) && raw.includes(FREE_NOTE) && raw.includes(INCIDENT) && rep.sections?.observations?.caregiverNote?.text === FINAL && rep.agencySummary === SUMMARY);
     check("V4 nothing beyond the family view: no withheld text, internal ids, location, offline flags, photos, totals, history or approver",
       !raw.includes(HYGIENE) && !raw.includes(MOOD) && !/careEventId|incidentId|observationId|membershipId|proximity|recordedOffline|photos|totals|familySections|approvedBy|history|email/.test(raw), raw.slice(0, 120));
+    check("V7 family list and view are never cached", /no-store/.test(v1.headers ?? "") && /no-store/.test(list.headers ?? ""), `${v1.headers}/${list.headers}`);
     const v2 = await call("GET", `${FR(rA)}/${r2.id}`, A.family.token);
     check("V5 a report shared with meals only shows meals only", v2.status === 200 && Object.keys(v2.body.report?.sections ?? {}).join(",") === "meals"
       && !JSON.stringify(v2.body).includes(HYGIENE));

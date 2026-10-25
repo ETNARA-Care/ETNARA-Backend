@@ -6,7 +6,7 @@
 
 - **129:** solo funciones. Lectura familiar de informes APPROVED con relación activa, rol FAMILY y SHIFT_REPORTS; secciones autorizadas; nunca Central. PDF en el servidor desde la misma proyección, con evento PDF_DOWNLOADED.
 - **TS:** `shiftReportsFamily.service.ts` y `shiftReportPdf.ts` (pdfkit 0.15.2 y @types/pdfkit 0.13.9, las mismas versiones que #221); rutas `care-recipients/:rid/shift-reports`; regla de SHIFT_REPORTS.
-- **Pruebas:** verifyShiftReportsF3 27/27; batería completa en una base nueva; unitarias 612/612; rollback y reaplicación limpios.
+- **Pruebas:** verifyShiftReportsF3 28/28; batería completa en una base nueva; unitarias 612/612; rollback y reaplicación limpios.
 
 ## 2026-10-25 — Facturación Premium F2.3: emisión, numeración, PDF, almacenamiento privado, anulación (claude/facturacion-f2-3)
 

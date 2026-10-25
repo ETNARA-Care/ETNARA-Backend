@@ -20,6 +20,8 @@ RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
+  -- NOT app_is_superadmin(): defense in depth; tenant requests always run with it false, and
+  -- ETNARA central is excluded anyway because it holds no family relationship nor FAMILY role.
   SELECT NOT public.app_is_superadmin()
      AND EXISTS (
        SELECT 1 FROM public.family_relationships fr
@@ -41,12 +43,16 @@ AS $$
 $$;
 
 -- 2. The family projection (internal) ------------------------------------------------------
-CREATE OR REPLACE FUNCTION app_shift_report_family_strip(p_items jsonb)
+-- Allowlist: each item keeps ONLY the listed fields (a field added to the content later
+-- never reaches the family by accident).
+CREATE OR REPLACE FUNCTION app_shift_report_family_pick(p_items jsonb, p_keys text[])
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE
 SET search_path = pg_catalog, public
 AS $$
-  SELECT COALESCE(jsonb_agg(e - 'careEventId' ORDER BY ord), '[]'::jsonb)
+  SELECT COALESCE(jsonb_agg(
+           (SELECT COALESCE(jsonb_object_agg(k, e->k), '{}'::jsonb) FROM unnest(p_keys) AS k WHERE e ? k)
+           ORDER BY ord), '[]'::jsonb)
     FROM jsonb_array_elements(COALESCE(p_items, '[]'::jsonb)) WITH ORDINALITY AS t(e, ord);
 $$;
 
@@ -74,7 +80,13 @@ BEGIN
   END IF;
   FOREACH k IN ARRAY ARRAY['meals', 'hydration', 'activities', 'mobility', 'hygiene', 'mood'] LOOP
     IF COALESCE((fs->>k)::boolean, false) THEN
-      sec := sec || jsonb_build_object(k, app_shift_report_family_strip(c->'sections'->k));
+      sec := sec || jsonb_build_object(k, app_shift_report_family_pick(c->'sections'->k, CASE k
+        WHEN 'meals' THEN ARRAY['at', 'mealType', 'amountConsumed', 'note']
+        WHEN 'hydration' THEN ARRAY['at', 'amount', 'note']
+        WHEN 'activities' THEN ARRAY['at', 'label', 'durationMinutes', 'note']
+        WHEN 'mobility' THEN ARRAY['at', 'activity', 'note']
+        WHEN 'hygiene' THEN ARRAY['at', 'result', 'note']
+        ELSE ARRAY['at', 'mood', 'note'] END));
       shown := array_append(shown, k);
     END IF;
   END LOOP;
@@ -82,7 +94,7 @@ BEGIN
     -- Free-text notes and the caregiver's final observation. Observation RECORDS
     -- (categories, review status) stay in the agency's own review flow.
     sec := sec || jsonb_build_object('observations', jsonb_build_object(
-      'notes', app_shift_report_family_strip(c->'sections'->'notes'),
+      'notes', app_shift_report_family_pick(c->'sections'->'notes', ARRAY['at', 'text']),
       'caregiverNote', CASE WHEN r.caregiver_note IS NULL THEN 'null'::jsonb
                             ELSE jsonb_build_object('at', app_shift_report_iso(r.caregiver_note_at), 'text', r.caregiver_note) END));
     shown := array_append(shown, 'observations');
@@ -166,7 +178,7 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION app_is_my_family_recipient(uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION app_shift_report_family_strip(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_shift_report_family_pick(jsonb, text[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_report_family_project(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_report_family_list(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_report_family_get(uuid, uuid) FROM PUBLIC;
