@@ -14,6 +14,9 @@ const RULES: { pattern: RegExp; feature: OrgFeature }[] = [
   { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
+  // ETNARA Finanzas F1 (119): services, rates, clients, holidays, shift finance terms.
+  { pattern: new RegExp(`^/organizations/(${UUID})/finance(/|$)`), feature: "FINANZAS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/finance$`), feature: "FINANZAS" },
 ];
 
 export function gatedFeatureFor(path: string): { organizationId: string; feature: OrgFeature } | null {
