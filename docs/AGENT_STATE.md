@@ -17,6 +17,11 @@
   recalcular solo a petición; descartar y recuperar (14 días, solo marcados, con motivo) liberan reservas.
 - verifyBillingF22 18/18 (D01–D18; 25 importes calculados a mano en billingCalc.test), en los dos flujos de CI;
   unitarias 580; batería completa de CI en verde; rollback probado.
+- Decisiones aprobadas 25-oct: D1 opción C (minutos aprobados repartidos en proporción al tiempo real de cada tramo;
+  nunca se inventan horas: más aprobado que real → APPROVED_EXCEEDS_RECORDED), D2 mínimo y redondeo de la tarifa
+  del comienzo del turno, una vez; D4 opción B (varias hojas aprobadas que no se solapan se suman, con referencia a
+  cada hoja; solapes → TIMESHEETS_OVERLAP). Traza en invoice_line_segments.rules/timesheet_id y invoice_lines.timesheet_ids.
+  verifyBillingF22 19/19 (D19 nuevo); billingCalc con ejemplos numéricos y 2,000 casos de propiedad.
 - Sin autorización: fusionar, desplegar, emitir (F2.3).
 
 ## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 126)

@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
   real_start timestamptz,
   real_end timestamptz,
   approved_minutes integer CHECK (approved_minutes IS NULL OR approved_minutes BETWEEN 1 AND 2880),
+  -- D4: the approved timesheets this shift line was computed from (reference kept, never edited).
+  timesheet_ids uuid[] NOT NULL DEFAULT '{}',
   unit text CHECK (unit IS NULL OR unit IN ('hour', 'shift', 'day', 'fixed', 'unit')),
   quantity_hundredths integer NOT NULL CHECK (quantity_hundredths >= 0),
   unit_price_cents integer CHECK (unit_price_cents IS NULL OR unit_price_cents >= 0),
@@ -129,8 +131,11 @@ CREATE TABLE IF NOT EXISTS invoice_line_segments (
   segment_date date NOT NULL,
   starts_at timestamptz NOT NULL,
   ends_at timestamptz NOT NULL CHECK (ends_at > starts_at),
-  minutes integer NOT NULL CHECK (minutes BETWEEN 1 AND 1440),
+  -- D1: approved minutes allocated to this real segment in proportion to its real time (0 allowed:
+  -- a few real seconds before midnight may receive no approved minute; the segment is kept for the trace).
+  minutes integer NOT NULL CHECK (minutes BETWEEN 0 AND 1440),
   billable_minutes integer NOT NULL CHECK (billable_minutes >= minutes),
+  timesheet_id uuid,
   rate_id uuid,
   rate_source text CHECK (rate_source IS NULL OR rate_source IN ('client', 'general')),
   day_type text CHECK (day_type IS NULL OR day_type IN ('standard', 'holiday')),

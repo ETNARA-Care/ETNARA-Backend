@@ -395,6 +395,55 @@ async function main() {
       finA.status === 200 && shiftFin.status === 200 && shiftFin.body.effective?.minutesSource === "approved_timesheet" && lockedPut.status === 409,
       `${S(finA)} ${S(shiftFin)} ${S(lockedPut)}`);
 
+    // D19 Approved decisions D1 (proportional), D2 (rules at the start) and D4 (several timesheets).
+    const cg2 = await person(orgA, "cg2", ["WORKER"], true);
+    const worked = async (rec: string, sched: [string, string], periods: { who: P; inIso: string; outIso: string; approved: number | null }[]) => {
+      const id = (await q<{ id: string }>(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,$3,$4,'confirmed') RETURNING id`, [orgA, rec, sched[0], sched[1]])).rows[0].id;
+      for (const p of periods) {
+        const a = (await q<{ id: string }>(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,response_status,responded_at) VALUES ($1,$2,$3,$4,'accepted',now()) RETURNING id`, [orgA, id, p.who.owm, rec])).rows[0].id;
+        const recMin = Math.round((Date.parse(p.outIso) - Date.parse(p.inIso)) / 60000);
+        await q(`INSERT INTO timesheets (organization_id,shift_id,assignment_id,organization_worker_membership_id,care_recipient_id,check_in_at,check_out_at,recorded_minutes,
+            approved_minutes,pay_rate_cents_snapshot,bill_rate_cents_snapshot,pay_amount_cents,bill_amount_cents,status,reviewed_by_user_id,reviewed_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, p.approved
+          ? [orgA, id, a, p.who.owm, rec, p.inIso, p.outIso, recMin, p.approved, 1500, 2500, 1, 1, "approved", adm.userId, new Date()]
+          : [orgA, id, a, p.who.owm, rec, p.inIso, p.outIso, recMin, null, null, null, null, null, "pending", null, null]);
+      }
+      return id;
+    };
+    const m1 = await worked(maria, ["2026-10-09T22:00:00-04:00", "2026-10-10T06:00:00-04:00"], [{ who: cg, inIso: "2026-10-09T22:00:00-04:00", outIso: "2026-10-10T06:30:00-04:00", approved: 480 }]);
+    const m2 = await worked(maria, ["2026-10-11T20:00:00-04:00", "2026-10-12T04:00:00-04:00"], [
+      { who: cg, inIso: "2026-10-11T20:00:00-04:00", outIso: "2026-10-12T00:00:00-04:00", approved: 240 },
+      { who: cg2, inIso: "2026-10-12T00:00:00-04:00", outIso: "2026-10-12T04:00:00-04:00", approved: 200 }]);
+    const m3 = await worked(maria, ["2026-10-13T08:00:00-04:00", "2026-10-13T15:00:00-04:00"], [
+      { who: cg, inIso: "2026-10-13T08:00:00-04:00", outIso: "2026-10-13T12:00:00-04:00", approved: 240 },
+      { who: cg2, inIso: "2026-10-13T11:00:00-04:00", outIso: "2026-10-13T15:00:00-04:00", approved: 240 }]);
+    const m4 = await worked(maria, ["2026-10-14T09:00:00-04:00", "2026-10-14T13:00:00-04:00"], [{ who: cg, inIso: "2026-10-14T09:00:00-04:00", outIso: "2026-10-14T13:00:00-04:00", approved: 300 }]);
+    const m5 = await worked(maria, ["2026-10-15T08:00:00-04:00", "2026-10-15T16:00:00-04:00"], [
+      { who: cg, inIso: "2026-10-15T08:00:00-04:00", outIso: "2026-10-15T12:00:00-04:00", approved: 240 },
+      { who: cg2, inIso: "2026-10-15T12:00:00-04:00", outIso: "2026-10-15T16:00:00-04:00", approved: null }]);
+    const elOct = await call("GET", `${B(orgA)}/eligible-shifts?billingClientId=${perez}&from=2026-10-01&to=2026-10-31`, adm.token);
+    const EO = (sid: string) => elOct.body.shifts?.find((x: Json) => x.shiftId === sid);
+    const dOct = await call("POST", I, adm.token, { billingClientId: perez, periodFrom: "2026-10-01", periodTo: "2026-10-31" });
+    const octId = dOct.body.invoice?.id;
+    const addOct = await call("POST", `${I}/${octId}/shift-lines`, adm.token, { expectedVersion: 1, shiftIds: [m1, m2] });
+    const addOverlap = await call("POST", `${I}/${octId}/shift-lines`, adm.token, { expectedVersion: 2, shiftIds: [m3] });
+    const segs = (await q<{ shift_id: string; minutes: number; billable_minutes: number; timesheet_id: string | null; unit_price_cents: number; amount_cents: number; rules: Json; line_amount: number; timesheet_ids: string[] }>(
+      `SELECT l.shift_id, s.minutes, s.billable_minutes, s.timesheet_id, s.unit_price_cents, s.amount_cents, s.rules, l.amount_cents AS line_amount, l.timesheet_ids
+         FROM invoice_lines l JOIN invoice_line_segments s ON s.line_id = l.id WHERE l.invoice_id = $1 AND l.removed_at IS NULL ORDER BY s.starts_at`, [octId])).rows;
+    const tsIds = (await q<{ id: string }>("SELECT id FROM timesheets WHERE shift_id = $1 ORDER BY check_in_at", [m2])).rows.map((r) => r.id);
+    const s1rows = segs.filter((r) => r.shift_id === m1);
+    const s2rows = segs.filter((r) => r.shift_id === m2);
+    const sumOk = [m1, m2].every((sid) => { const rows = segs.filter((r) => r.shift_id === sid); return rows.length > 0 && rows.reduce((t, r) => t + r.amount_cents, 0) === rows[0].line_amount
+      && Math.abs(rows[0].line_amount - rows.reduce((t, r) => t + (r.billable_minutes * r.unit_price_cents) / 60, 0)) <= 0.5; });
+    check("D19 D1/D4: 22:00–06:30 real with 480 approved → 113 + 367 min (proportional, traced); reassignment at midnight 240 + 200 min summed with both timesheet references; overlapping periods (TIMESHEETS_OVERLAP), more approved than real (APPROVED_EXCEEDS_RECORDED) and a pending second timesheet are not billable; amounts = Σ segments",
+      EO(m1)?.selectable === true && EO(m2)?.selectable === true && EO(m3)?.selectable === false && EO(m3)?.exceptions.includes("TIMESHEETS_OVERLAP")
+        && EO(m4)?.selectable === false && EO(m4)?.exceptions.includes("APPROVED_EXCEEDS_RECORDED") && EO(m5)?.selectable === false && EO(m5)?.exceptions.includes("HOURS_NOT_APPROVED")
+        && addOct.status === 201 && addOverlap.status === 409 && addOverlap.body.error === "SHIFT_NOT_BILLABLE"
+        && JSON.stringify(s1rows.map((r) => r.minutes)) === "[113,367]" && s1rows.every((r) => r.rules?.allocation === "proportional_real_time" && typeof r.rules?.realSeconds === "number")
+        && JSON.stringify(s2rows.map((r) => r.minutes)) === "[240,200]" && JSON.stringify(s2rows.map((r) => r.timesheet_id)) === JSON.stringify(tsIds)
+        && JSON.stringify([...(s2rows[0]?.timesheet_ids ?? [])].sort()) === JSON.stringify([...tsIds].sort()) && sumOk,
+      `el=${elOct.status} m1=${JSON.stringify(EO(m1)?.segments?.map((x: Json) => x.minutes))} m3=${EO(m3)?.exceptions} m4=${EO(m4)?.exceptions} m5=${EO(m5)?.exceptions} add=${S(addOct)} ov=${S(addOverlap)} s1=${s1rows.map((r) => r.minutes)} s2=${s2rows.map((r) => r.minutes)} sum=${sumOk}`);
+
     const fives = all.filter((r) => r.status === 500);
     check("D18 no 500 in the whole run", fives.length === 0, fives.map((r) => JSON.stringify(r.body)).join(" "));
   } finally {

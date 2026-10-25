@@ -4,7 +4,7 @@ import { AGENCY_TIME_ZONE, recordFinanceEvent, recordFinancialAudit } from "../f
 import { resolveBillingRateForDate } from "../finance/finance.service.js";
 import type { FinanceUnit } from "../finance/financeCalc.js";
 import { BillingError, inBilling, mapDbError, requireAnyCapability, requireCapability, type Trx } from "./billing.service.js";
-import { invoiceTotals, priceManual, priceShift, type LineResult, type SegmentRate, type TaxTreatment } from "./billingCalc.js";
+import { invoiceTotals, priceManual, priceAllocated, allocateApproved, type LineResult, type SegmentRate, type TaxTreatment } from "./billingCalc.js";
 
 /**
  * Facturación Premium F2.2 — drafts. Invoices are built from shifts with
@@ -136,6 +136,8 @@ interface ShiftRow {
   scheduled_start: string; scheduled_end: string; service_id: string | null; service_name: string | null; unit: FinanceUnit | null;
   client_id: string | null; caregiver_name: string | null;
   approved_count: number; open_count: number; check_in_at: string | null; check_out_at: string | null; approved_minutes: number | null;
+  /** D4: every approved timesheet of the shift (real period + approved minutes), oldest first. */
+  periods: { id: string; check_in_at: string; check_out_at: string; approved_minutes: number }[] | null;
 }
 
 async function shiftRows(trx: Trx, organizationId: string, where: { clientId: string; from: string; to: string } | { shiftIds: string[] }) {
@@ -150,7 +152,7 @@ async function shiftRows(trx: Trx, organizationId: string, where: { clientId: st
       COALESCE(ft.service_id, d.service_id) AS service_id, fs.name AS service_name, fs.unit AS unit,
       COALESCE(ft.billing_client_id, pc.billing_client_id) AS client_id,
       ts.caregiver_name, COALESCE(ts.approved_count, 0) AS approved_count, COALESCE(ts.open_count, 0) AS open_count,
-      ts.check_in_at, ts.check_out_at, ts.approved_minutes
+      ts.check_in_at, ts.check_out_at, ts.approved_minutes, ts.periods
     FROM shifts s
     LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
     LEFT JOIN shift_finance_terms ft ON ft.shift_id = s.id
@@ -163,7 +165,9 @@ async function shiftRows(trx: Trx, organizationId: string, where: { clientId: st
              min(t.check_in_at) FILTER (WHERE t.status = 'approved') AS check_in_at,
              max(t.check_out_at) FILTER (WHERE t.status = 'approved') AS check_out_at,
              sum(t.approved_minutes) FILTER (WHERE t.status = 'approved')::int AS approved_minutes,
-             string_agg(DISTINCT w.display_name, ', ') AS caregiver_name
+             string_agg(DISTINCT w.display_name, ', ') AS caregiver_name,
+             jsonb_agg(jsonb_build_object('id', t.id, 'check_in_at', t.check_in_at, 'check_out_at', t.check_out_at, 'approved_minutes', t.approved_minutes)
+               ORDER BY t.check_in_at) FILTER (WHERE t.status = 'approved') AS periods
       FROM timesheets t
       LEFT JOIN organization_worker_memberships m ON m.id = t.organization_worker_membership_id
       LEFT JOIN workers w ON w.id = m.worker_id
@@ -176,13 +180,19 @@ interface Priced { line: LineResult | null; exceptions: string[]; tax: TaxRow }
 async function priceRow(trx: Trx, organizationId: string, row: ShiftRow, clientId: string): Promise<Priced> {
   const exceptions: string[] = [];
   if (row.status === "cancelled") exceptions.push("SHIFT_CANCELLED");
-  if (row.approved_count === 0) exceptions.push("HOURS_NOT_APPROVED");
-  if (row.approved_count > 1 || row.open_count > 0) exceptions.push(row.approved_count > 1 ? "MULTIPLE_TIMESHEETS" : "HOURS_NOT_APPROVED");
+  // Pending or disputed hours on any timesheet of the shift: nothing is billed until they are approved (never partial).
+  if (row.approved_count === 0 || row.open_count > 0) exceptions.push("HOURS_NOT_APPROVED");
   if (!row.service_id) exceptions.push("NO_SERVICE");
+  // D1 + D4: real periods → midnight segments with the approved minutes in proportion; overlaps or more
+  // approved than real time are rejected (manual decision), never guessed.
+  const allocation = allocateApproved((row.periods ?? []).map((p) => ({
+    timesheetId: p.id, checkInIso: new Date(p.check_in_at).toISOString(), checkOutIso: new Date(p.check_out_at).toISOString(), approvedMinutes: Number(p.approved_minutes),
+  })));
+  if (!exceptions.length && allocation.exception) exceptions.push(allocation.exception);
   const tax = await taxFor(trx, organizationId, row.service_id, row.service_date);
-  if (exceptions.length || !row.service_id || !row.unit || !row.check_in_at || !row.approved_minutes) return { line: null, exceptions: [...new Set(exceptions)], tax };
+  if (exceptions.length || !row.service_id || !row.unit || allocation.segments.length === 0) return { line: null, exceptions: [...new Set(exceptions)], tax };
   const cache = new Map<string, { rate: SegmentRate | null }>();
-  for (const date of new Set(prDatesFor(row.check_in_at, row.approved_minutes))) {
+  for (const date of new Set(allocation.segments.map((x) => x.date))) {
     const r = await resolveBillingRateForDate(trx, organizationId, row.service_id, clientId, date);
     cache.set(date, {
       rate: r.rate ? {
@@ -192,15 +202,8 @@ async function priceRow(trx: Trx, organizationId: string, row: ShiftRow, clientI
       } : null,
     });
   }
-  const line = priceShift(row.unit, new Date(row.check_in_at).toISOString(), row.approved_minutes, (d) => cache.get(d)?.rate ?? null, { toleranceMinutes: TOLERANCE_MINUTES });
+  const line = priceAllocated(row.unit, allocation.segments, (d) => cache.get(d)?.rate ?? null, { toleranceMinutes: TOLERANCE_MINUTES });
   return { line, exceptions: line.reviewReasons, tax };
-}
-function prDatesFor(startIso: string, minutes: number): string[] {
-  const start = Date.parse(startIso);
-  const out: string[] = [];
-  for (let t = start; t < start + minutes * 60_000; t += 30 * 60_000) out.push(new Intl.DateTimeFormat("en-CA", { timeZone: AGENCY_TIME_ZONE }).format(new Date(t)));
-  out.push(new Intl.DateTimeFormat("en-CA", { timeZone: AGENCY_TIME_ZONE }).format(new Date(start + minutes * 60_000 - 1)));
-  return out;
 }
 
 export async function eligibleShifts(userId: string, organizationId: string, q: z.infer<typeof eligibleQuerySchema>) {
@@ -288,20 +291,24 @@ async function insertShiftLine(trx: Trx, organizationId: string, userId: string,
   const desc = `${row.service_name ?? "Servicio"}${row.recipient_name ? ` · ${row.recipient_name}` : ""}`;
   const inserted = (await sql<{ id: string }>`
     INSERT INTO invoice_lines (organization_id, invoice_id, kind, shift_id, care_recipient_id, recipient_name, service_id, description,
-      service_date, real_start, real_end, approved_minutes, unit, quantity_hundredths, unit_price_cents, amount_cents,
+      service_date, real_start, real_end, approved_minutes, timesheet_ids, unit, quantity_hundredths, unit_price_cents, amount_cents,
       tax_treatment, tax_rate_basis_points, tax_legal_basis, needs_review, review_reasons, warnings, position, created_by_user_id)
     VALUES (${organizationId}, ${invoiceId}, 'shift', ${row.id}, ${row.care_recipient_id}, ${row.recipient_name}, ${row.service_id}, ${desc},
-      ${row.service_date}::date, ${row.check_in_at}, ${row.check_out_at}, ${row.approved_minutes}, ${row.unit}, ${line.quantityHundredths},
+      ${row.service_date}::date, ${row.check_in_at}, ${row.check_out_at}, ${row.approved_minutes}, ${(row.periods ?? []).map((p) => p.id)}::uuid[], ${row.unit}, ${line.quantityHundredths},
       ${line.unitPriceCents}, ${line.amountCents}, ${tax.treatment}, ${tax.rate_basis_points}, ${tax.legal_basis},
       ${line.needsReview}, ${line.reviewReasons}::text[], ${JSON.stringify(line.warnings)}::jsonb, ${position}, ${userId})
     RETURNING id`.execute(trx)).rows[0];
   for (const s of line.segments) {
     await sql`
-      INSERT INTO invoice_line_segments (organization_id, line_id, segment_date, starts_at, ends_at, minutes, billable_minutes,
+      INSERT INTO invoice_line_segments (organization_id, line_id, segment_date, starts_at, ends_at, minutes, billable_minutes, timesheet_id,
         rate_id, rate_source, day_type, holiday_name, unit_price_cents, amount_cents, rules)
-      VALUES (${organizationId}, ${inserted.id}, ${s.date}::date, ${s.startsAt}, ${s.endsAt}, ${s.minutes}, ${s.billableMinutes},
+      VALUES (${organizationId}, ${inserted.id}, ${s.date}::date, ${s.startsAt}, ${s.endsAt}, ${s.minutes}, ${s.billableMinutes}, ${s.timesheetId},
         ${s.rate?.rateId ?? null}, ${s.rate?.source ?? null}, ${s.rate?.dayType ?? null}, ${s.rate?.holiday ?? null}, ${s.rate?.amountCents ?? null},
-        ${s.amountCents}, ${JSON.stringify(s.rate ? { minMinutes: s.rate.minMinutes, roundingMinutes: s.rate.roundingMinutes, halfDayPolicy: s.rate.halfDayPolicy, halfDayAmountCents: s.rate.halfDayAmountCents } : {})}::jsonb)`.execute(trx);
+        ${s.amountCents}, ${JSON.stringify({
+          // Trace (D1/D2): how this segment's minutes were obtained and which rules priced the shift.
+          allocation: "proportional_real_time", realSeconds: s.realSeconds,
+          ...(s.rate ? { minMinutes: s.rate.minMinutes, roundingMinutes: s.rate.roundingMinutes, halfDayPolicy: s.rate.halfDayPolicy, halfDayAmountCents: s.rate.halfDayAmountCents } : {}),
+        })}::jsonb)`.execute(trx);
   }
   return inserted.id;
 }
