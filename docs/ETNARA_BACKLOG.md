@@ -2,6 +2,10 @@
 
 ## In Progress
 
+### BILL-F2.1 — Facturación Premium F2.1 (FACTURACION switch, billing permissions, security)
+
+- Status: backend PR (migration 123 + verifyBillingF21 12/12); frontend PR next. Not authorized: merge, deploy, FACTURACION on for any agency, F3/F4.
+
 ### LOC-PASTE — «Pegar ubicación» (family PIN proposal, safe short-link expansion)
 
 - Status: PR #216 (migration 122 + verifyLocationPaste 33/33) and ETNARAMVP #235 ready; final checks done. Not authorized: merge, deploy.

@@ -2,6 +2,24 @@
 
 ## Current Status
 
+## 2026-10-25 — Facturación Premium F2.1: interruptor FACTURACION, permisos y seguridad (claude/facturacion-f2-1)
+
+- 123 (aditiva; solo cambian las dos listas CHECK de interruptores): FACTURACION apagado para todas las agencias
+  (no crea filas); solo ETNARA central lo cambia (PUT existente, motivo); exige FINANZAS también en la base
+  (FEATURE_REQUIRES_FINANZAS). Facturación usable solo con los dos encendidos; con uno apagado, modo consulta.
+- billing_permissions: view/draft/issue/void/manage por administrador de la agencia; solo se revocan (nunca se
+  borran ni editan, también para el dueño); solo valen mientras la persona es ORGANIZATION_ADMIN activo; el último
+  gestor no se puede revocar (bloqueo por agencia; el servicio espera el mismo bloqueo antes de comprobar al actor).
+- Un solo administrador al encender: recibe los 5 permisos. Varios: ETNARA central designa al gestor
+  (GET /platform/organizations/:id/billing-admins solo correos; POST /billing-manager con motivo). Central no lee
+  billing_permissions ni importes (platform_finance_deny + funciones SECURITY DEFINER sin dinero).
+- Puerta: GET /billing/* pasa con FACTURACION apagado (consulta); escrituras 404. FINANZAS apagado → 409
+  BILLING_READ_ONLY. Auditoría: finance_events (valores) y audit_log FINANCE_BILLING_* (solo ids, oculta a
+  supervisor y central).
+- verifyBillingF21 12/12 (3 ejecuciones seguidas), en los dos flujos de CI; unitarias 561; batería completa de CI
+  en verde. Rollback probado (aborta con historial; sin historial deja 122 y reaplica 123 limpia).
+- Siguiente: frontend F2.1 (PR dependiente). Sin autorización: fusionar, desplegar, activar FACTURACION.
+
 ## 2026-10-25 — «Pegar ubicación»: PIN propuesto por el familiar y enlaces cortos de mapas (claude/location-paste)
 
 - 122 (solo columnas nuevas en care_recipient_location_change_requests): proposed_latitude/longitude, par

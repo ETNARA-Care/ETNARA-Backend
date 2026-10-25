@@ -16,7 +16,7 @@ describe("ETNARA Finanzas F0 — safe financial foundation (118)", () => {
 
   it("adds FINANZAS as a switch that only ETNARA central can turn on", () => {
     expect(m118).toContain("'SMARTMATCH', 'EN_CAMINO', 'ACTIVITY_PHOTOS', 'FINANZAS'");
-    expect(read("src/modules/platformOrganizations/platformOrganizationFeatures.ts")).toMatch(/FEATURE_CODES = \[[^\]]*"FINANZAS"\]/);
+    expect(read("src/modules/platformOrganizations/platformOrganizationFeatures.ts")).toMatch(/FEATURE_CODES = \[[^\]]*"FINANZAS"[^\]]*\]/);
     expect(read("src/middleware/orgFeatureRules.ts")).toContain('| "FINANZAS"');
   });
 

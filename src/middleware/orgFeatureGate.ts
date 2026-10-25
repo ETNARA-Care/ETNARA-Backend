@@ -20,8 +20,10 @@ export async function isOrgFeatureEnabled(organizationId: string, feature: OrgFe
 
 export async function orgFeatureGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.method === "OPTIONS") { next(); return; }
-  const gated = gatedFeatureFor(req.path);
+  const gated = gatedFeatureFor(req.path, req.method);
   if (!gated || !(req.headers.authorization ?? "").startsWith("Bearer ")) { next(); return; }
+  // Read-only mode (Facturación): reads continue; billing.view decides in the service and the database.
+  if (gated.readOnlyPass) { next(); return; }
   try {
     if (await isOrgFeatureEnabled(gated.organizationId, gated.feature)) { next(); return; }
     res.status(404).json({ error: "FEATURE_NOT_ENABLED" });
