@@ -498,9 +498,11 @@ export async function resolveLocationChangeRequest(userId: string, organizationI
         addressLine: req.proposed_address_line, municipality: req.proposed_municipality,
         postalCode: req.proposed_postal_code, accessNotes: req.proposed_access_notes,
       };
-      // The relative's point is applied only on approval and stays UNCONFIRMED (trigger 105 clears
-      // gps_confirmed_at): caregivers never navigate to it until a manager confirms it.
-      const point = req.proposed_latitude != null && req.proposed_longitude != null && input.usePoint !== false
+      // The relative's point is applied only when the manager explicitly asks for it (usePoint:true,
+      // after seeing it: an older client that never shows the PIN can never apply it) and it stays
+      // UNCONFIRMED (trigger 105 clears gps_confirmed_at): caregivers never navigate to it until a
+      // manager confirms it.
+      const point = req.proposed_latitude != null && req.proposed_longitude != null && input.usePoint === true
         ? { latitude: Number(req.proposed_latitude), longitude: Number(req.proposed_longitude) } : null;
       const primary = (await sql<LocationRow>`
         SELECT ${columns} FROM care_recipient_locations

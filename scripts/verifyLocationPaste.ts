@@ -177,10 +177,10 @@ async function main() {
     const list = await call("GET", `${L}/location-change-requests`, A.admin.token);
     const listed = (list.body.requests ?? []).find((r: Json) => r.id === onlyPin.body.request?.id);
     check("R1 the agency sees the proposed point to review it", list.status === 200 && listed?.proposed_latitude === PIN.latitude && listed?.proposed_longitude === PIN.longitude, JSON.stringify(listed ?? {}).slice(0, 140));
-    const noConfirm = await call("POST", `${L}/location-change-requests/${onlyPin.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE" });
+    const noConfirm = await call("POST", `${L}/location-change-requests/${onlyPin.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", usePoint: true });
     check("R2 approving a new point with an upcoming shift needs explicit confirmation (409); nothing changes", noConfirm.status === 409 && noConfirm.body.error === "UPCOMING_SHIFTS_NEED_CONFIRMATION" && JSON.stringify(await primaryRow()) === JSON.stringify(before), `${noConfirm.status} ${noConfirm.body.error}`);
     const notifBefore = (await notices(A.cg, "SHIFT_LOCATION_CHANGED")).length;
-    const ok = await call("POST", `${L}/location-change-requests/${onlyPin.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", confirmUpcomingShifts: true });
+    const ok = await call("POST", `${L}/location-change-requests/${onlyPin.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", usePoint: true, confirmUpcomingShifts: true });
     const after = await primaryRow();
     check("R3 approved: the official point becomes the proposed one, UNCONFIRMED; the written address stays",
       ok.status === 200 && after.latitude === PIN.latitude && after.longitude === PIN.longitude && after.gps_confirmed_at === null && after.address_line === "Calle Luna 12",
@@ -208,11 +208,42 @@ async function main() {
     const rej = await call("POST", `${L}/location-change-requests/${p3.body.request?.id}/resolve`, A.admin.token, { decision: "REJECT", note: "Ya está correcto" });
     const afterRej = await primaryRow();
     check("R8 rejected: nothing changes (same point, still confirmed)", rej.status === 200 && JSON.stringify(afterRej) === JSON.stringify(beforeRej) && !!afterRej.gps_confirmed_at, `${rej.status}`);
+    // An older agency screen (before «Pegar ubicación») never sends usePoint: it cannot apply a PIN it never showed.
+    const beforeLegacy = await primaryRow();
+    const p5 = await call("POST", F, A.family.token, { accessNotes: "Portón verde", latitude: 18.27, longitude: -66.07 });
+    const legacy = await call("POST", `${L}/location-change-requests/${p5.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", confirmUpcomingShifts: true });
+    const afterLegacy = await primaryRow();
+    check("R10 approval from an older screen (no usePoint): the written part applies, the unseen PIN is NOT applied and the confirmed point stays",
+      legacy.status === 200 && afterLegacy.latitude === beforeLegacy.latitude && afterLegacy.longitude === beforeLegacy.longitude && !!afterLegacy.gps_confirmed_at,
+      `${legacy.status} ${JSON.stringify(afterLegacy)}`);
     const p4 = await call("POST", `/me/care-recipients/${rA2}/location-change-requests`, A.family2.token, { latitude: 18.2341, longitude: -66.0485 });
-    const firstAddr = await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/location-change-requests/${p4.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE" });
+    const firstAddr = await call("POST", `/organizations/${orgA}/care-recipients/${rA2}/location-change-requests/${p4.body.request?.id}/resolve`, A.admin.token, { decision: "APPROVE", usePoint: true });
     const newPrimary = await primaryRow(rA2);
     check("R9 a person without an address yet: approving creates the primary with the point, unconfirmed",
       firstAddr.status === 200 && newPrimary?.latitude === PIN.latitude && newPrimary?.gps_confirmed_at === null, `${firstAddr.status} ${JSON.stringify(newPrimary)}`);
+
+    // ------------------------------------------------------------ C: caregivers never see a proposed point
+    const pend = await call("POST", F, A.family.token, { accessNotes: "Entrada por el lado", latitude: 18.28, longitude: -66.08 });
+    const officialNow = await primaryRow();
+    const cgList = await call("GET", `${L}/location-change-requests`, A.cg.token);
+    const cgMine = await call("GET", F, A.cg.token);
+    check("C1 a caregiver cannot list the relatives' requests (403) nor read them as their own (404/empty)",
+      pend.status === 201 && cgList.status === 403 && (cgMine.status === 404 || (cgMine.status === 200 && (cgMine.body.requests ?? []).length === 0)), `${pend.status} ${cgList.status}/${cgMine.status}`);
+    const cgShift = await call("GET", `/organizations/${orgA}/shifts/${shiftId}/service-location`, A.cg.token);
+    check("C2 with a PIN proposal pending, the caregiver's shift shows only the official confirmed point",
+      cgShift.status === 200 && cgShift.body.location?.latitude === officialNow.latitude && !JSON.stringify(cgShift.body).includes("18.28") && !JSON.stringify(cgShift.body).includes("proposed"),
+      `${cgShift.status} lat=${cgShift.body.location?.latitude}`);
+    const cgDb = await (async () => {
+      const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+      try {
+        await c.query("BEGIN");
+        await c.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true), set_config('app.is_superadmin','false',true)`, [A.cg.userId, orgA]);
+        return (await c.query(`SELECT proposed_latitude FROM care_recipient_location_change_requests`)).rowCount;
+      } finally { await c.query("ROLLBACK").catch(() => undefined); await c.end(); }
+    })();
+    check("C3 at the database (RLS): a caregiver reads 0 proposals", cgDb === 0, `filas=${cgDb}`);
+    const famOwn = await call("GET", `/me/care-recipients/${rA}/service-location`, A.family.token);
+    check("C4 the relative sees their own proposal but still never the official coordinates", famOwn.status === 200 && !JSON.stringify(famOwn.body).includes(String(officialNow.latitude)), JSON.stringify(famOwn.body).slice(0, 80));
 
     // ------------------------------------------------------------ M: short-link resolver
     const M = "/maps/resolve-link";
@@ -236,7 +267,7 @@ async function main() {
     check("M7 every outbound request went only to the providers' short-link hosts", outgoing.every((x) => x.startsWith("https://maps.app.goo.gl/") || x.startsWith("https://maps.apple/p/")), outgoing.filter((x) => !/maps\.app\.goo\.gl|maps\.apple\/p/.test(x)).join(","));
 
     // ------------------------------------------------------------ privacy of logs
-    const leaked = logged.filter((l) => /18\.2341|-66\.0485|Calle Luna|goo\.gl|maps\.apple|AbC123/.test(l));
+    const leaked = logged.filter((l) => /18\.2341|-66\.0485|18\.2[5-8]\b|-66\.0[5-8]\b|Calle Luna|Port[oó]n|Entrada por|goo\.gl|maps\.apple|AbC123/.test(l));
     check("Z1 logs contain no address, coordinates or links", leaked.length === 0, `líneas=${leaked.length}`);
   } finally {
     server.close();

@@ -50,7 +50,16 @@ describe("parseMapInput — links people share", () => {
 
   it("a share text with a name and an address around the link keeps them as a hint", () => {
     const r = parseMapInput("Casa de Ana\nCalle Luna 12, Caguas\nhttps://maps.google.com/?q=18.2341,-66.0485");
-    expect(r).toMatchObject({ kind: "point", source: "google", placeHint: "Casa de Ana Calle Luna 12, Caguas" });
+    expect(r).toMatchObject({ kind: "point", source: "google", placeHint: "Calle Luna 12, Caguas" });
+  });
+
+  it("the shared text wins over a bare place name in the link; Apple's «address» wins over both", () => {
+    const shared = "Casa de prueba\nCalle Ficticia 12, Caguas, PR 00725\nhttps://maps.apple.com/?ll=18.234100,-66.048500&q=Casa";
+    expect(parseMapInput(shared)).toMatchObject({ kind: "point", placeHint: "Calle Ficticia 12, Caguas, PR 00725" });
+    const withAddress = "Casa\nhttps://maps.apple.com/?address=Calle%20Sol%203,%20Cayey,%20PR%2000736&ll=18.11,-66.16&q=Casa";
+    expect(parseMapInput(withAddress)).toMatchObject({ kind: "point", placeHint: "Calle Sol 3, Cayey, PR 00736" });
+    expect(parseMapInput("https://maps.apple.com/?ll=18.2341,-66.0485&q=Casa%20Prueba")).toMatchObject({ placeHint: "Casa Prueba" });
+    expect(parseMapInput("Plaza Ficticia\nhttps://maps.apple.com/?ll=18.2341,-66.0485")).toMatchObject({ placeHint: "Plaza Ficticia" });
   });
 
   it.each([
@@ -66,7 +75,10 @@ describe("parseMapInput — links people share", () => {
   });
 
   it("short links are recognised but never fetched on the device", () => {
-    expect(parseMapInput("https://maps.app.goo.gl/AbC123xyz")).toEqual({ kind: "short-link", source: "google", url: "https://maps.app.goo.gl/AbC123xyz" });
+    expect(parseMapInput("https://maps.app.goo.gl/AbC123xyz")).toEqual({ kind: "short-link", source: "google", url: "https://maps.app.goo.gl/AbC123xyz", placeHint: null });
+    // The text shared with a short link stays on the device as the address hint; only the link goes to ETNARA.
+    expect(parseMapInput("Casa\nCalle Luna 12, Caguas 00725\nhttps://maps.app.goo.gl/AbC123xyz"))
+      .toEqual({ kind: "short-link", source: "google", url: "https://maps.app.goo.gl/AbC123xyz", placeHint: "Calle Luna 12, Caguas 00725" });
     expect(parseMapInput("Mira: https://goo.gl/maps/AbC123xyz")).toMatchObject({ kind: "short-link", source: "google" });
     expect(parseMapInput("https://maps.apple/p/Ab.Cd-12")).toMatchObject({ kind: "short-link", source: "apple" });
   });

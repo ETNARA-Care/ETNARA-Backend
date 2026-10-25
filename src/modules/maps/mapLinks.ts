@@ -18,7 +18,7 @@ export type ParsedMapInput =
   | { kind: "empty" }
   | { kind: "point"; source: MapSource; point: MapPoint; placeHint: string | null }
   /** A valid map link without coordinates: needs the server to follow the provider's redirect. */
-  | { kind: "short-link"; source: "apple" | "google"; url: string }
+  | { kind: "short-link"; source: "apple" | "google"; url: string; placeHint: string | null }
   /** A valid map link that names a place but carries no coordinates. */
   | { kind: "no-point"; source: MapSource; placeHint: string | null }
   | { kind: "outside-pr"; source: MapSource }
@@ -150,13 +150,19 @@ export function parseMapInput(raw: string): ParsedMapInput {
   const source = sourceOf(url);
   if (!source) return { kind: "unsupported-link" };
   url.protocol = "https:";
+  // Text around the link in a share sheet («Casa de Ana↵Calle Luna 12, Caguas, PR 00725↵https://…»)
+  // is what the person shared. When it has several lines, the place name before the first line with
+  // a number is dropped, so the street, town and ZIP remain.
+  const lines = input.replace(link, "\n").split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const firstWithNumber = lines.findIndex((l) => /\d/.test(l));
+  const around = clean((lines.length > 1 && firstWithNumber > 0 ? lines.slice(firstWithNumber) : lines).join(", "));
   const short = isShortMapLink(url);
-  if (short) return { kind: "short-link", source: short, url: url.href };
+  if (short) return { kind: "short-link", source: short, url: url.href, placeHint: around };
   if (APPLE_SHORT_HOSTS.has(url.hostname) || GOOGLE_SHORT_HOSTS.has(url.hostname)) return { kind: "unsupported-link" };
   const { point: p, placeHint } = pointFromMapUrl(url, source);
-  // Text around the link in a share sheet («Casa de Ana · Calle Luna 12, Caguas https://…») is a useful hint.
-  const around = clean(input.replace(link, " ").replace(/\s+/g, " "));
-  const hint = placeHint ?? around;
+  // Apple's «address» parameter is a full postal address: it wins. Otherwise the shared text wins over
+  // the place name inside the link («q=Casa»), which rarely carries the town.
+  const hint = source === "apple" && clean(url.searchParams.get("address")) ? placeHint : around ?? placeHint;
   if (!p) return { kind: "no-point", source, placeHint: hint };
   if (!inPuertoRico(p)) return { kind: "outside-pr", source };
   return { kind: "point", source, point: p, placeHint: hint };
