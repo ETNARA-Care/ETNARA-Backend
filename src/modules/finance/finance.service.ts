@@ -463,6 +463,17 @@ async function resolveLine(trx: Trx, organizationId: string, serviceId: string, 
   };
 }
 
+/**
+ * Facturación F2.2: the billing rate in force for (service, client) on one PR
+ * date, with the same priority and holiday rules as resolveInTrx. Read-only;
+ * used by the invoice drafts to price each overnight segment on its own date.
+ */
+export async function resolveBillingRateForDate(trx: Trx, organizationId: string, serviceId: string, billingClientId: string | null, date: string) {
+  const holidayRow = (await sql<{ name: string }>`SELECT name FROM finance_holidays WHERE organization_id = ${organizationId} AND holiday_date = ${date}::date AND active`.execute(trx)).rows[0];
+  const rate = await resolveLine(trx, organizationId, serviceId, "client", billingClientId, date, Boolean(holidayRow));
+  return { rate, holiday: holidayRow ? holidayRow.name : null };
+}
+
 async function resolveInTrx(trx: Trx, organizationId: string, params: { serviceId: string; date: string; billingClientId?: string | null; membershipId?: string | null; minutes?: number | null }) {
   const service = (await sql<{ id: string; name: string; unit: FinanceUnit; active: boolean }>`
     SELECT id, name, unit, active FROM finance_services WHERE id = ${params.serviceId} AND organization_id = ${organizationId}`.execute(trx)).rows[0];
