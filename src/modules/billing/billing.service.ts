@@ -10,7 +10,7 @@ import { recordFinanceEvent, recordFinancialAudit } from "../finance/financeEven
  * rule is also enforced by the database (app_billing_can + RLS + guard).
  */
 
-type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
+export type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
 
 export class BillingError extends Error {
   constructor(public code: string, public status: number) {
@@ -45,6 +45,17 @@ export async function myCapabilities(trx: Trx, organizationId: string): Promise<
   return CAPABILITIES.filter((c) => r[c]);
 }
 
+/** At least one of the capabilities (reads: view, or draft to work on drafts). */
+export async function requireAnyCapability(trx: Trx, organizationId: string, capabilities: Capability[]): Promise<Capability> {
+  for (const c of capabilities) {
+    const ok = (await sql<{ ok: boolean }>`SELECT app_billing_can(${organizationId}::uuid, ${c}) AS ok`.execute(trx)).rows[0]?.ok;
+    if (ok) return c;
+  }
+  const state = await moduleState(trx, organizationId);
+  if (!state.finanzas && !state.facturacion) throw new BillingError("FEATURE_NOT_ENABLED", 404);
+  throw new BillingError("BILLING_FORBIDDEN", 403);
+}
+
 export async function requireCapability(trx: Trx, organizationId: string, capability: Capability): Promise<void> {
   const state = await moduleState(trx, organizationId);
   const ok = (await sql<{ ok: boolean }>`SELECT app_billing_can(${organizationId}::uuid, ${capability}) AS ok`.execute(trx)).rows[0]?.ok;
@@ -53,11 +64,11 @@ export async function requireCapability(trx: Trx, organizationId: string, capabi
   throw new BillingError("BILLING_FORBIDDEN", 403);
 }
 
-function inBilling<T>(userId: string, organizationId: string, work: (trx: Trx) => Promise<T>): Promise<T> {
+export function inBilling<T>(userId: string, organizationId: string, work: (trx: Trx) => Promise<T>): Promise<T> {
   return withTenantContext({ userId, organizationId }, work);
 }
 
-function mapDbError(error: unknown): never {
+export function mapDbError(error: unknown): never {
   const e = error as { code?: string; message?: string };
   const known: Record<string, number> = {
     LAST_PERMISSION_MANAGER: 409, BILLING_PERMISSION_ADMIN_ONLY: 409, BILLING_PERMISSION_IMMUTABLE: 409,
@@ -72,7 +83,7 @@ function mapDbError(error: unknown): never {
   throw error;
 }
 
-async function guarded<T>(work: () => Promise<T>): Promise<T> {
+export async function guarded<T>(work: () => Promise<T>): Promise<T> {
   try { return await work(); } catch (error) { if (error instanceof BillingError) throw error; return mapDbError(error); }
 }
 

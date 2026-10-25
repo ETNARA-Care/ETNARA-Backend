@@ -2,6 +2,28 @@
 
 ## Current Status
 
+## 2026-10-25 — Facturación Premium F2.2: borradores, reservas, tramos nocturnos, IVU configurable (claude/facturacion-f2-2)
+
+- 124 (aditiva): finance_service_tax (versiones por fecha, solo añadir; taxable con tasa / exempt con base legal /
+  pending; nada precargado), invoices (solo draft y discarded: no se puede emitir hasta F2.3), invoice_lines
+  (shift / manual / discount; nunca se borran: removed_at + motivo), invoice_line_segments (D8) e
+  invoice_shift_claims (una reserva viva por turno, índice único parcial). RLS por capacidad (view u draft para
+  leer, draft para escribir, manage para el IVU), platform deny, sin DELETE, guards también para el dueño.
+- Turnos aptos: solo con horas aprobadas, del pagador y período (fecha de inicio PR). Tramos en cada medianoche de
+  PR con la tarifa, feriado y prioridad de su fecha; mínimo y redondeo una vez; tolerancia 15 min solo avisa; día
+  parcial o tarifa faltante → no se factura hasta que la agencia lo resuelva.
+- Líneas manuales y descuentos con justificación y tratamiento de IVU explícito; nunca sustituyen un turno
+  reservado (MANUAL_LINE_DUPLICATES_SHIFT). Borradores con row_version (DRAFT_CHANGED); «tarifa cambió» y
+  recalcular solo a petición; descartar y recuperar (14 días, solo marcados, con motivo) liberan reservas.
+- verifyBillingF22 18/18 (D01–D18; 25 importes calculados a mano en billingCalc.test), en los dos flujos de CI;
+  unitarias 580; batería completa de CI en verde; rollback probado.
+- Decisiones aprobadas 25-oct: D1 opción C (minutos aprobados repartidos en proporción al tiempo real de cada tramo;
+  nunca se inventan horas: más aprobado que real → APPROVED_EXCEEDS_RECORDED), D2 mínimo y redondeo de la tarifa
+  del comienzo del turno, una vez; D4 opción B (varias hojas aprobadas que no se solapan se suman, con referencia a
+  cada hoja; solapes → TIMESHEETS_OVERLAP). Traza en invoice_line_segments.rules/timesheet_id y invoice_lines.timesheet_ids.
+  verifyBillingF22 19/19 (D19 nuevo); billingCalc con ejemplos numéricos y 2,000 casos de propiedad.
+- Sin autorización: fusionar, desplegar, emitir (F2.3).
+
 ## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 126)
 
 - **Numeración:** 126 (la 124 la tomó antes #218 Facturación F2.2 y la 125 es la corrección de documentos #220).
