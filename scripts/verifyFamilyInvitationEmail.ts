@@ -245,6 +245,51 @@ async function main() {
     const mailsBefore = mails.length;
     const workerInvite = await call("POST", `/organizations/${orgId}/access-invitations`, adminTok, { type: "worker", email: `fi-worker-${tag}@example.invalid`, workerMembershipId: worker.rows[0].membership_id });
     check("W1 invitaciones de cuidadoras sin cambios: 201 con token y sin correo", workerInvite.status === 201 && typeof workerInvite.body.token === "string" && mails.length === mailsBefore, `${workerInvite.status}`);
+
+    // ------------------------------------------------------------ T1-T6 tokens and type boundaries
+    const workerRow = (await q<{ id: string }>(`SELECT id FROM access_invitations WHERE lower(email)=lower($1)`, [`fi-worker-${tag}@example.invalid`])).rows[0];
+    const workerResend = await call("POST", `/organizations/${orgId}/access-invitations/${workerRow.id}/resend`, adminTok);
+    check("T1 «Reenviar» de familia no acepta una invitación de cuidadora (409) y no envía nada",
+      workerResend.status === 409 && mails.length === mailsBefore, `${workerResend.status}`);
+    const expEmail = `fi-vence-${tag}@example.invalid`;
+    const expRes = await resident("Elena");
+    await invite(adminTok, expEmail, expRes);
+    const expToken = linkToken(mailsTo(expEmail)[0]?.html ?? "") ?? "0".repeat(64);
+    await q(`UPDATE access_invitations SET expires_at = now() - interval '1 second' WHERE lower(email)=lower($1)`, [expEmail]);
+    const expInspect = await call("POST", "/access-invitations/inspect", "", { token: expToken });
+    const expActivate = await call("POST", "/access-invitations/activate", "", { token: expToken, password: `Clave-${tag}-vencida` });
+    const expUser = (await q(`SELECT 1 FROM users WHERE lower(email)=lower($1)`, [expEmail])).rows.length;
+    const listed = await call("GET", `/organizations/${orgId}/access-invitations?careRecipientId=${expRes}`, adminTok);
+    const listedStatus = (listed.body.invitations ?? []).find((i: Json) => i.email === expEmail)?.status;
+    // Since 085 an expired link answers exactly like a used or revoked one (404 INVITATION_NOT_AVAILABLE): it reveals nothing.
+    check("T2 enlace vencido: inspeccionar y activar lo rechazan (404, igual que uno usado o revocado), no se crea cuenta y la agencia lo ve «expired»",
+      expInspect.status === 404 && expInspect.body.error === "INVITATION_NOT_AVAILABLE" && expActivate.status === 404 && expUser === 0 && listedStatus === "expired",
+      `${expInspect.status}/${expActivate.status} cuenta=${expUser} lista=${listedStatus}`);
+    const tampered = expToken.slice(0, 63) + (expToken.endsWith("0") ? "1" : "0");
+    const bad = await Promise.all([
+      call("POST", "/access-invitations/inspect", "", { token: "f".repeat(64) }),
+      call("POST", "/access-invitations/inspect", "", { token: tampered }),
+      call("POST", "/access-invitations/inspect", "", { token: "corto" }),
+      call("POST", "/access-invitations/activate", "", { token: "f".repeat(64), password: `Clave-${tag}-inventada` }),
+    ]);
+    check("T3 tokens inventados o alterados: 404 (o 400 si el formato es inválido); nunca se crea una cuenta",
+      bad[0].status === 404 && bad[1].status === 404 && bad[2].status === 400 && bad[3].status === 404, bad.map((r) => r.status).join("/"));
+    const crossResident = await invite(adminTok, `fi-ajeno-${tag}@example.invalid`, resOther);
+    check("T4 una agencia no puede invitar familiares a un residente de otra agencia (404, sin correo)",
+      crossResident.status === 404 && mailsTo(`fi-ajeno-${tag}@example.invalid`).length === 0, `${crossResident.status}`);
+    const savedBase = process.env.ACTIVATION_BASE_URL;
+    process.env.ACTIVATION_BASE_URL = "http://app.example.invalid";
+    const insecure = await invite(adminTok, `fi-http-${tag}@example.invalid`, expRes);
+    delete process.env.ACTIVATION_BASE_URL;
+    const missing = await invite(adminTok, `fi-http-${tag}@example.invalid`, expRes);
+    process.env.ACTIVATION_BASE_URL = savedBase;
+    check("T5 sin ACTIVATION_BASE_URL o sin HTTPS: 503 EMAIL_NOT_CONFIGURED, ningún correo con un dominio equivocado",
+      insecure.status === 503 && missing.status === 503 && mailsTo(`fi-http-${tag}@example.invalid`).length === 0 && (await rows(`fi-http-${tag}@example.invalid`)).length === 1,
+      `${insecure.status}/${missing.status} invitaciones=${(await rows(`fi-http-${tag}@example.invalid`)).length}`);
+    const storedHashes = (await q<{ token_hash: string }>(`SELECT token_hash FROM access_invitations WHERE organization_id=$1`, [orgId])).rows.map((r) => r.token_hash);
+    const allMailed = mails.map((m) => linkToken(m.html)).filter(Boolean) as string[];
+    check("T6 en la base de datos solo hay hashes: ningún token enviado por correo está guardado en claro",
+      allMailed.length > 0 && allMailed.every((t) => !storedHashes.includes(t)), `tokens=${allMailed.length}`);
     clientIp = "198.51.100.41";
     const reset = await call("POST", "/auth/password-reset/request", "", { email: cg.email });
     for (let i = 0; i < 40 && !mailsTo(cg.email).length; i++) await new Promise((r) => setTimeout(r, 50));

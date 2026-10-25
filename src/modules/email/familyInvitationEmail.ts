@@ -30,6 +30,20 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
+/**
+ * The link host must be configured on purpose (ACTIVATION_BASE_URL) and use HTTPS: loadEmailConfig's
+ * fallback is a legacy domain, and a family link must never point anywhere else. http is only
+ * accepted for a local development host.
+ */
+export function familyLinkBaseIsSafe(rawEnv: string | undefined): boolean {
+  if (!rawEnv) return false;
+  try {
+    const url = new URL(rawEnv);
+    if (url.protocol === "https:") return true;
+    return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  } catch { return false; }
+}
+
 export function familyInvitationLink(config: EmailConfig, token: string): string {
   return `${config.activationBaseUrl.replace(/\/+$/, "")}/activate#token=${encodeURIComponent(token)}`;
 }
@@ -44,7 +58,7 @@ export function buildFamilyInvitationEmail(payload: FamilyInvitationEmail, confi
   const org = escapeHtml(payload.organizationName);
   const brand = escapeHtml(config.senderName);
   const expiry = escapeHtml(expiryText(payload.expiresAt));
-  const subject = `${payload.organizationName} te invita al Portal Familiar de ${config.senderName}`;
+  const subject = `${payload.organizationName} te invita al Portal Familiar de ${config.senderName}`.replace(/[\r\n\t]+/g, " ");
   const preheader = "Activa tu acceso para seguir el cuidado de tu familiar. El enlace es personal y vence en 7 días.";
 
   // Table layout and inline styles: the format every mail app (Mail on iPhone, Gmail, Outlook) renders the same.
@@ -123,6 +137,10 @@ export function buildFamilyInvitationEmail(payload: FamilyInvitationEmail, confi
  */
 export async function sendFamilyInvitationEmail(payload: FamilyInvitationEmail, config: EmailConfig): Promise<EmailDeliveryResult> {
   if (!config.apiKey) return { status: "failed", error: "EMAIL_NOT_CONFIGURED" };
+  if (!familyLinkBaseIsSafe(process.env.ACTIVATION_BASE_URL)) {
+    console.error("Family invitation email skipped", { error: "ACTIVATION_BASE_URL_MISSING_OR_NOT_HTTPS" });
+    return { status: "failed", error: "EMAIL_NOT_CONFIGURED" };
+  }
   const { subject, html, text } = buildFamilyInvitationEmail(payload, config);
   try {
     const response = await fetch("https://api.resend.com/emails", {

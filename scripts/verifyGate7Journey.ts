@@ -269,15 +269,50 @@ async function main() {
     const today = await call("GET", `/organizations/${orgA}/operations/journeys`, A.admin.token);
     const byId = new Map(((today.body.journeys ?? []) as Json[]).map((j) => [j.shiftId, j]));
     const pastRow = byId.get(sPast);
-    check("A3 «Hoy en ruta»: today's visits with state and risks (late arrival flagged as a risk)",
-      today.status === 200 && byId.get(sMain)?.journey?.state === "COMPLETED" && byId.get(sSoon)?.journey?.state === "EN_ROUTE" && (pastRow?.risks ?? []).includes("LATE_ARRIVAL"),
-      `${today.status} n=${byId.size} past=${JSON.stringify(pastRow?.risks)}`);
+    // «Hoy en ruta» is the Puerto Rico calendar day, from the database clock (same rule as the endpoint).
+    // A visit created «in 20/60 minutes» near midnight belongs to TOMORROW and must not be listed, so
+    // each visit is expected exactly when it overlaps today's Puerto Rico day (24-oct-2026: A3 failed
+    // after 23:40 because it assumed every relative visit was «today»).
+    const prDay = (await q<{ start_ms: string; end_ms: string }>(`
+      SELECT (extract(epoch FROM date_trunc('day', now() AT TIME ZONE 'America/Puerto_Rico') AT TIME ZONE 'America/Puerto_Rico') * 1000)::bigint::text AS start_ms,
+             (extract(epoch FROM (date_trunc('day', now() AT TIME ZONE 'America/Puerto_Rico') + interval '1 day') AT TIME ZONE 'America/Puerto_Rico') * 1000)::bigint::text AS end_ms`)).rows[0];
+    const dayStart = Number(prDay.start_ms), dayEnd = Number(prDay.end_ms);
+    const shiftRange = async (id: string) => (await q<{ s: string; e: string }>(`SELECT (extract(epoch FROM scheduled_start)*1000)::bigint::text AS s, (extract(epoch FROM scheduled_end)*1000)::bigint::text AS e FROM shifts WHERE id=$1`, [id])).rows[0];
+    const isToday = async (id: string) => { const r = await shiftRange(id); return Number(r.s) < dayEnd && Number(r.e) > dayStart; };
+    const expectRow = async (id: string, ok: (row: Json) => boolean) => ((await isToday(id)) ? !!byId.get(id) && ok(byId.get(id)!) : !byId.has(id));
+    const mainOk = await expectRow(sMain, (r) => r.journey?.state === "COMPLETED");
+    const soonOk = await expectRow(sSoon, (r) => r.journey?.state === "EN_ROUTE");
+    const pastToday = await isToday(sPast);
+    check("A3 «Hoy en ruta»: today's (Puerto Rico) visits with state and risks; late arrival flagged; a visit that falls on tomorrow is not listed",
+      today.status === 200 && pastToday && (pastRow?.risks ?? []).includes("LATE_ARRIVAL") && mainOk && soonOk,
+      `${today.status} n=${byId.size} past=${JSON.stringify(pastRow?.risks)} main=${mainOk} soon=${soonOk} hoyPR=${new Date(dayStart).toISOString()}`);
     const todayCg = await call("GET", `/organizations/${orgA}/operations/journeys`, A.cg1.token);
     const todayFam = await call("GET", `/organizations/${orgA}/operations/journeys`, A.family.token);
     const todayB = await call("GET", `/organizations/${orgB}/operations/journeys`, B.admin.token);
     check("A4 «Hoy en ruta» is for managers only and per agency",
       todayCg.status === 403 && todayFam.status === 403 && today.status === 200 && !((todayB.body.journeys ?? []) as Json[]).some((j) => byId.has(j.shiftId)),
       `${todayCg.status},${todayFam.status},${todayB.status}`);
+
+    // A3b: the Puerto Rico day boundary, with fixed visits that do not depend on the time the check runs.
+    const boundary = async (startMs: number, endMs: number) => {
+      const id = (await q<{ id: string }>(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,$3,$4,'confirmed') RETURNING id`,
+        [orgB, rB, new Date(startMs).toISOString(), new Date(endMs).toISOString()])).rows[0].id;
+      await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,response_status,responded_at) VALUES ($1,$2,$3,$4,'accepted',now())`, [orgB, id, B.cg.membershipId, rB]);
+      return id;
+    };
+    const H = 3_600_000;
+    const bInside = await boundary(dayStart + 10 * H, dayStart + 11 * H);
+    const bOvernight = await boundary(dayStart - H, dayStart + H);
+    const bYesterday = await boundary(dayStart - 3 * H, dayStart - H);       // same UTC date as today's PR midnight (04:00 UTC): a UTC rule would list it
+    const bEndsAtMidnight = await boundary(dayStart - H, dayStart);           // ends exactly at PR midnight
+    const bTomorrow = await boundary(dayEnd + H, dayEnd + 2 * H);
+    const bStartsAtMidnight = await boundary(dayEnd, dayEnd + H);             // starts exactly at tomorrow's PR midnight
+    const todayB2 = await call("GET", `/organizations/${orgB}/operations/journeys`, B.admin.token);
+    const listedB = new Set(((todayB2.body.journeys ?? []) as Json[]).map((j) => j.shiftId as string));
+    const listedA = new Set(((await call("GET", `/organizations/${orgA}/operations/journeys`, A.admin.token)).body.journeys ?? []).map((j: Json) => j.shiftId as string));
+    check("A3b «Hoy en ruta» uses the Puerto Rico day: lists today's and overnight visits; never yesterday's (even if UTC says today), one ending at midnight, tomorrow's or one starting at tomorrow's midnight; per agency",
+      todayB2.status === 200 && listedB.has(bInside) && listedB.has(bOvernight) && !listedB.has(bYesterday) && !listedB.has(bEndsAtMidnight) && !listedB.has(bTomorrow) && !listedB.has(bStartsAtMidnight) && !listedA.has(bInside),
+      `${todayB2.status} in=${listedB.has(bInside)} over=${listedB.has(bOvernight)} yest=${listedB.has(bYesterday)} endMid=${listedB.has(bEndsAtMidnight)} tom=${listedB.has(bTomorrow)} startMid=${listedB.has(bStartsAtMidnight)}`);
 
     // ================================================================ R: data protection
     const cols = (await q<{ column_name: string }>(`SELECT column_name FROM information_schema.columns WHERE table_name='shift_journey_events'`)).rows.map((r) => r.column_name);

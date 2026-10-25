@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildFamilyInvitationEmail, familyInvitationLink, sendFamilyInvitationEmail } from "../src/modules/email/familyInvitationEmail.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildFamilyInvitationEmail, familyInvitationLink, familyLinkBaseIsSafe, sendFamilyInvitationEmail } from "../src/modules/email/familyInvitationEmail.js";
 import type { EmailConfig } from "../src/modules/email/email.service.js";
 
 const config: EmailConfig = { apiKey: "test-only", senderEmail: "no-reply@example.invalid", senderName: "ETNARA Care", activationBaseUrl: "https://app.example.invalid/" };
@@ -7,7 +7,30 @@ const token = "a".repeat(64);
 const payload = { recipientEmail: "familia@example.invalid", organizationName: "Agencia Sol", activationToken: token, expiresAt: "2026-11-01T03:30:00.000Z" };
 
 describe("family invitation e-mail", () => {
-  afterEach(() => vi.restoreAllMocks());
+  const savedBase = process.env.ACTIVATION_BASE_URL;
+  beforeEach(() => { process.env.ACTIVATION_BASE_URL = "https://app.example.invalid"; });
+  afterEach(() => { vi.restoreAllMocks(); if (savedBase === undefined) delete process.env.ACTIVATION_BASE_URL; else process.env.ACTIVATION_BASE_URL = savedBase; });
+
+  it("requires an explicit HTTPS link base (http only for a local host)", () => {
+    expect(familyLinkBaseIsSafe(undefined)).toBe(false);
+    expect(familyLinkBaseIsSafe("")).toBe(false);
+    expect(familyLinkBaseIsSafe("not a url")).toBe(false);
+    expect(familyLinkBaseIsSafe("http://app.etnaracare.com")).toBe(false);
+    expect(familyLinkBaseIsSafe("javascript:alert(1)")).toBe(false);
+    expect(familyLinkBaseIsSafe("https://app.etnaracare.com")).toBe(true);
+    expect(familyLinkBaseIsSafe("http://127.0.0.1:4711")).toBe(true);
+  });
+
+  it("does not send when ACTIVATION_BASE_URL is missing (never falls back to another domain)", async () => {
+    delete process.env.ACTIVATION_BASE_URL;
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(sendFamilyInvitationEmail(payload, config)).resolves.toEqual({ status: "failed", error: "EMAIL_NOT_CONFIGURED" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the subject on one line whatever the agency name contains", () => {
+    expect(buildFamilyInvitationEmail({ ...payload, organizationName: "Agencia\r\nBcc: x@example.invalid" }, config).subject).not.toMatch(/[\r\n]/);
+  });
 
   it("links to /activate with the token in the URL fragment (never sent to a server)", () => {
     expect(familyInvitationLink(config, token)).toBe(`https://app.example.invalid/activate#token=${token}`);
