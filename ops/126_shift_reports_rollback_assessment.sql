@@ -1,17 +1,17 @@
--- READ-ONLY assessment before rolling back migration 124 (Informe de Turno F1). Changes nothing.
+-- READ-ONLY assessment before rolling back migration 126 (Informe de Turno F1). Changes nothing.
 -- Run it as the owner:
---   psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f ops/124_shift_reports_rollback_assessment.sql
+--   psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f ops/126_shift_reports_rollback_assessment.sql
 -- Output is counts only: never names, report content, notes or ids.
 --
 -- What a rollback would lose: ONLY the reports and their history. The records the
 -- reports were built from (arrivals, check-in/out, care events, incidents,
 -- observations) are never written by this module and stay as they are.
 -- Recommended path when something is wrong: turn SHIFT_REPORTS off for the agency
--- (ETNARA central) and fix forward; keep 124. Roll back only when every count is 0.
+-- (ETNARA central) and fix forward; keep 126. Roll back only when every count is 0.
 
 BEGIN TRANSACTION READ ONLY;
 
-SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '124_shift_reports.sql') AS migration_124_applied,
+SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '126_shift_reports.sql') AS migration_126_applied,
        to_regclass('public.shift_reports') IS NOT NULL AS table_present;
 
 SELECT

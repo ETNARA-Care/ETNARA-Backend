@@ -6,11 +6,11 @@ const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.ur
 const O = "11111111-2222-4333-8444-555555555555";
 const S = "66666666-7777-4888-9999-000000000000";
 
-describe("Informe de Turno F1 (124)", () => {
-  const m124 = read("migrations/124_shift_reports.sql");
-  const code = m124.replace(/--.*$/gm, "");
-  const rollback = read("ops/124_shift_reports.rollback.sql").replace(/--.*$/gm, "");
-  const assessment = read("ops/124_shift_reports_rollback_assessment.sql").replace(/--.*$/gm, "");
+describe("Informe de Turno F1 (126)", () => {
+  const m126 = read("migrations/126_shift_reports.sql");
+  const code = m126.replace(/--.*$/gm, "");
+  const rollback = read("ops/126_shift_reports.rollback.sql").replace(/--.*$/gm, "");
+  const assessment = read("ops/126_shift_reports_rollback_assessment.sql").replace(/--.*$/gm, "");
   const service = read("src/modules/shiftReports/shiftReports.service.ts");
   const phi = read("scripts/verifyPlatformPhiBoundary.ts");
 
@@ -74,6 +74,6 @@ describe("Informe de Turno F1 (124)", () => {
     expect(assessment).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER)\b/);
     expect(rollback).toMatch(/shift reports exist: rollback aborted/);
     expect(rollback).toMatch(/SHIFT_REPORTS switch history exists: rollback aborted/);
-    expect(rollback).toMatch(/DELETE FROM schema_migrations WHERE filename = '124_shift_reports\.sql'/);
+    expect(rollback).toMatch(/DELETE FROM schema_migrations WHERE filename = '126_shift_reports\.sql'/);
   });
 });

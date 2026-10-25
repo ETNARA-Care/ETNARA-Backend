@@ -9,7 +9,7 @@ import {
 } from "./shiftReports.service.js";
 
 /**
- * Informe de Turno F1 routes (124). Behind SHIFT_REPORTS (orgFeatureGate: 404
+ * Informe de Turno F1 routes (126). Behind SHIFT_REPORTS (orgFeatureGate: 404
  * FEATURE_NOT_ENABLED while off) and only for the agency's managers. Errors are
  * fixed codes; a 500 never carries internal detail or report content.
  */

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 
 /**
- * Informe de Turno F1 (migration 124).
+ * Informe de Turno F1 (migration 126).
  *
  * A report is a snapshot of records that ALREADY exist for one caregiver's visit:
  * «Llegué» (shift_arrivals), start and end (verification_events), care events of
@@ -13,7 +13,7 @@ import { withTenantContext } from "../../context/tenantContext.js";
  *
  * F1: agency managers (ORGANIZATION_ADMIN / SUPERVISOR) see drafts, which are
  * built automatically for finished visits, refresh a draft, and approve it with
- * the sections the family may see (used by F3). RLS (124) enforces the same.
+ * the sections the family may see (used by F3). RLS (126) enforces the same.
  */
 
 export class ShiftReportError extends Error {
@@ -52,7 +52,7 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
 
-/** Admins of the agency, or supervisors an admin expressly authorized (124). Independent of Finanzas/SmartMatch/Horas. */
+/** Admins of the agency, or supervisors an admin expressly authorized (126). Independent of Finanzas/SmartMatch/Horas. */
 async function assertManager(trx: Trx) {
   const ok = (await sql<{ ok: boolean }>`SELECT app_can_review_shift_reports() AS ok`.execute(trx)).rows[0]?.ok;
   if (!ok) throw new ShiftReportError("SHIFT_REPORT_FORBIDDEN", 403);

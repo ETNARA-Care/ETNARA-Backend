@@ -2,9 +2,10 @@
 
 ## Current Status
 
-## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 124)
+## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 126)
 
-- **124 (aditiva):**
+- **Numeración:** 126 (la 124 la tomó antes #218 Facturación F2.2 y la 125 es la corrección de documentos #220).
+- **126 (aditiva):**
   - SHIFT_REPORTS se suma a los interruptores, apagado para todas las agencias.
   - `shift_reports` es una foto fija de los registros existentes por visita (cuidadora y turno).
   - `shift_report_events` es el historial, de solo añadir.

@@ -1,6 +1,6 @@
 # Informe de Turno: contrato por fases
 
-F1 está implementado en la migración 124 (este PR). F2–F5 están **documentados, sin implementar**: este contrato evita retrabajo y no exige cambios de esquema, salvo donde se indica.
+F1 está implementado en la migración 126 (este PR). F2–F5 están **documentados, sin implementar**: este contrato evita retrabajo y no exige cambios de esquema, salvo donde se indica.
 
 ## Principios (todas las fases)
 - **El informe es una foto fija** de registros que ya existen: «Llegué» (`shift_arrivals`), inicio y salida (`verification_events`), registros de cuidado del turno, y los incidentes y observaciones que la cuidadora presentó durante la visita.
@@ -77,6 +77,6 @@ F1 está implementado en la migración 124 (este PR). F2–F5 están **documenta
 - No implementar sin autorización.
 
 ## Recuperación
-- **Primero:** `ops/124_shift_reports_rollback_assessment.sql` (solo lectura, solo conteos).
+- **Primero:** `ops/126_shift_reports_rollback_assessment.sql` (solo lectura, solo conteos).
 - **Camino recomendado ante un problema:** apagar SHIFT_REPORTS y corregir hacia adelante.
-- **Rollback (`ops/124_shift_reports.rollback.sql`):** solo con todo en 0. Se aborta si hay informes, historial o filas del interruptor.
+- **Rollback (`ops/126_shift_reports.rollback.sql`):** solo con todo en 0. Se aborta si hay informes, historial o filas del interruptor.

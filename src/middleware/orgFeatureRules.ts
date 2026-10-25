@@ -21,7 +21,7 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   // service and the database). Reads pass the gate so issued history stays available in
   // read-only mode; who may read is decided by billing.view (service + RLS).
   { pattern: new RegExp(`^/organizations/(${UUID})/billing(/|$)`), feature: "FACTURACION", readableWhenOff: true },
-  // Informe de Turno F1 (124): agency review and approval of shift reports.
+  // Informe de Turno F1 (126): agency review and approval of shift reports.
   { pattern: new RegExp(`^/organizations/(${UUID})/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/shift-reports$`), feature: "SHIFT_REPORTS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/shift-report-(access|reviewers)(/|$)`), feature: "SHIFT_REPORTS" },

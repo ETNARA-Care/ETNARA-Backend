@@ -1,7 +1,7 @@
--- Rollback of migration 124 (Informe de Turno F1). Run as the owner, ONLY after
--- ops/124_shift_reports_rollback_assessment.sql returns 0 for every count and the
+-- Rollback of migration 126 (Informe de Turno F1). Run as the owner, ONLY after
+-- ops/126_shift_reports_rollback_assessment.sql returns 0 for every count and the
 -- backend is back on a version without the shift-report routes.
---   psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f ops/124_shift_reports.rollback.sql
+--   psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f ops/126_shift_reports.rollback.sql
 -- It aborts (and changes nothing) when any report, history row or SHIFT_REPORTS
 -- switch row exists: those are real data, and the switch history is kept by design.
 -- Original records (arrivals, check-in/out, care events, incidents, observations)
@@ -39,6 +39,6 @@ ALTER TABLE organization_feature_events DROP CONSTRAINT IF EXISTS organization_f
 ALTER TABLE organization_feature_events ADD CONSTRAINT organization_feature_events_feature_code_check
   CHECK (feature_code IN ('SMARTMATCH', 'EN_CAMINO', 'ACTIVITY_PHOTOS', 'FINANZAS', 'FACTURACION'));
 
-DELETE FROM schema_migrations WHERE filename = '124_shift_reports.sql';
+DELETE FROM schema_migrations WHERE filename = '126_shift_reports.sql';
 
 COMMIT;
