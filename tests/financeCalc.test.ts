@@ -61,11 +61,18 @@ describe("Finanzas F1 — integer money calculation", () => {
   });
 
   it("estimates gross margin without calling it profit", () => {
-    expect(grossMargin(3000, 1800)).toEqual({ differenceCents: 1200, marginBasisPoints: 4000 });
-    expect(grossMargin(2500, 1500)).toEqual({ differenceCents: 1000, marginBasisPoints: 4000 });
-    expect(grossMargin(2800, 1700)).toEqual({ differenceCents: 1100, marginBasisPoints: 3929 });
-    expect(grossMargin(1000, 1200)).toEqual({ differenceCents: -200, marginBasisPoints: -2000 });
+    expect(grossMargin(3000, 1800)).toEqual({ differenceCents: 1200, marginBasisPoints: 4000, negative: false });
+    expect(grossMargin(2500, 1500)).toEqual({ differenceCents: 1000, marginBasisPoints: 4000, negative: false });
+    expect(grossMargin(2800, 1700)).toEqual({ differenceCents: 1100, marginBasisPoints: 3929, negative: false });
+    expect(grossMargin(1000, 1200)).toEqual({ differenceCents: -200, marginBasisPoints: -2000, negative: true });
     expect(grossMargin(0, 1500).marginBasisPoints).toBeNull();
+  });
+
+  it("flags a negative gross margin (F1.1) without hiding it, and never an even one", () => {
+    expect(grossMargin(1500, 1700)).toEqual({ differenceCents: -200, marginBasisPoints: -1333, negative: true });
+    expect(grossMargin(0, 1700)).toEqual({ differenceCents: -1700, marginBasisPoints: null, negative: true });
+    expect(grossMargin(1700, 1700)).toEqual({ differenceCents: 0, marginBasisPoints: 0, negative: false });
+    expect(grossMargin(0, 0)).toEqual({ differenceCents: 0, marginBasisPoints: null, negative: false });
   });
 
   it("parses dollar text into cents without floats", () => {

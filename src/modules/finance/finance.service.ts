@@ -50,6 +50,9 @@ export const rateCreateSchema = z.object({
   reason: z.string().trim().min(3).max(300).optional(),
 });
 export const rateEndSchema = z.object({ effectiveTo: isoDate, reason: z.string().trim().min(3).max(300) });
+export const rateCancelSchema = z.object({ reason: z.string().trim().min(3).max(300) });
+export const holidayDeactivateSchema = z.object({ reason: z.string().trim().min(3).max(300) });
+export const holidayDateSchema = isoDate;
 
 export const clientSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
@@ -109,13 +112,31 @@ function addDays(date: string, days: number): string {
 function mapDbError(error: unknown): never {
   const e = error as { code?: string; message?: string };
   const known = ["FINANCE_RATE_OVERLAP", "FINANCE_RATE_IMMUTABLE", "FINANCE_RATE_END_ONLY_EARLIER", "FINANCE_RATE_RULE_NOT_FOR_UNIT",
-    "FINANCE_SERVICE_UNIT_IMMUTABLE", "SHIFT_FINANCE_LOCKED", "FINANCE_SERVICE_NOT_FOUND"];
+    "FINANCE_SERVICE_UNIT_IMMUTABLE", "SHIFT_FINANCE_LOCKED", "FINANCE_SERVICE_NOT_FOUND",
+    "FINANCE_RATE_CANCELLED", "FINANCE_RATE_ALREADY_IN_FORCE", "FINANCE_RATE_REOPEN_INVALID",
+    "FINANCE_HOLIDAY_IMMUTABLE", "FINANCE_HOLIDAY_NO_DELETE"];
   const hit = known.find((k) => e?.message?.includes(k));
   if (hit) throw new FinanceError(hit, hit === "FINANCE_SERVICE_NOT_FOUND" ? 404 : 409);
   if (e?.code === "23505") throw new FinanceError("FINANCE_DUPLICATE", 409);
+  // A well-formed but impossible date (2026-13-45) is the caller's error, not a 500.
+  if (e?.code === "22007" || e?.code === "22008") throw new FinanceError("INVALID_DATE", 400);
   if (e?.code === "23503") throw new FinanceError("FINANCE_REFERENCE_NOT_FOUND", 404);
   if (e?.code === "42501") throw new FinanceError("FINANCE_FORBIDDEN", 403);
+  // Safety net: two administrators changing the same prices at the same instant.
+  if (e?.code === "40P01" || e?.code === "40001") throw new FinanceError("FINANCE_CONCURRENT_CHANGE", 409);
   throw error;
+}
+
+/**
+ * Every price change of a service takes the service row lock FIRST (createRate
+ * does), then the rate row. Taking them in the other order deadlocks against a
+ * concurrent createRate on the same service.
+ */
+async function lockServiceOfRate(trx: Trx, organizationId: string, rateId: string): Promise<boolean> {
+  const r = await sql<{ service_id: string }>`SELECT service_id FROM finance_rates WHERE id = ${rateId} AND organization_id = ${organizationId}`.execute(trx);
+  if (!r.rows[0]) return false;
+  await sql`SELECT 1 FROM finance_services WHERE id = ${r.rows[0].service_id} AND organization_id = ${organizationId} FOR UPDATE`.execute(trx);
+  return true;
 }
 
 async function guarded<T>(work: () => Promise<T>): Promise<T> {
@@ -136,15 +157,15 @@ export async function listServices(userId: string, organizationId: string) {
       next_change: string | null;
     }>`
       SELECT s.id, s.name, s.description, s.unit, s.active, s.updated_at,
-        (SELECT r.amount_cents FROM finance_rates r WHERE r.service_id = s.id AND r.rate_kind = 'client' AND r.scope = 'general'
+        (SELECT r.amount_cents FROM finance_rates r WHERE r.cancelled_at IS NULL AND r.service_id = s.id AND r.rate_kind = 'client' AND r.scope = 'general'
            AND r.day_type = 'standard' AND r.effective_from <= ${today}::date AND (r.effective_to IS NULL OR r.effective_to >= ${today}::date)) AS client_cents,
-        (SELECT r.amount_cents FROM finance_rates r WHERE r.service_id = s.id AND r.rate_kind = 'caregiver' AND r.scope = 'general'
+        (SELECT r.amount_cents FROM finance_rates r WHERE r.cancelled_at IS NULL AND r.service_id = s.id AND r.rate_kind = 'caregiver' AND r.scope = 'general'
            AND r.day_type = 'standard' AND r.effective_from <= ${today}::date AND (r.effective_to IS NULL OR r.effective_to >= ${today}::date)) AS caregiver_cents,
-        (SELECT count(*)::int FROM finance_rates r WHERE r.service_id = s.id AND r.scope = 'client'
+        (SELECT count(*)::int FROM finance_rates r WHERE r.cancelled_at IS NULL AND r.service_id = s.id AND r.scope = 'client'
            AND (r.effective_to IS NULL OR r.effective_to >= ${today}::date)) AS client_exceptions,
-        (SELECT count(*)::int FROM finance_rates r WHERE r.service_id = s.id AND r.scope = 'caregiver'
+        (SELECT count(*)::int FROM finance_rates r WHERE r.cancelled_at IS NULL AND r.service_id = s.id AND r.scope = 'caregiver'
            AND (r.effective_to IS NULL OR r.effective_to >= ${today}::date)) AS caregiver_exceptions,
-        (SELECT to_char(min(r.effective_from), 'YYYY-MM-DD') FROM finance_rates r WHERE r.service_id = s.id AND r.effective_from > ${today}::date) AS next_change
+        (SELECT to_char(min(r.effective_from), 'YYYY-MM-DD') FROM finance_rates r WHERE r.cancelled_at IS NULL AND r.service_id = s.id AND r.effective_from > ${today}::date) AS next_change
       FROM finance_services s
       WHERE s.organization_id = ${organizationId}
       ORDER BY s.active DESC, lower(s.name)
@@ -207,10 +228,12 @@ export async function listRates(userId: string, organizationId: string, serviceI
       SELECT r.id, r.rate_kind, r.scope, r.day_type, r.amount_cents, r.currency,
         to_char(r.effective_from, 'YYYY-MM-DD') AS effective_from, to_char(r.effective_to, 'YYYY-MM-DD') AS effective_to,
         r.min_minutes, r.rounding_minutes, r.half_day_policy, r.half_day_amount_cents, r.reason, r.end_reason,
-        r.created_at, r.ended_at, r.billing_client_id, c.full_name AS client_name,
+        r.created_at, r.ended_at, r.cancelled_at, r.cancel_reason, xu.email AS cancelled_by_email,
+        r.billing_client_id, c.full_name AS client_name,
         r.organization_worker_membership_id AS membership_id, w.display_name AS caregiver_name,
         cu.email AS created_by_email,
-        CASE WHEN r.effective_from > ${today}::date THEN 'future'
+        CASE WHEN r.cancelled_at IS NOT NULL THEN 'cancelled'
+             WHEN r.effective_from > ${today}::date THEN 'future'
              WHEN r.effective_to IS NOT NULL AND r.effective_to < ${today}::date THEN 'past'
              ELSE 'current' END AS status
       FROM finance_rates r
@@ -218,6 +241,7 @@ export async function listRates(userId: string, organizationId: string, serviceI
       LEFT JOIN organization_worker_memberships m ON m.id = r.organization_worker_membership_id
       LEFT JOIN workers w ON w.id = m.worker_id
       LEFT JOIN users cu ON cu.id = r.created_by_user_id
+      LEFT JOIN users xu ON xu.id = r.cancelled_by_user_id
       WHERE r.service_id = ${serviceId} AND r.organization_id = ${organizationId}
       ORDER BY r.rate_kind, r.scope, c.full_name NULLS FIRST, w.display_name NULLS FIRST, r.day_type, r.effective_from DESC
     `.execute(trx);
@@ -269,6 +293,7 @@ export async function createRate(userId: string, organizationId: string, service
         AND scope = ${scope} AND day_type = ${input.dayType}
         AND billing_client_id IS NOT DISTINCT FROM ${clientId}::uuid
         AND organization_worker_membership_id IS NOT DISTINCT FROM ${membershipId}::uuid
+        AND cancelled_at IS NULL
       ORDER BY effective_from
     `.execute(trx);
     if (lineVersions.rows.some((v) => v.effective_from === from)) throw new FinanceError("FINANCE_RATE_SAME_START", 409);
@@ -281,20 +306,24 @@ export async function createRate(userId: string, organizationId: string, service
     const effectiveTo = next ? addDays(next.effective_from, -1) : null;
     if ((covering || from < today) && !input.reason) throw new FinanceError("FINANCE_RATE_REASON_REQUIRED", 400);
 
+    // The id of the new version is known up front so the version it closes can point to it
+    // (F1.1: cancelling a scheduled change reopens exactly that version).
+    const newId = (await sql<{ id: string }>`SELECT gen_random_uuid()::text AS id`.execute(trx)).rows[0].id;
     let closed: Record<string, unknown> | null = null;
     if (covering) {
       closed = (await sql<Record<string, unknown>>`
         UPDATE finance_rates SET effective_to = ${addDays(from, -1)}::date, ended_by_user_id = ${userId}, ended_at = now(),
-          end_reason = ${input.reason ?? "Nueva tarifa"}
+          end_reason = ${input.reason ?? "Nueva tarifa"},
+          superseded_by_rate_id = ${newId}::uuid, superseded_previous_to = ${covering.effective_to}::date
         WHERE id = ${covering.id} AND organization_id = ${organizationId}
         RETURNING id, service_id, rate_kind, scope, amount_cents, to_char(effective_from, 'YYYY-MM-DD') AS effective_from,
                   to_char(effective_to, 'YYYY-MM-DD') AS effective_to
       `.execute(trx)).rows[0];
     }
     const created = (await sql<Record<string, unknown> & { id: string }>`
-      INSERT INTO finance_rates (organization_id, service_id, rate_kind, scope, billing_client_id, organization_worker_membership_id,
+      INSERT INTO finance_rates (id, organization_id, service_id, rate_kind, scope, billing_client_id, organization_worker_membership_id,
         day_type, amount_cents, effective_from, effective_to, min_minutes, rounding_minutes, half_day_policy, half_day_amount_cents, reason, created_by_user_id)
-      VALUES (${organizationId}, ${serviceId}, ${input.rateKind}, ${scope}, ${clientId}, ${membershipId}, ${input.dayType},
+      VALUES (${newId}::uuid, ${organizationId}, ${serviceId}, ${input.rateKind}, ${scope}, ${clientId}, ${membershipId}, ${input.dayType},
         ${input.amountCents}, ${from}::date, ${effectiveTo}::date, ${input.minMinutes ?? null}, ${input.roundingMinutes ?? null},
         ${input.halfDayPolicy ?? null}, ${input.halfDayAmountCents ?? null}, ${input.reason ?? null}, ${userId})
       RETURNING id, service_id, rate_kind, scope, billing_client_id, organization_worker_membership_id, day_type, amount_cents,
@@ -309,11 +338,13 @@ export async function createRate(userId: string, organizationId: string, service
 
 export async function endRate(userId: string, organizationId: string, rateId: string, input: z.infer<typeof rateEndSchema>) {
   return inFinance(userId, organizationId, (trx) => guarded(async () => {
-    const rate = (await sql<{ id: string; service_id: string; effective_from: string; effective_to: string | null; amount_cents: number }>`
-      SELECT id, service_id, to_char(effective_from, 'YYYY-MM-DD') AS effective_from, to_char(effective_to, 'YYYY-MM-DD') AS effective_to, amount_cents
+    if (!(await lockServiceOfRate(trx, organizationId, rateId))) throw new FinanceError("FINANCE_RATE_NOT_FOUND", 404);
+    const rate = (await sql<{ id: string; service_id: string; effective_from: string; effective_to: string | null; amount_cents: number; cancelled: boolean }>`
+      SELECT id, service_id, to_char(effective_from, 'YYYY-MM-DD') AS effective_from, to_char(effective_to, 'YYYY-MM-DD') AS effective_to, amount_cents,
+        cancelled_at IS NOT NULL AS cancelled
       FROM finance_rates WHERE id = ${rateId} AND organization_id = ${organizationId} FOR UPDATE`.execute(trx)).rows[0];
     if (!rate) throw new FinanceError("FINANCE_RATE_NOT_FOUND", 404);
-    await sql`SELECT 1 FROM finance_services WHERE id = ${rate.service_id} FOR UPDATE`.execute(trx);
+    if (rate.cancelled) throw new FinanceError("FINANCE_RATE_CANCELLED", 409);
     const today = await todayPR(trx);
     // The past is never shortened: the earliest end is yesterday (no rate from today on).
     if (input.effectiveTo < rate.effective_from || input.effectiveTo < addDays(today, -1)) throw new FinanceError("FINANCE_RATE_END_INVALID", 400);
@@ -326,6 +357,62 @@ export async function endRate(userId: string, organizationId: string, rateId: st
     await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_ENDED", entityType: "finance_rate", entityId: rateId, previousValue: rate, newValue: after });
     await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_ENDED", entityType: "finance_rate", entityId: rateId });
     return after;
+  }));
+}
+
+/**
+ * F1.1 — cancel a price change that has not taken effect yet (its first day is
+ * after today, Puerto Rico). The version is kept, marked cancelled, and stops
+ * counting everywhere; the version it had closed is reopened up to where it
+ * ended before (never past the cancelled version's own end, so later scheduled
+ * versions are untouched). Reason required. The database enforces the same
+ * rules (migration 121), also for the table owner.
+ */
+export async function cancelRate(userId: string, organizationId: string, rateId: string, input: z.infer<typeof rateCancelSchema>) {
+  return inFinance(userId, organizationId, (trx) => guarded(async () => {
+    if (!(await lockServiceOfRate(trx, organizationId, rateId))) throw new FinanceError("FINANCE_RATE_NOT_FOUND", 404);
+    const before = (await sql<Record<string, unknown> & { service_id: string; effective_from: string; effective_to: string | null; cancelled_at: string | null }>`
+      SELECT id, service_id, rate_kind, scope, billing_client_id, organization_worker_membership_id, day_type, amount_cents,
+        to_char(effective_from, 'YYYY-MM-DD') AS effective_from, to_char(effective_to, 'YYYY-MM-DD') AS effective_to, cancelled_at
+      FROM finance_rates WHERE id = ${rateId} AND organization_id = ${organizationId} FOR UPDATE`.execute(trx)).rows[0];
+    if (!before) throw new FinanceError("FINANCE_RATE_NOT_FOUND", 404);
+    if (before.cancelled_at) throw new FinanceError("FINANCE_RATE_CANCELLED", 409);
+    const today = await todayPR(trx);
+    if (before.effective_from <= today) throw new FinanceError("FINANCE_RATE_ALREADY_IN_FORCE", 409);
+
+    const cancelled = (await sql<Record<string, unknown>>`
+      UPDATE finance_rates SET cancelled_at = now(), cancelled_by_user_id = ${userId}, cancel_reason = ${input.reason}
+      WHERE id = ${rateId} AND organization_id = ${organizationId}
+      RETURNING id, service_id, rate_kind, scope, billing_client_id, organization_worker_membership_id, day_type, amount_cents,
+        to_char(effective_from, 'YYYY-MM-DD') AS effective_from, to_char(effective_to, 'YYYY-MM-DD') AS effective_to,
+        cancelled_at, cancel_reason`.execute(trx)).rows[0];
+
+    const previous = (await sql<Record<string, unknown> & { id: string; effective_to: string | null; superseded_previous_to: string | null }>`
+      SELECT id, service_id, amount_cents, to_char(effective_from, 'YYYY-MM-DD') AS effective_from,
+        to_char(effective_to, 'YYYY-MM-DD') AS effective_to, to_char(superseded_previous_to, 'YYYY-MM-DD') AS superseded_previous_to
+      FROM finance_rates WHERE superseded_by_rate_id = ${rateId} AND organization_id = ${organizationId} AND cancelled_at IS NULL
+      FOR UPDATE`.execute(trx)).rows[0] ?? null;
+    let reopened: Record<string, unknown> | null = null;
+    if (previous) {
+      const a = previous.superseded_previous_to;
+      const b = before.effective_to;
+      const restoreTo = a === null ? b : b === null ? a : (a < b ? a : b);
+      const note = `Restablecida al cancelar el cambio programado: ${input.reason}`.slice(0, 300);
+      reopened = (await sql<Record<string, unknown>>`
+        UPDATE finance_rates SET effective_to = ${restoreTo}::date,
+          superseded_by_rate_id = NULL, superseded_previous_to = NULL,
+          ended_at = CASE WHEN ${restoreTo}::date IS NULL THEN NULL ELSE now() END,
+          ended_by_user_id = CASE WHEN ${restoreTo}::date IS NULL THEN NULL ELSE ${userId}::uuid END,
+          end_reason = CASE WHEN ${restoreTo}::date IS NULL THEN NULL ELSE ${note} END
+        WHERE id = ${previous.id} AND organization_id = ${organizationId}
+        RETURNING id, service_id, amount_cents, to_char(effective_from, 'YYYY-MM-DD') AS effective_from,
+          to_char(effective_to, 'YYYY-MM-DD') AS effective_to`.execute(trx)).rows[0];
+      await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_REOPENED", entityType: "finance_rate", entityId: previous.id, previousValue: previous, newValue: reopened });
+      await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_REOPENED", entityType: "finance_rate", entityId: previous.id });
+    }
+    await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_CANCELLED", entityType: "finance_rate", entityId: rateId, previousValue: before, newValue: cancelled });
+    await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_RATE_CANCELLED", entityType: "finance_rate", entityId: rateId });
+    return { rate: cancelled, reopened };
   }));
 }
 
@@ -356,6 +443,7 @@ async function resolveLine(trx: Trx, organizationId: string, serviceId: string, 
       to_char(effective_from, 'YYYY-MM-DD') AS effective_from
     FROM finance_rates
     WHERE organization_id = ${organizationId} AND service_id = ${serviceId} AND rate_kind = ${kind}
+      AND cancelled_at IS NULL
       AND effective_from <= ${date}::date AND (effective_to IS NULL OR effective_to >= ${date}::date)
       AND (scope = 'general'
            OR (${kind} = 'client' AND scope = 'client' AND billing_client_id = ${targetId}::uuid)
@@ -379,7 +467,7 @@ async function resolveInTrx(trx: Trx, organizationId: string, params: { serviceI
   const service = (await sql<{ id: string; name: string; unit: FinanceUnit; active: boolean }>`
     SELECT id, name, unit, active FROM finance_services WHERE id = ${params.serviceId} AND organization_id = ${organizationId}`.execute(trx)).rows[0];
   if (!service) throw new FinanceError("FINANCE_SERVICE_NOT_FOUND", 404);
-  const holidayRow = (await sql<{ name: string }>`SELECT name FROM finance_holidays WHERE organization_id = ${organizationId} AND holiday_date = ${params.date}::date`.execute(trx)).rows[0];
+  const holidayRow = (await sql<{ name: string }>`SELECT name FROM finance_holidays WHERE organization_id = ${organizationId} AND holiday_date = ${params.date}::date AND active`.execute(trx)).rows[0];
   const billing = await resolveLine(trx, organizationId, service.id, "client", params.billingClientId ?? null, params.date, Boolean(holidayRow));
   const pay = await resolveLine(trx, organizationId, service.id, "caregiver", params.membershipId ?? null, params.date, Boolean(holidayRow));
   const toRules = (r: ResolvedRate) => ({
@@ -491,19 +579,59 @@ export async function linkClientRecipient(userId: string, organizationId: string
 
 export async function listHolidays(userId: string, organizationId: string) {
   return inFinance(userId, organizationId, async (trx) => ({
-    holidays: (await sql`SELECT to_char(holiday_date, 'YYYY-MM-DD') AS date, name FROM finance_holidays
-      WHERE organization_id = ${organizationId} ORDER BY holiday_date`.execute(trx)).rows,
+    holidays: (await sql`SELECT to_char(h.holiday_date, 'YYYY-MM-DD') AS date, h.name, h.active,
+        h.deactivated_at, h.deactivation_reason, u.email AS deactivated_by_email
+      FROM finance_holidays h LEFT JOIN users u ON u.id = h.deactivated_by_user_id
+      WHERE h.organization_id = ${organizationId} ORDER BY h.active DESC, h.holiday_date`.execute(trx)).rows,
   }));
 }
 
+/** Adds a holiday; a date that was deactivated before is reactivated (with the new name). */
 export async function addHoliday(userId: string, organizationId: string, input: z.infer<typeof holidaySchema>) {
   return inFinance(userId, organizationId, (trx) => guarded(async () => {
+    const existing = (await sql<{ name: string; active: boolean; deactivation_reason: string | null }>`
+      SELECT name, active, deactivation_reason FROM finance_holidays
+      WHERE organization_id = ${organizationId} AND holiday_date = ${input.date}::date FOR UPDATE`.execute(trx)).rows[0];
+    if (existing?.active) throw new FinanceError("FINANCE_DUPLICATE", 409);
+    if (existing) {
+      const h = (await sql<Record<string, unknown>>`
+        UPDATE finance_holidays SET active = true, name = ${input.name}, deactivated_at = NULL, deactivated_by_user_id = NULL,
+          deactivation_reason = NULL, updated_by_user_id = ${userId}
+        WHERE organization_id = ${organizationId} AND holiday_date = ${input.date}::date
+        RETURNING to_char(holiday_date, 'YYYY-MM-DD') AS date, name, active`.execute(trx)).rows[0];
+      await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_REACTIVATED", entityType: "organization", entityId: organizationId, previousValue: { date: input.date, ...existing }, newValue: h });
+      await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_REACTIVATED", entityType: "organization", entityId: organizationId });
+      return h;
+    }
     const h = (await sql<Record<string, unknown>>`INSERT INTO finance_holidays (organization_id, holiday_date, name, created_by_user_id)
       VALUES (${organizationId}, ${input.date}::date, ${input.name}, ${userId})
-      RETURNING to_char(holiday_date, 'YYYY-MM-DD') AS date, name`.execute(trx)).rows[0];
+      RETURNING to_char(holiday_date, 'YYYY-MM-DD') AS date, name, active`.execute(trx)).rows[0];
     await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_ADDED", entityType: "organization", entityId: organizationId, newValue: h });
     await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_ADDED", entityType: "organization", entityId: organizationId });
     return h;
+  }));
+}
+
+/**
+ * F1.1 — a holiday added by mistake is deactivated (reason required), never
+ * deleted: from then on that day uses the normal rates. It can be reactivated
+ * by adding the date again.
+ */
+export async function deactivateHoliday(userId: string, organizationId: string, date: string, input: z.infer<typeof holidayDeactivateSchema>) {
+  return inFinance(userId, organizationId, (trx) => guarded(async () => {
+    const before = (await sql<{ date: string; name: string; active: boolean }>`
+      SELECT to_char(holiday_date, 'YYYY-MM-DD') AS date, name, active FROM finance_holidays
+      WHERE organization_id = ${organizationId} AND holiday_date = ${date}::date FOR UPDATE`.execute(trx)).rows[0];
+    if (!before) throw new FinanceError("FINANCE_HOLIDAY_NOT_FOUND", 404);
+    if (!before.active) throw new FinanceError("FINANCE_HOLIDAY_ALREADY_INACTIVE", 409);
+    const after = (await sql<Record<string, unknown>>`
+      UPDATE finance_holidays SET active = false, deactivated_at = now(), deactivated_by_user_id = ${userId},
+        deactivation_reason = ${input.reason}, updated_by_user_id = ${userId}
+      WHERE organization_id = ${organizationId} AND holiday_date = ${date}::date
+      RETURNING to_char(holiday_date, 'YYYY-MM-DD') AS date, name, active, deactivation_reason`.execute(trx)).rows[0];
+    await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_DEACTIVATED", entityType: "organization", entityId: organizationId, previousValue: before, newValue: after });
+    await recordFinancialAudit(trx, { organizationId, actorUserId: userId, action: "FINANCE_HOLIDAY_DEACTIVATED", entityType: "organization", entityId: organizationId });
+    return after;
   }));
 }
 
@@ -535,7 +663,7 @@ export async function listCaregiverRates(userId: string, organizationId: string)
             'amountCents', r.amount_cents, 'dayType', r.day_type, 'effectiveFrom', to_char(r.effective_from, 'YYYY-MM-DD'),
             'effectiveTo', to_char(r.effective_to, 'YYYY-MM-DD')) ORDER BY s.name, r.effective_from)
           FROM finance_rates r JOIN finance_services s ON s.id = r.service_id
-          WHERE r.organization_worker_membership_id = m.id AND r.scope = 'caregiver'
+          WHERE r.organization_worker_membership_id = m.id AND r.scope = 'caregiver' AND r.cancelled_at IS NULL
             AND (r.effective_to IS NULL OR r.effective_to >= ${today}::date)), '[]') AS exceptions
       FROM organization_worker_memberships m
       JOIN workers w ON w.id = m.worker_id

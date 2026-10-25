@@ -2,6 +2,24 @@
 
 ## Current Status
 
+## 2026-10-25 — Finanzas F1.1 backend: cancelar cambios programados, desactivar feriados, margen negativo (claude/finanzas-f1-1)
+
+- 121 (solo columnas nuevas y guards; shifts, timesheets, worker_financial_rates y el check-out intactos):
+  finance_rates.superseded_by_rate_id / superseded_previous_to (qué versión cerró a cuál, relleno exacto por misma
+  transacción) y cancelled_* (cancelar solo si empieza después de hoy PR; la versión cancelada se conserva y deja de
+  contar; se reabre la anterior hasta donde terminaba). finance_holidays.active + deactivated_* (motivo; nunca se borra;
+  añadir la fecha otra vez la reactiva). Guards también para el dueño de la base.
+- POST /finance/rates/:id/cancel y /finance/holidays/:date/deactivate (motivo, admin, FINANZAS). grossMargin.negative
+  (aviso, nunca bloqueo). Fechas imposibles → 400 INVALID_DATE.
+- Corrección de interbloqueo: cancel y end toman primero el bloqueo del servicio (como createRate). endRate tenía el
+  orden invertido desde F1 (raro: dos administradores a la vez). 40P01/40001 → 409 FINANCE_CONCURRENT_CHANGE.
+- Numerada 121: el 120 lo usa #214 (invitaciones familiares), así no chocan sea cual sea el orden.
+- verifyFinanceF11 22/22 (control con el orden de bloqueo anterior: 7 errores 500 en C09b); F1 28/28; F0 30/30;
+  121 aplicada sobre datos de F1 (relleno correcto); rollback probado (aborta con cancelaciones; sin ellas deja la
+  función de la 119 idéntica).
+- verifyGate7Journey A3: la prueba calcula si cada visita cae en el día PR (fallaba entre 23:00 y 24:00 PR). Sin
+  cambios en En Camino.
+
 ## 2026-10-24 — Finanzas F1 backend: servicios y tarifas diferenciadas (claude/finanzas-f1-servicios-tarifas)
 
 - 119 (solo tablas nuevas; shifts, timesheets, worker_financial_rates y el check-out intactos): finance_services
