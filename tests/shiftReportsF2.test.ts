@@ -12,6 +12,12 @@ describe("Informe de Turno F2 (128)", () => {
   const service = read("src/modules/shiftReports/shiftReports.service.ts");
   const caregiver = read("src/modules/shiftReports/shiftReportsCaregiver.service.ts");
 
+  it("the backfill never touches approved reports (production had approved F1 reports; 126 guard)", () => {
+    const backfill = code.match(/UPDATE shift_reports SET review_deadline_at[^;]*;/)?.[0] ?? "";
+    expect(backfill).toMatch(/WHERE status = 'DRAFT'/);
+    expect(code).not.toMatch(/UPDATE (public\.)?shift_reports SET[^;]*WHERE (?![^;]*status)[^;]*;\s*CREATE INDEX/);
+  });
+
   it("one builder in the database; the TS builder is gone; source records only read", () => {
     expect(code).toMatch(/FUNCTION app_shift_report_build_content\(p_org uuid, p_shift uuid, p_membership uuid\)/);
     expect(service).not.toMatch(/async function buildContent/);
