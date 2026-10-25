@@ -33,9 +33,11 @@ ALTER TABLE shift_reports ADD CONSTRAINT shift_reports_caregiver_note_len
 ALTER TABLE shift_reports DROP CONSTRAINT IF EXISTS shift_reports_caregiver_note_pair;
 ALTER TABLE shift_reports ADD CONSTRAINT shift_reports_caregiver_note_pair
   CHECK ((caregiver_note IS NULL) = (caregiver_note_at IS NULL));
--- Existing (F1) reports: 24 h after the real end recorded in their snapshot.
+-- Existing (F1) DRAFT reports: 24 h after the real end recorded in their snapshot.
+-- Approved reports are never touched (the 126 guard forbids it, and they need no review
+-- window): their deadline stays NULL, so the caregiver can read them but never edit them.
 UPDATE shift_reports SET review_deadline_at = (content->'times'->'end'->>'at')::timestamptz + interval '24 hours'
-WHERE review_deadline_at IS NULL AND content->'times'->'end'->>'at' IS NOT NULL;
+WHERE status = 'DRAFT' AND review_deadline_at IS NULL AND content->'times'->'end'->>'at' IS NOT NULL;
 CREATE INDEX IF NOT EXISTS shift_reports_member_idx ON shift_reports (organization_worker_membership_id, generated_at DESC);
 
 -- 2. Guard: approved reports never change (now including the caregiver columns) ------------
