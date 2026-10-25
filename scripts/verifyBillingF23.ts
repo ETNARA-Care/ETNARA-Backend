@@ -449,6 +449,41 @@ async function main() {
     check("E20 void copy: the ANULADA watermark is centred on the page (translate to 306,396 then rotate)",
       backVoidBody.toString("latin1").includes("1 0 0 1 306 396 cm") && !backBody.toString("latin1").includes("1 0 0 1 306 396 cm"), "");
 
+    // E21 Independent daily copy (append-only, verified) and recovery from it.
+    const bk = await import("../src/modules/billing/billingBackup.js");
+    const backupBucket = `${bucket}-copy`;
+    await objStore.send(new CreateBucketCommand({ Bucket: backupBucket }));
+    const srcRef = { s3: objStore, bucket }; const dstRef = { s3: objStore, bucket: backupBucket };
+    const expected = (await q<{ key: string; sha256: string }>(bk.EXPECTED_OBJECTS_SQL)).rows;
+    // E08 recreated the bucket on purpose, so some earlier PDFs are really gone: the copy must report exactly those.
+    const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+    const absent: string[] = [];
+    for (const o of expected) await objStore.send(new HeadObjectCommand({ Bucket: bucket, Key: o.key })).catch(() => absent.push(o.key));
+    const present = expected.length - absent.length;
+    const copy1 = await bk.dailyCopy(srcRef, dstRef, expected, "2026-10-25");
+    const copy2 = await bk.dailyCopy(srcRef, dstRef, expected, "2026-10-26");
+    const sameBucket = await bk.dailyCopy(srcRef, srcRef, expected, "x").then(() => "ran", (e: Error) => e.message);
+    const victim = docsBefore.find((d) => d.kind === "original")!;
+    await objStore.send(new DeleteObjectCommand({ Bucket: bucket, Key: victim.object_key }));
+    const ops2 = new Kysely<unknown>({ dialect: new PostgresDialect({ pool: new pg.Pool({ connectionString: adminUrl, max: 1 }) }) });
+    const fromCopy = await ops2.transaction().execute((trx) => recoverInvoiceDocument(trx as never, { organizationId: orgA, invoiceId: d1, kind: "original", actorUserId: adm.userId, apply: true, copies: { backup: dstRef, source: srcRef } }));
+    await ops2.destroy();
+    const afterCopy = await fetch(`${base}${I}/${d1}/pdf`, { headers: { Authorization: `Bearer ${adm.token}` } });
+    const afterCopyBody = Buffer.from(await afterCopy.arrayBuffer());
+    // A copy is never overwritten: tamper with one copy, then run again → reported as a conflict, bytes untouched.
+    const other = expected.find((o) => o.key !== victim.object_key && !absent.includes(o.key))!;
+    await objStore.send(new PutObjectCommand({ Bucket: backupBucket, Key: `billing/${other.key}`, Body: Buffer.from("x"), Metadata: { sha256: "0".repeat(64) } }));
+    const copy3 = await bk.dailyCopy(srcRef, dstRef, expected, "2026-10-27");
+    const tamperedCopy = Buffer.from(await (await objStore.send(new GetObjectCommand({ Bucket: backupBucket, Key: `billing/${other.key}` }))).Body!.transformToByteArray()).toString();
+    const manifest = JSON.parse(Buffer.from(await (await objStore.send(new GetObjectCommand({ Bucket: backupBucket, Key: "billing/manifests/2026-10-25.json" }))).Body!.transformToByteArray()).toString());
+    check("E21 daily copy: every invoice PDF and logo copied once with its hash, objects missing at the source reported (second run: all present); same bucket refused; a lost PDF is restored from the copy (same SHA-256); a tampered copy is reported, never overwritten; manifest lists keys and hashes only",
+      present >= 3 && copy1.copied === present && JSON.stringify([...copy1.missingOrAlteredInSource].sort()) === JSON.stringify([...absent].sort())
+        && copy2.alreadyPresent === present && copy2.copied === 0
+        && sameBucket === "BACKUP_SAME_BUCKET" && fromCopy.status === "RECOVERED" && (fromCopy as { method?: string }).method === "daily_copy"
+        && afterCopy.status === 200 && h(afterCopyBody) === victim.sha256 && copy3.conflictingCopy.includes(other.key) && tamperedCopy === "x"
+        && Array.isArray(manifest.objects) && manifest.objects.every((o: Json) => Object.keys(o).sort().join() === "key,sha256") && !/Cliente|Agencia|cents/i.test(JSON.stringify(manifest)),
+      `expected=${expected.length} c1=${JSON.stringify(copy1)} c2=${copy2.alreadyPresent}/${copy2.copied} same=${sameBucket} rec=${JSON.stringify(fromCopy)} after=${afterCopy.status} c3=${JSON.stringify(copy3.conflictingCopy)}`);
+
     const fives = all.filter((r) => r.status === 500);
     check("E18 no 500 in the whole run", fives.length === 0, fives.map((r) => JSON.stringify(r.body)).join(" "));
   } finally {

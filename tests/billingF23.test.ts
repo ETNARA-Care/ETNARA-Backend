@@ -103,3 +103,13 @@ describe("F2.3 — PDF rebuild and watermark", () => {
     expect(read("src/modules/billing/issue.service.ts")).toMatch(/voided: kind === "void_copy" && inv\.status === "voided"/);
   });
 });
+
+describe("F2.3 — independent daily copy", () => {
+  const b = read("src/modules/billing/billingBackup.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+  it("never deletes, never overwrites a copy, refuses the same bucket, and lives outside the backend's credentials", () => {
+    expect(b).not.toMatch(/DeleteObject/);
+    expect(b).toMatch(/if \(existing !== undefined\) \{ report\.conflictingCopy\.push\(o\.key\); continue; \}/);
+    expect(b).toMatch(/BACKUP_SAME_BUCKET/);
+    expect(read("src/config/env.ts")).not.toMatch(/BILLING_BACKUP_STORAGE/);
+  });
+});

@@ -3,6 +3,7 @@ import type { Trx } from "./billing.service.js";
 import { PDF_GENERATOR_VERSION, renderInvoicePdf } from "./billingPdf.js";
 import { getBillingObjectVerified, putBillingObject, sha256 } from "./billingStorage.js";
 import { pdfInput } from "./issue.service.js";
+import { restoreFromCopy, type BucketRef } from "./billingBackup.js";
 import { recordFinanceEvent } from "../finance/financeEvents.js";
 
 /**
@@ -20,16 +21,21 @@ import { recordFinanceEvent } from "../finance/financeEvents.js";
 export type RecoveryOutcome =
   | { status: "INTACT" }
   | { status: "RECOVERABLE" } // dry run: the rebuild matches; nothing written
-  | { status: "RECOVERED" }
+  | { status: "RECOVERED"; method: "daily_copy" | "verified_rebuild" }
   | { status: "REFUSED"; reason: "DOCUMENT_NOT_FOUND" | "GENERATOR_CHANGED" | "REBUILD_MISMATCH" | "WRITE_NOT_VERIFIED" };
 
-export async function recoverInvoiceDocument(trx: Trx, input: { organizationId: string; invoiceId: string; kind: "original" | "void_copy"; actorUserId: string; apply: boolean }): Promise<RecoveryOutcome> {
+export async function recoverInvoiceDocument(trx: Trx, input: { organizationId: string; invoiceId: string; kind: "original" | "void_copy"; actorUserId: string; apply: boolean; copies?: { backup: BucketRef; source: BucketRef } }): Promise<RecoveryOutcome> {
   const doc = (await sql<{ object_key: string; sha256: string; generator_version: string }>`
     SELECT object_key, sha256, generator_version FROM invoice_documents
     WHERE organization_id = ${input.organizationId} AND invoice_id = ${input.invoiceId} AND kind = ${input.kind}`.execute(trx)).rows[0];
   if (!doc) return { status: "REFUSED", reason: "DOCUMENT_NOT_FOUND" };
   const intact = await getBillingObjectVerified(doc.object_key, doc.sha256).then(() => true, () => false);
   if (intact) return { status: "INTACT" };
+  if (input.copies && input.apply && await restoreFromCopy(input.copies.backup, input.copies.source, doc.object_key, doc.sha256)) {
+    await recordFinanceEvent(trx, { organizationId: input.organizationId, actorUserId: input.actorUserId, action: "FINANCE_BILLING_PDF_RECOVERED",
+      entityType: "invoice", entityId: input.invoiceId, newValue: { kind: input.kind, sha256: doc.sha256, method: "daily_copy" } });
+    return { status: "RECOVERED", method: "daily_copy" };
+  }
   if (doc.generator_version !== PDF_GENERATOR_VERSION) return { status: "REFUSED", reason: "GENERATOR_CHANGED" };
   const rebuilt = await renderInvoicePdf(await pdfInput(trx, input.organizationId, input.invoiceId, input.kind));
   if (sha256(rebuilt) !== doc.sha256) return { status: "REFUSED", reason: "REBUILD_MISMATCH" };
@@ -39,5 +45,5 @@ export async function recoverInvoiceDocument(trx: Trx, input: { organizationId: 
   if (!ok) return { status: "REFUSED", reason: "WRITE_NOT_VERIFIED" };
   await recordFinanceEvent(trx, { organizationId: input.organizationId, actorUserId: input.actorUserId, action: "FINANCE_BILLING_PDF_RECOVERED",
     entityType: "invoice", entityId: input.invoiceId, newValue: { kind: input.kind, sha256: doc.sha256, method: "verified_rebuild" } });
-  return { status: "RECOVERED" };
+  return { status: "RECOVERED", method: "verified_rebuild" };
 }

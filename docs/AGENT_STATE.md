@@ -22,7 +22,11 @@
   datos congelados (instantáneas, líneas inmutables con el nombre del cuidador congelado, logo por hash; el
   original nunca lleva la marca): billingRecovery + scripts/billingRecoverDocument.ts reconstruyen un PDF perdido
   y solo lo escriben en la MISMA clave si su SHA-256 coincide (si no, se restaura de la copia diaria). No toca la
-  factura. verifyBillingF23 20/20 (E19 recuperación, E20 marca centrada).
+  factura.
+- Copia diaria independiente (billingBackup + scripts/billingDailyCopy.ts): solo añade, verifica cada SHA-256, nunca
+  borra ni sobrescribe, manifiesto diario con claves y huellas; credenciales del bucket de copia solo en el trabajo de
+  copia (nunca en el backend). La recuperación prueba primero la copia y luego la reconstrucción verificada.
+  NO configurada en producción (requiere autorización). verifyBillingF23 21/21 (E19 recuperación, E20 marca, E21 copia).
 - Sin autorización: fusionar, desplegar, crear el bucket de producción.
 
 ## 2026-10-25 — Informe de Turno F2: revisión de la cuidadora (claude/shift-report-f2, migración 128)
