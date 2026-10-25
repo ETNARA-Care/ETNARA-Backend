@@ -2,6 +2,24 @@
 
 ## Current Status
 
+## 2026-10-25 — Facturación Premium F2.3: emisión, numeración, PDF, almacenamiento privado, anulación (claude/facturacion-f2-3)
+
+- 127 (aditiva; depende de 124): billing_settings (perfil emisor, show_caregiver_name apagado, retención ≥ 6 años,
+  logo, validación contributiva con nota obligatoria), invoice_series (prefijo FAC por defecto, contador por agencia
+  bloqueado dentro de la transacción de emisión: sin huecos, nunca baja, prefijo fijo tras la primera emisión),
+  invoices emitidas/anuladas con instantáneas congeladas, invoice_documents (original / void_copy, SHA-256,
+  inmutables), feriados ya facturados no se pueden cambiar (HOLIDAY_INVOICED). Rollback protegido (aborta con datos).
+- Emitir: una transacción (bloqueadores → 409 ISSUE_BLOCKED: SETTINGS_INCOMPLETE, TAX_CONFIG_NOT_VALIDATED,
+  STORAGE_NOT_CONFIGURED; número; instantáneas; PDF; objeto privado; documento; eventos). Anular con motivo libera
+  las reservas (invoice_voided) y genera copia ANULADA; la factura emitida nunca se edita ni se borra.
+- PDF (pdfkit, carta, español) solo desde las instantáneas; sin datos clínicos; nombre del cuidador solo si la
+  agencia lo activa. Almacenamiento: bucket propio BILLING_STORAGE_* (rechaza compartir con documentos/fotos),
+  descarga autenticada verificando SHA-256, sin URLs firmadas, Cache-Control no-store, auditada.
+- Sin IVU precargado ni exenciones supuestas: la emisión real queda bloqueada hasta que la agencia valide su
+  configuración contributiva y exista el bucket (no creado: requiere autorización de infraestructura).
+- verifyBillingF23 18/18 (E01–E18, con moto), en los dos flujos de CI; unitarias 588; batería completa en verde.
+- Sin autorización: fusionar, desplegar, crear el bucket de producción.
+
 ## 2026-10-25 — Informe de Turno F2: revisión de la cuidadora (claude/shift-report-f2, migración 128)
 
 - **Auditoría final de F1:** sin fallos. 45/45 con casos nuevos: dos cuidadoras en un turno, incidentes de otra cuidadora o de otro día, horas por cuidadora, aprobado congelado.

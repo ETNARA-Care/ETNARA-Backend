@@ -60,6 +60,17 @@ const envSchema = z.object({
     .default("15728640")
     .transform((value) => Number.parseInt(value, 10))
     .pipe(z.number().int().positive().max(20 * 1024 * 1024)),
+  // Facturación F2.3: invoice PDFs and logos in their OWN private bucket (A6). Never falls back
+  // to STORAGE_* or PHOTO_STORAGE_*; without it, issuing answers BILLING_STORAGE_NOT_CONFIGURED.
+  BILLING_STORAGE_ENDPOINT: z.string().url().optional(),
+  BILLING_STORAGE_REGION: z.string().min(1).optional(),
+  BILLING_STORAGE_BUCKET: z.string().min(1).optional(),
+  BILLING_STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
+  BILLING_STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  BILLING_STORAGE_FORCE_PATH_STYLE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_SENDER_ADDRESS: z.string().email().default("invitations@etnara.care"),
   EMAIL_SENDER_NAME: z.string().default("ETNARA Care"),

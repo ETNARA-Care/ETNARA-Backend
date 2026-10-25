@@ -114,7 +114,8 @@ function mapDbError(error: unknown): never {
   const known = ["FINANCE_RATE_OVERLAP", "FINANCE_RATE_IMMUTABLE", "FINANCE_RATE_END_ONLY_EARLIER", "FINANCE_RATE_RULE_NOT_FOR_UNIT",
     "FINANCE_SERVICE_UNIT_IMMUTABLE", "SHIFT_FINANCE_LOCKED", "FINANCE_SERVICE_NOT_FOUND",
     "FINANCE_RATE_CANCELLED", "FINANCE_RATE_ALREADY_IN_FORCE", "FINANCE_RATE_REOPEN_INVALID",
-    "FINANCE_HOLIDAY_IMMUTABLE", "FINANCE_HOLIDAY_NO_DELETE"];
+    "FINANCE_HOLIDAY_IMMUTABLE", "FINANCE_HOLIDAY_NO_DELETE",
+    "HOLIDAY_INVOICED"]; // F2.3 (127): a holiday used by a live issued invoice stays active
   const hit = known.find((k) => e?.message?.includes(k));
   if (hit) throw new FinanceError(hit, hit === "FINANCE_SERVICE_NOT_FOUND" ? 404 : 409);
   if (e?.code === "23505") throw new FinanceError("FINANCE_DUPLICATE", 409);

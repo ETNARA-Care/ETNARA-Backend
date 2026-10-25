@@ -237,6 +237,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyDocumentAccess.ts
 
+      - name: PostgreSQL Facturación F2.3 issue, consecutive numbering, private PDF (local S3), void, immutability, isolation
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyBillingF23.ts
+
       - name: Password recovery by e-mail (no enumeration, timing, single use, sessions closed)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
