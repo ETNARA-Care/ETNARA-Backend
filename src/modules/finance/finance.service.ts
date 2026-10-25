@@ -341,8 +341,14 @@ export interface ResolvedRate { rateId: string; amountCents: number; source: "cl
 /**
  * Billing: client's rate for the service → general billing rate.
  * Pay: caregiver's exception for the service → general pay rate.
- * On an agency holiday, holiday versions are looked up first in that same
- * order, then the standard ones. Billing never reads pay rates and vice versa.
+ * On an agency holiday (Rafa, 24-oct): what was agreed with that client (or
+ * that caregiver) prevails over the general holiday rate. Order:
+ *   1. holiday rate of that client / caregiver
+ *   2. normal rate of that client / caregiver
+ *   3. general holiday rate
+ *   4. general normal rate
+ * On other days holiday versions are ignored. Billing never reads pay rates
+ * and vice versa.
  */
 async function resolveLine(trx: Trx, organizationId: string, serviceId: string, kind: "client" | "caregiver", targetId: string | null, date: string, holiday: boolean): Promise<ResolvedRate | null> {
   const rows = await sql<RateRow>`
@@ -355,7 +361,8 @@ async function resolveLine(trx: Trx, organizationId: string, serviceId: string, 
            OR (${kind} = 'client' AND scope = 'client' AND billing_client_id = ${targetId}::uuid)
            OR (${kind} = 'caregiver' AND scope = 'caregiver' AND organization_worker_membership_id = ${targetId}::uuid))
   `.execute(trx);
-  const rank = (r: RateRow) => (r.day_type === "holiday" ? (holiday ? 0 : 99) : 2) + (r.scope === "general" ? 1 : 0);
+  const rank = (r: RateRow) => (r.day_type === "holiday" && !holiday ? 99 : 0)
+    + (r.scope === "general" ? 2 : 0) + (r.day_type === "holiday" ? 0 : 1);
   const best = rows.rows.filter((r) => rank(r) < 99).sort((a, b) => rank(a) - rank(b))[0];
   if (!best) return null;
   return {

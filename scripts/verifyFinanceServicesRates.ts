@@ -275,15 +275,26 @@ async function main() {
       gap.status === 201 && gapLater.status === 400 && gapFill.status === 201 && gapBefore.status === 201 && gapBefore.body.rate?.effective_to === day(4),
       `${gap.status} ${gapLater.status}:${gapLater.body.error} ${gapFill.status} ${gapBefore.status} to=${gapBefore.body.rate?.effective_to}`);
 
-    // S14 Agency holidays use holiday versions first.
+    // S14 Holidays: what was agreed with a client (or caregiver) prevails over the
+    // general holiday rate, unless that client (caregiver) has its own holiday rate.
     const hol = await call("POST", `${F}/holidays`, adm.token, { date: day(25), name: "Feriado de prueba" });
     const holRate = await rate(ids.home, { rateKind: "client", dayType: "holiday", amountCents: 3750, effectiveFrom: today });
-    const onHoliday = await resolve({ serviceId: ids.home, date: day(25), billingClientId: clientX.id });
-    const notHoliday = await resolve({ serviceId: ids.home, date: day(24), billingClientId: clientX.id });
-    check("S14 on an agency holiday the holiday rate (3750) applies; the day before the normal client price (2200)",
-      hol.status === 201 && holRate.status === 201 && onHoliday.body.billing?.amountCents === 3750 && onHoliday.body.billing?.dayType === "holiday"
-        && onHoliday.body.holiday === "Feriado de prueba" && notHoliday.body.billing?.amountCents === 2200,
-      `${onHoliday.body.billing?.amountCents}/${onHoliday.body.billing?.dayType} prev=${notHoliday.body.billing?.amountCents}`);
+    const holPay = await rate(ids.home, { rateKind: "caregiver", dayType: "holiday", amountCents: 2000, effectiveFrom: today });
+    const xHoliday = await resolve({ serviceId: ids.home, date: day(25), billingClientId: clientX.id, membershipId: cg2.owm });
+    const yHoliday = await resolve({ serviceId: ids.home, date: day(25), billingClientId: clientY.id, membershipId: cg.owm });
+    const xBefore = await resolve({ serviceId: ids.home, date: day(24), billingClientId: clientX.id });
+    const xHolRate = await rate(ids.home, { rateKind: "client", scope: "client", billingClientId: clientX.id, dayType: "holiday", amountCents: 2900, effectiveFrom: today });
+    const xHoliday2 = await resolve({ serviceId: ids.home, date: day(25), billingClientId: clientX.id });
+    check("S14 holiday: client X keeps its agreed 2200 over the general holiday 3750 (and caregiver 2 its 1700 over 2000); client Y and caregiver 1 get the general holiday 3750/2000; X's own holiday rate 2900 wins; the day before X pays 2200",
+      hol.status === 201 && holRate.status === 201 && holPay.status === 201 && xHolRate.status === 201
+        && xHoliday.body.holiday === "Feriado de prueba"
+        && xHoliday.body.billing?.amountCents === 2200 && xHoliday.body.billing?.source === "client" && xHoliday.body.billing?.dayType === "standard"
+        && xHoliday.body.pay?.amountCents === 1700 && xHoliday.body.pay?.source === "caregiver"
+        && yHoliday.body.billing?.amountCents === 3750 && yHoliday.body.billing?.dayType === "holiday"
+        && yHoliday.body.pay?.amountCents === 2000 && yHoliday.body.pay?.dayType === "holiday"
+        && xHoliday2.body.billing?.amountCents === 2900 && xHoliday2.body.billing?.dayType === "holiday" && xHoliday2.body.billing?.source === "client"
+        && xBefore.body.billing?.amountCents === 2200,
+      `X=${xHoliday.body.billing?.amountCents}/${xHoliday.body.billing?.source} cg2=${xHoliday.body.pay?.amountCents} Y=${yHoliday.body.billing?.amountCents} cg=${yHoliday.body.pay?.amountCents} Xhol=${xHoliday2.body.billing?.amountCents} prev=${xBefore.body.billing?.amountCents}`);
 
     // S15 Calculations per unit through the API.
     const h8 = await resolve({ serviceId: ids.hospital, minutes: 480 });
@@ -315,14 +326,20 @@ async function main() {
     await q(`UPDATE verification_events SET occurred_at = now() - interval '2 hours' WHERE shift_id = $1 AND event_type = 'check_in'`, [sh.id]);
     const co = await call("POST", `/organizations/${orgA}/shifts/${sh.id}/check-out`, cg.token, {});
     const tsId = (await q<{ id: string }>("SELECT id FROM timesheets WHERE shift_id=$1", [sh.id])).rows[0]?.id;
-    await call("PUT", `/organizations/${orgA}/financial-rates/${cg.owm}`, adm.token, { payRateCents: 1500, billRateCents: 2500, currency: "USD" });
+    await call("PUT", `/organizations/${orgA}/financial-rates/${cg.owm}`, adm.token, { payRateCents: 1450, billRateCents: 2450, currency: "USD" });
     const appr = await call("POST", `/organizations/${orgA}/timesheets/${tsId}/review`, adm.token, { decision: "approved" });
     const lockedPut = await call("PUT", `/organizations/${orgA}/shifts/${sh.id}/finance`, adm.token, { serviceId: ids.hospital });
     const afterLock = await call("GET", `/organizations/${orgA}/shifts/${sh.id}/finance`, adm.token);
-    check("S17 check-in 201 / check-out 201 / approval 200 unchanged; then changing the shift's service is 409 SHIFT_FINANCE_LOCKED; approved minutes used",
-      ci.status === 201 && co.status === 201 && appr.status === 200 && lockedPut.status === 409 && lockedPut.body.error === "SHIFT_FINANCE_LOCKED"
+    // Hours are still approved with the caregiver's legacy hourly rates (058), never with the new service rates.
+    const approved = (await q<{ approved_minutes: number; pay_rate_cents_snapshot: number; bill_rate_cents_snapshot: number; pay_amount_cents: number; bill_amount_cents: number }>(
+      "SELECT approved_minutes, pay_rate_cents_snapshot, bill_rate_cents_snapshot, pay_amount_cents, bill_amount_cents FROM timesheets WHERE id=$1", [tsId])).rows[0];
+    const legacyOk = approved?.pay_rate_cents_snapshot === 1450 && approved?.bill_rate_cents_snapshot === 2450
+      && approved.pay_amount_cents === Math.round((approved.approved_minutes * 1450) / 60)
+      && approved.bill_amount_cents === Math.round((approved.approved_minutes * 2450) / 60);
+    check("S17 check-in 201 / check-out 201 / approval 200 unchanged and still with the legacy hourly rates (1450/2450, not the service rates); then changing the shift's service is 409 SHIFT_FINANCE_LOCKED; approved minutes used",
+      ci.status === 201 && co.status === 201 && appr.status === 200 && legacyOk && lockedPut.status === 409 && lockedPut.body.error === "SHIFT_FINANCE_LOCKED"
         && afterLock.body.locked === true && afterLock.body.effective?.minutesSource === "approved_timesheet",
-      `${ci.status}/${co.status}/${appr.status} lock=${lockedPut.status}:${lockedPut.body.error} src=${afterLock.body.effective?.minutesSource}`);
+      `${ci.status}/${co.status}/${appr.status} legacy=${approved?.pay_rate_cents_snapshot}/${approved?.bill_rate_cents_snapshot} ${approved?.pay_amount_cents}/${approved?.bill_amount_cents} lock=${lockedPut.status}:${lockedPut.body.error} src=${afterLock.body.effective?.minutesSource}`);
 
     // S18 Shifts and legacy rates untouched.
     const shiftColumnsAfter = (await q<{ c: string }>("SELECT string_agg(column_name, ',' ORDER BY column_name) c FROM information_schema.columns WHERE table_name='shifts'")).rows[0].c;
@@ -340,7 +357,7 @@ async function main() {
     const cg2Row = (cgList.body.caregivers ?? []).find((c: Json) => c.membership_id === cg2.owm);
     const cgRow = (cgList.body.caregivers ?? []).find((c: Json) => c.membership_id === cg.owm);
     check("S19 «Por cuidador» shows legacy hourly rates next to per-service exceptions",
-      cgList.status === 200 && cgRow?.legacy_pay_rate_cents === 1500 && (cg2Row?.exceptions ?? []).some((e: Json) => e.amountCents === 1700 && e.serviceId === ids.home),
+      cgList.status === 200 && cgRow?.legacy_pay_rate_cents === 1450 && (cg2Row?.exceptions ?? []).some((e: Json) => e.amountCents === 1700 && e.serviceId === ids.home),
       `${cgList.status} legacy=${cgRow?.legacy_pay_rate_cents} cg2=${(cg2Row?.exceptions ?? []).length}`);
 
     // S20 Agency with FINANZAS off: shifts unchanged, finance 404.
