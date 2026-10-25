@@ -58,6 +58,10 @@ function summarizeType(notificationType: string): string {
       return "La cuidadora comenzó el turno";
     case "SHIFT_COMPLETED":
       return "La cuidadora finalizó el turno";
+    case "SHIFT_REPORT_READY":
+      return "Tu informe de turno está listo para revisar";
+    case "SHIFT_REPORT_RETURNED":
+      return "La agencia devolvió tu informe de turno";
     case "CREDENTIAL_EXPIRING":
       return "Credencial próxima a vencer";
     case "CREDENTIAL_EXPIRED":

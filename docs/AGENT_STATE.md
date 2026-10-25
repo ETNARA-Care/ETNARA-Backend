@@ -2,6 +2,13 @@
 
 ## Current Status
 
+## 2026-10-25 — Informe de Turno F2: revisión de la cuidadora (claude/shift-report-f2, migración 128)
+
+- **Auditoría final de F1:** sin fallos. 45/45 con casos nuevos: dos cuidadoras en un turno, incidentes de otra cuidadora o de otro día, horas por cuidadora, aprobado congelado.
+- **128:** constructor único en la base; borrador automático y aviso SHIFT_REPORT_READY; lectura de la cuidadora solo de lo suyo (RLS); observación final y envío dentro de 24 h (funciones protegidas); devolución con nota (SHIFT_REPORT_RETURNED); plazo vencido = sigue DRAFT para la agencia; aprobado inmutable con las columnas nuevas.
+- **TS:** se quitó el constructor TS. El servicio de la agencia usa `app_shift_report_ensure` y `refresh`, y se añade return. Nuevo servicio de la cuidadora y worker `startShiftReportWorker`.
+- **Pruebas:** verifyShiftReportsF2 25/25 y F1 45/45; batería completa en una base nueva, incluidas las suites con datos demo; unitarias 607/607; rollback abortado con datos, limpio sin ellos y reaplicado.
+
 ## 2026-10-25 — Informe de Turno F1 (claude/shift-report-f1, migración 126)
 
 - **Numeración:** 126 (la 124 la tomó antes #218 Facturación F2.2 y la 125 es la corrección de documentos #220).

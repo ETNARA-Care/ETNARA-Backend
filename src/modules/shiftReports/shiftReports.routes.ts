@@ -5,8 +5,9 @@ import { InvalidTenantContextError, MembershipNotActiveError } from "../../conte
 import { respondInternalError } from "../../observability/internalError.js";
 import {
   ShiftReportError, approveSchema, approveShiftReport, getShiftReports, grantShiftReportReviewer, listSchema, listShiftReportReviewers,
-  listShiftReports, myShiftReportAccess, refreshShiftReport, reviewerGrantSchema, revokeShiftReportReviewer,
+  listShiftReports, myShiftReportAccess, refreshShiftReport, returnSchema, returnShiftReport, reviewerGrantSchema, revokeShiftReportReviewer,
 } from "./shiftReports.service.js";
+import { getMyShiftReport, listMyShiftReports, observationSchema, setMyObservation, submitMyShiftReport } from "./shiftReportsCaregiver.service.js";
 
 /**
  * Informe de Turno F1 routes (126). Behind SHIFT_REPORTS (orgFeatureGate: 404
@@ -43,6 +44,19 @@ router.post("/organizations/:organizationId/shift-reports/:reportId/refresh", re
   handle(200, (req, org) => refreshShiftReport(user(req), org, id(req, "reportId"))));
 router.post("/organizations/:organizationId/shift-reports/:reportId/approve", requireAuth,
   handle(200, (req, org) => approveShiftReport(user(req), org, id(req, "reportId"), approveSchema.parse(req.body ?? {}))));
+
+router.post("/organizations/:organizationId/shift-reports/:reportId/return", requireAuth,
+  handle(200, (req, org) => returnShiftReport(user(req), org, id(req, "reportId"), returnSchema.parse(req.body ?? {}))));
+
+// F2 (128): the caregiver's own reports.
+router.get("/organizations/:organizationId/me/shift-reports", requireAuth,
+  handle(200, (req, org) => listMyShiftReports(user(req), org)));
+router.get("/organizations/:organizationId/me/shift-reports/:reportId", requireAuth,
+  handle(200, (req, org) => getMyShiftReport(user(req), org, id(req, "reportId"))));
+router.post("/organizations/:organizationId/me/shift-reports/:reportId/observation", requireAuth,
+  handle(200, (req, org) => setMyObservation(user(req), org, id(req, "reportId"), observationSchema.parse(req.body ?? {}))));
+router.post("/organizations/:organizationId/me/shift-reports/:reportId/submit", requireAuth,
+  handle(200, (req, org) => submitMyShiftReport(user(req), org, id(req, "reportId"))));
 
 router.get("/organizations/:organizationId/shift-report-access", requireAuth,
   handle(200, (req, org) => myShiftReportAccess(user(req), org)));
