@@ -146,7 +146,7 @@ async function main() {
     const before = await fingerprint();
 
     // ------------------------------------------------------------ G: generation from existing records
-    const g1 = await call("GET", `${S}/shifts/${s1}/reports`, A.admin.token);
+    const g1 = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.admin.token);
     const report = g1.body.reports?.[0] as Json | undefined;
     const c = (report?.content ?? {}) as Json;
     const dbTimes = (await q<Json>(`SELECT (SELECT occurred_at FROM shift_arrivals WHERE shift_id=$1) AS a,
@@ -171,32 +171,32 @@ async function main() {
     check("G6 incident and observation filed during the visit are included", c.incidents?.length === 1 && c.observations?.length === 1);
     check("G7 no plan tasks or pending items are produced (F5 postponed)", !("tasks" in c) && !("pending" in c) && !JSON.stringify(c).includes("pending"));
     check("G8 GENERATED is in the history", report?.history?.length === 1 && report.history[0].type === "GENERATED" && report.history[0].actor?.userId === A.admin.userId);
-    const g2 = await call("GET", `${S}/shifts/${s1}/reports`, A.admin.token);
+    const g2 = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.admin.token);
     const n = (await q<{ r: number; e: number }>(`SELECT (SELECT count(*)::int FROM shift_reports WHERE shift_id=$1) AS r,
       (SELECT count(*)::int FROM shift_report_events e JOIN shift_reports r ON r.id=e.shift_report_id WHERE r.shift_id=$1) AS e`, [s1])).rows[0];
     check("G9 opening it again creates nothing new (idempotent)", g2.status === 200 && n.r === 1 && n.e === 1, `${n.r}/${n.e}`);
 
     const s2 = await shift();
     await call("POST", `${S}/shifts/${s2}/check-in`, cg, { verificationMethodCode: "CAREGIVER_SESSION" });
-    const open = await call("GET", `${S}/shifts/${s2}/reports`, A.admin.token);
+    const open = await call("GET", `${S}/shifts/${s2}/shift-reports`, A.admin.token);
     check("G10 a visit still in progress gets no report", open.status === 200 && open.body.reports?.length === 0 && open.body.openVisits === 1, JSON.stringify(open.body).slice(0, 80));
     await call("POST", `${S}/shifts/${s2}/check-out`, cg, {});
-    const empty = (await call("GET", `${S}/shifts/${s2}/reports`, A.admin.token)).body.reports?.[0]?.content as Json | undefined;
+    const empty = (await call("GET", `${S}/shifts/${s2}/shift-reports`, A.admin.token)).body.reports?.[0]?.content as Json | undefined;
     const allEmpty = empty && Object.values(empty.sections as Json).every((l) => Array.isArray(l) && l.length === 0);
     check("G11 a visit without records gives empty sections and no arrival (nothing invented)",
       Boolean(allEmpty) && empty!.times?.arrival === null && empty!.incidents?.length === 0 && empty!.observations?.length === 0 && empty!.totals?.careEvents === 0);
 
     // ------------------------------------------------------------ P: who can read
-    const sup = await call("GET", `${S}/shifts/${s1}/reports`, A.supervisor.token);
+    const sup = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.supervisor.token);
     check("P1 a supervisor of the agency can review (manager)", sup.status === 200 && sup.body.reports?.length === 1);
-    const cgApi = await call("GET", `${S}/shifts/${s1}/reports`, cg);
+    const cgApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, cg);
     const cgList = await call("GET", `${S}/shift-reports`, cg);
     const cgDb = await asRuntime(A.cg.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
     check("P2 the caregiver cannot read reports in F1 (API 403, database 0 rows)", cgApi.status === 403 && cgList.status === 403 && cgDb === 0, `${cgApi.status}/${cgList.status}/${cgDb}`);
-    const famApi = await call("GET", `${S}/shifts/${s1}/reports`, A.family.token);
+    const famApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.family.token);
     const famDb = await asRuntime(A.family.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
     check("P3 the family cannot read drafts (API 403, database 0 rows)", famApi.status === 403 && famDb === 0, `${famApi.status}/${famDb}`);
-    const bApi = await call("GET", `${S}/shifts/${s1}/reports`, B.admin.token);
+    const bApi = await call("GET", `${S}/shifts/${s1}/shift-reports`, B.admin.token);
     const bApprove = await call("POST", `/organizations/${orgB}/shift-reports/${report?.id}/approve`, B.admin.token, { expectedGeneratedAt: report?.generatedAt });
     const bDb = await asRuntime(B.admin.userId, orgB, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports WHERE organization_id=$1", [orgA])).rows[0].n);
     check("P4 another agency neither reads nor approves (403/404, database 0 rows)", [403, 404].includes(bApi.status) && bApprove.status === 404 && bDb === 0, `${bApi.status}/${bApprove.status}/${bDb}`);
@@ -211,7 +211,7 @@ async function main() {
     const adminDb = await asRuntime(A.admin.userId, orgA, false, async (cl) => (await cl.query("SELECT count(*)::int AS n FROM shift_reports")).rows[0].n);
     check("P5 ETNARA central reads no report or history (rows exist: the agency sees them)", plat === "0/0" && Number(adminDb) >= 2, `${plat} vs ${adminDb}`);
     await q(`UPDATE organization_memberships SET status='revoked' WHERE id=$1`, [A.admin2.orgMembershipId]);
-    const revoked = await call("GET", `${S}/shifts/${s1}/reports`, A.admin2.token);
+    const revoked = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.admin2.token);
     check("P6 a manager whose membership was revoked loses access", [401, 403].includes(revoked.status), String(revoked.status));
 
     // ------------------------------------------------------------ A: refresh and approval
@@ -268,7 +268,7 @@ async function main() {
 
     // ------------------------------------------------------------ F: switch
     await q(`UPDATE organization_features SET enabled=false WHERE organization_id=$1 AND feature_code='SHIFT_REPORTS'`, [orgA]);
-    const off = await call("GET", `${S}/shifts/${s1}/reports`, A.admin.token);
+    const off = await call("GET", `${S}/shifts/${s1}/shift-reports`, A.admin.token);
     const offList = await call("GET", `${S}/shift-reports`, A.admin.token);
     const offInsert = await ownerError(`INSERT INTO shift_reports (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,content,version) VALUES ($1,$2,$3,$4,'{}',1)`,
       [orgA, s1, A.cg.membershipId, rA]);

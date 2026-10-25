@@ -58,7 +58,7 @@ describe("Informe de Turno F1 (124)", () => {
   it("routes are behind SHIFT_REPORTS", () => {
     expect(gatedFeatureFor(`/organizations/${O}/shift-reports`)).toMatchObject({ organizationId: O, feature: "SHIFT_REPORTS" });
     expect(gatedFeatureFor(`/organizations/${O}/shift-reports/${S}/approve`, "POST")).toMatchObject({ feature: "SHIFT_REPORTS" });
-    expect(gatedFeatureFor(`/organizations/${O}/shifts/${S}/reports`)).toMatchObject({ feature: "SHIFT_REPORTS" });
+    expect(gatedFeatureFor(`/organizations/${O}/shifts/${S}/shift-reports`)).toMatchObject({ feature: "SHIFT_REPORTS" });
   });
 
   it("recovery: read-only assessment; rollback aborts when reports or switch history exist", () => {

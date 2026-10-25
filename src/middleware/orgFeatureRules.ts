@@ -23,7 +23,7 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   { pattern: new RegExp(`^/organizations/(${UUID})/billing(/|$)`), feature: "FACTURACION", readableWhenOff: true },
   // Informe de Turno F1 (124): agency review and approval of shift reports.
   { pattern: new RegExp(`^/organizations/(${UUID})/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/reports$`), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/shift-reports$`), feature: "SHIFT_REPORTS" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {

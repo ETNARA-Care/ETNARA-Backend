@@ -210,7 +210,7 @@ async function historyOf(trx: Trx, reportId: string) {
     .map((e) => ({ type: e.event_type, at: iso(e.created_at), actor: e.actor_user_id ? { userId: e.actor_user_id, email: e.email } : null, note: e.note, details: e.details }));
 }
 
-/** GET /shifts/:shiftId/reports: the shift's reports, creating missing drafts for finished visits. */
+/** GET /shifts/:shiftId/shift-reports: the shift's reports, creating missing drafts for finished visits. */
 export async function getShiftReports(userId: string, organizationId: string, shiftId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);

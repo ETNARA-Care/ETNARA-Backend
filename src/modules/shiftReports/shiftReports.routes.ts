@@ -36,7 +36,7 @@ const user = (req: AuthenticatedRequest) => req.auth!.userId;
 
 router.get("/organizations/:organizationId/shift-reports", requireAuth,
   handle(200, (req, org) => listShiftReports(user(req), org, listSchema.parse(req.query))));
-router.get("/organizations/:organizationId/shifts/:shiftId/reports", requireAuth,
+router.get("/organizations/:organizationId/shifts/:shiftId/shift-reports", requireAuth,
   handle(200, (req, org) => getShiftReports(user(req), org, id(req, "shiftId"))));
 router.post("/organizations/:organizationId/shift-reports/:reportId/refresh", requireAuth,
   handle(200, (req, org) => refreshShiftReport(user(req), org, id(req, "reportId"))));

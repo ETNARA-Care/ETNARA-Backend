@@ -12,7 +12,7 @@
   - Solo gestores de la agencia (`app_is_org_manager`); `platform_phi_deny` en las dos tablas; GRANT explícitos sin DELETE.
 - **API:**
   - `GET /shift-reports` (crea borradores de visitas terminadas en los últimos 7 días);
-  - `GET /shifts/:id/reports`;
+  - `GET /shifts/:id/shift-reports`;
   - `POST /shift-reports/:id/refresh` (solo DRAFT);
   - `POST /shift-reports/:id/approve` (`expectedGeneratedAt`, secciones familiares, resumen).
 - **Contrato F2–F5:** `docs/SHIFT_REPORTS.md`.

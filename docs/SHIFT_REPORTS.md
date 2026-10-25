@@ -38,7 +38,7 @@ F1 está implementado en la migración 124 (este PR). F2–F5 están **documenta
 
 ## API F1 (detrás de SHIFT_REPORTS; solo gestores de la agencia)
 - `GET /organizations/:org/shift-reports?status=DRAFT|APPROVED`: crea los borradores que falten de visitas terminadas en los últimos 7 días (máximo 50) y lista.
-- `GET /organizations/:org/shifts/:shiftId/reports`: informes del turno con historial; crea el borrador si falta.
+- `GET /organizations/:org/shifts/:shiftId/shift-reports`: informes del turno con historial; crea el borrador si falta.
 - `POST /organizations/:org/shift-reports/:id/refresh`: solo DRAFT. Reconstruye el contenido (por ejemplo, un registro sin conexión que llegó tarde).
 - `POST /organizations/:org/shift-reports/:id/approve {expectedGeneratedAt, familySections?, agencySummary?}`: rechaza con 409 SHIFT_REPORT_CHANGED si el borrador cambió desde que se leyó.
 
