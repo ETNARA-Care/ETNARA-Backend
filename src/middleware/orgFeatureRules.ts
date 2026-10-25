@@ -1,5 +1,5 @@
 /** Which routes belong to a pilot feature (pure; used by orgFeatureGate). */
-export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION";
+export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }[] = [
@@ -21,6 +21,9 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   // service and the database). Reads pass the gate so issued history stays available in
   // read-only mode; who may read is decided by billing.view (service + RLS).
   { pattern: new RegExp(`^/organizations/(${UUID})/billing(/|$)`), feature: "FACTURACION", readableWhenOff: true },
+  // Informe de Turno F1 (124): agency review and approval of shift reports.
+  { pattern: new RegExp(`^/organizations/(${UUID})/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/reports$`), feature: "SHIFT_REPORTS" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {

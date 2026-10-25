@@ -25,6 +25,10 @@ on:
       - 'ops/121_finance_rate_cancel_holiday_deactivate.rollback.sql'
       - 'scripts/verifyBillingF21.ts'
       - 'ops/123_billing_foundation.rollback.sql'
+      - 'migrations/124_shift_reports.sql'
+      - 'src/modules/shiftReports/**'
+      - 'scripts/verifyShiftReportsF1.ts'
+      - 'ops/124_shift_reports.rollback.sql'
       - 'src/modules/billing/**'
       - 'src/modules/timesheets/**'
       - 'src/modules/finance/**'
@@ -143,6 +147,9 @@ jobs:
 
       - name: Facturación F2.1 premium switch, permissions, last manager, central designation, read-only, isolation
         run: npx tsx scripts/verifyBillingF21.ts
+
+      - name: Informe de Turno F1 (drafts from existing records, approval, immutability, isolation, central denied)
+        run: npx tsx scripts/verifyShiftReportsF1.ts
 
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts

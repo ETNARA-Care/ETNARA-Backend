@@ -15,6 +15,8 @@ const tables = [
   "message_thread_participants", "messages", "stored_files",
   "documents", "document_versions", "shifts", "assignments",
   "assignment_history", "verification_events", "verification_overrides",
+  // Informe de Turno (124): report content and its history.
+  "shift_reports", "shift_report_events",
 ] as const;
 
 const client = new pg.Client({ connectionString: url });

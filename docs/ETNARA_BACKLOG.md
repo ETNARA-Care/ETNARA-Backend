@@ -2,6 +2,8 @@
 
 ## In Progress
 
+- Informe de Turno: F1 en PR (124), borrador. F2 (revisión de la cuidadora, 24 h), F3 (familia y PDF en el servidor) y F4 (avisos y correcciones) documentados en docs/SHIFT_REPORTS.md. F5 pospuesta.
+
 ### BILL-F2.1 — Facturación Premium F2.1 (FACTURACION switch, billing permissions, security)
 
 - Status: backend PR (migration 123 + verifyBillingF21 12/12); frontend PR next. Not authorized: merge, deploy, FACTURACION on for any agency, F3/F4.
