@@ -115,15 +115,14 @@ export async function ownWorkerMembershipId(trx: Trx): Promise<string | null> {
  * Raw care-event rows (with note_text and structured_data) for staff only:
  * managers, or the caregiver assigned to BOTH that event's shift and person
  * (care_events_worker_assigned_only, 018), plus the records a caregiver wrote
- * herself, so a completed visit still shows her own records. Family reads go through the family
+ * herself while her membership in this agency is active, so a completed visit
+ * still shows her own records (history), never other caregivers' records. Family reads go through the family
  * timeline, which summarizes events. Expects the care_events alias `ce`.
  */
 export function eventStaffVisibleSql(): RawBuilder<boolean> {
   return sql<boolean>`(app_is_org_manager()
     OR (app_worker_has_shift_assignment(ce.shift_id) AND app_worker_has_recipient_assignment(ce.care_recipient_id))
-    OR EXISTS (SELECT 1 FROM organization_worker_memberships owm_acl JOIN workers w_acl ON w_acl.id = owm_acl.worker_id
-               WHERE owm_acl.id = ce.organization_worker_membership_id
-                 AND w_acl.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid))`;
+    OR app_is_own_worker_membership(ce.organization_worker_membership_id))`;
 }
 
 /**

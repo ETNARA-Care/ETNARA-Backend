@@ -45,6 +45,8 @@ const KNOWN_RLS_GAPS: Record<string, string> = {
   "cg-assigned: nombre visible en su visita terminada": "G1: tras la visita, RLS oculta el nombre de la persona a la cuidadora",
   "cg-est-admin: asignar en su establecimiento": "G3",
   "cg-est-admin: ver asignaciones de su establecimiento": "G3",
+  "cg-assigned: visita terminada abre sin plan actual": "G1: tras la visita, RLS oculta a la cuidadora su turno pasado, así que el plan responde 404 en vez de null (el portal lo tolera)",
+  "cg-former: visita terminada: sus registros (membresía activa)": "G2",
 };
 
 async function main() {
@@ -283,8 +285,27 @@ async function main() {
 
   // 076 stays closed after the visit: no profile or care plan of the person
   await expectDenied("visita terminada: sin ficha de la persona", cgA, "GET", `${A}/care-recipients/${r1}`);
-  await expectDenied("visita terminada: sin plan de cuidado", cgA, "GET", `${A}/care-recipients/${r1}/care-plan`);
-  await expectAllowed("plan de cuidado (cuidadora asignada ahora)", cgX, "GET", `${A}/care-recipients/${r2}/care-plan`);
+  // Her past visit still opens (200), but without the person's current plan.
+  const planMark = `PLAN-SECRETO-${tag}`;
+  for (const r of [r1, r2]) await q(`INSERT INTO care_plans (organization_id,care_recipient_id,version,plan_details,status) VALUES ($1,$2,1,$3::jsonb,'active')`, [orgA, r, JSON.stringify({ notes: planMark })]);
+  const pastPlan = await call("GET", `${A}/care-recipients/${r1}/care-plan`, cgA.token);
+  results.push({ name: "cg-assigned: visita terminada abre sin plan actual", pass: pastPlan.status === 200 && pastPlan.body.carePlan === null && !pastPlan.text.includes(planMark),
+    detail: `GET care-plan -> ${pastPlan.status} carePlan=${pastPlan.body.carePlan === null ? "null" : "presente"}` });
+  const nowPlan = await call("GET", `${A}/care-recipients/${r2}/care-plan`, cgX.token);
+  results.push({ name: "cg-x: plan de cuidado (cuidadora asignada ahora)", pass: nowPlan.status === 200 && nowPlan.text.includes(planMark),
+    detail: `GET care-plan -> ${nowPlan.status}` });
+  await expectDenied("plan de cuidado de persona nunca visitada", cgA, "GET", `${A}/care-recipients/${r2}/care-plan`);
+  await expectDenied("plan de cuidado de otra agencia", adminB, "GET", `${A}/care-recipients/${r1}/care-plan`);
+
+  // Own records are history only while her worker membership in this agency is active.
+  const cgL = await person("cg-former", orgA, ["WORKER"], true);
+  await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,role_in_shift,response_status) VALUES ($1,$2,$3,$4,'caregiver','accepted')`, [orgA, s1, cgL.membershipId, r1]);
+  const eL = (await q<{ id: string }>(`INSERT INTO care_events (organization_id,shift_id,care_recipient_id,organization_worker_membership_id,care_event_type_id,note_text) VALUES ($1,$2,$3,$4,$5,'nota L') RETURNING id`, [orgA, s1, r1, cgL.membershipId, noteType])).rows[0].id;
+  await expectPresent("visita terminada: sus registros (membresía activa)", cgL, `${A}/shifts/${s1}/care-events`, [eL]);
+  await expectAbsent("visita terminada: no ve registros de otra cuidadora", cgL, `${A}/shifts/${s1}/care-events`, [e1]);
+  await q(`UPDATE organization_worker_memberships SET status='inactive' WHERE id=$1`, [cgL.membershipId]);
+  const gone = await call("GET", `${A}/shifts/${s1}/care-events`, cgL.token);
+  results.push({ name: "cg-former: membresía inactiva no ve sus registros", pass: gone.status >= 400 || !gone.text.includes(eL), detail: `GET care-events -> ${gone.status}` });
 
   // Establishment administrator (a caregiver who runs one establishment)
   const loc = (await q<{ id: string }>(`INSERT INTO locations (organization_id,name) VALUES ($1,$2) RETURNING id`, [orgA, `Hogar ${tag}`])).rows[0].id;
