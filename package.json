@@ -1,7 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "ETNARA Care backend (proprietary)",
   "main": "index.js",
   "scripts": {
     "test": "tsc -p tsconfig.test.json && vitest run",
@@ -12,7 +12,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1131.0",
     "@aws-sdk/s3-request-presigner": "^3.1131.0",
@@ -34,5 +34,6 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
-  "type": "module"
+  "type": "module",
+  "private": true
 }
