@@ -289,6 +289,24 @@ async function main() {
   await expectDenied("plan de cuidado de persona nunca visitada", cgA, "GET", `${A}/care-recipients/${r2}/care-plan`);
   await expectDenied("plan de cuidado de otra agencia", adminB, "GET", `${A}/care-recipients/${r1}/care-plan`);
 
+  // Provisional history window (131, app_worker_own_shift): a visit that started more than 30 days
+  // ago. The code alone (superuser) still shows it; with app_runtime RLS hides the shift, so her
+  // visit list and that visit's records stop showing. The future 24 h policy (after the pilot)
+  // replaces this window in code, RLS and the portal together.
+  const sOld = (await q<{ id: string }>(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now()-interval '31 days',now()-interval '31 days'+interval '4 hours','completed') RETURNING id`, [orgA, r1])).rows[0].id;
+  await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,role_in_shift,response_status) VALUES ($1,$2,$3,$4,'caregiver','accepted')`, [orgA, sOld, cgA.membershipId, r1]);
+  const eOld = (await q<{ id: string }>(`INSERT INTO care_events (organization_id,shift_id,care_recipient_id,organization_worker_membership_id,care_event_type_id,note_text) VALUES ($1,$2,$3,$4,$5,'nota antigua') RETURNING id`, [orgA, sOld, r1, cgA.membershipId, noteType])).rows[0].id;
+  const oldList = await call("GET", `${A}/me/shifts`, cgA.token);
+  const oldEvents = await call("GET", `${A}/shifts/${sOld}/care-events`, cgA.token);
+  const listed = (oldList.body.shifts ?? []).some((x: Json) => x.id === sOld);
+  const seen = oldEvents.status === 200 && oldEvents.text.includes(eOld);
+  // Superuser (code only): listed and readable. app_runtime: the visit leaves her list (shift
+  // hidden by the 30-day window), but her OWN records of it stay readable if she opens it
+  // directly: 131's own-record policies have no time limit. Only her own data; documented as
+  // provisional and unified with the 24 h policy later.
+  results.push({ name: `cg-assigned: visita de hace 31 días ${mode === "superuser" ? "en su lista (el código no tiene límite)" : "fuera de su lista (30 días); sus propios registros siguen legibles"}`,
+    pass: (mode === "superuser" ? listed : !listed) && seen, detail: `en /me/shifts=${listed} registros=${oldEvents.status}${seen ? " visibles" : ""}` });
+
   // Own records are history only while her worker membership in this agency is active.
   const cgL = await person("cg-former", orgA, ["WORKER"], true);
   await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,role_in_shift,response_status) VALUES ($1,$2,$3,$4,'caregiver','accepted')`, [orgA, s1, cgL.membershipId, r1]);

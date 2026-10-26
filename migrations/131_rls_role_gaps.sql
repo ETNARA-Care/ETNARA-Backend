@@ -27,6 +27,14 @@ SET search_path = pg_catalog, public
 AS $$
   -- An own assignment (pending or accepted) on a shift of the current
   -- organization that started at most 30 days ago or has not started yet.
+  -- PROVISIONAL WINDOW (26-oct-2026): the caregiver's history is limited here,
+  -- in one place. The approved future policy (24 h after the server-recorded end
+  -- of her visit, after the pilot) replaces this function, the own-record
+  -- policies below and the code/portal TOGETHER; never shorten it here alone, or
+  -- the portal would show "Not found" for visits it still lists.
+  -- Today the window applies to the shift (her visit list and the person's name);
+  -- her own check-in/out and care records (verification_events_worker_own_read,
+  -- care_events_worker_own_read) have no time limit while her membership is active.
   SELECT EXISTS (
     SELECT 1
     FROM public.assignments a
