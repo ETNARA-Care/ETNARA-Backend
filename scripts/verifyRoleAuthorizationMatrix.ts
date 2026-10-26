@@ -38,15 +38,7 @@ const results: Result[] = [];
  * In superuser mode they are ordinary checks and must pass.
  */
 const KNOWN_RLS_GAPS: Record<string, string> = {
-  "cg-assigned: visita terminada: su verificación": "G1: tras el check-out, RLS oculta a la cuidadora su propia verificación (018/076)",
-  "cg-assigned: visita terminada: sus registros": "G2: tras el check-out, RLS oculta a la cuidadora sus propios registros (care_events_worker_assigned_only)",
-  "cg-est-admin: crear turno de su establecimiento": "G3: RLS no deja ver a la administradora de establecimiento las personas de su establecimiento",
-  "cg-est-admin: id del turno creado": "G3",
-  "cg-assigned: nombre visible en su visita terminada": "G1: tras la visita, RLS oculta el nombre de la persona a la cuidadora",
-  "cg-est-admin: asignar en su establecimiento": "G3",
-  "cg-est-admin: ver asignaciones de su establecimiento": "G3",
-  "cg-assigned: visita terminada abre sin plan actual": "G1: tras la visita, RLS oculta a la cuidadora su turno pasado, así que el plan responde 404 en vez de null (el portal lo tolera)",
-  "cg-former: visita terminada: sus registros (membresía activa)": "G2",
+  // Closed by migration 131 (G1-G3). Keep empty: any new gap must fail CI.
 };
 
 async function main() {
@@ -283,7 +275,7 @@ async function main() {
     detail: `GET /org/me/shifts -> ${myShifts.status} name=${doneRow?.care_recipient_display_name ?? "null"}` });
   results.push({ name: "cg-assigned: /me/shifts sin datos clínicos", pass: !/allergies|date_of_birth/.test(myShifts.text), detail: "sin alergias ni fecha de nacimiento" });
 
-  // 076 stays closed after the visit: no profile or care plan of the person
+  // 076 stays closed after the visit: no profile, care plan or other caregivers' records
   await expectDenied("visita terminada: sin ficha de la persona", cgA, "GET", `${A}/care-recipients/${r1}`);
   // Her past visit still opens (200), but without the person's current plan.
   const planMark = `PLAN-SECRETO-${tag}`;
@@ -306,6 +298,28 @@ async function main() {
   await q(`UPDATE organization_worker_memberships SET status='inactive' WHERE id=$1`, [cgL.membershipId]);
   const gone = await call("GET", `${A}/shifts/${s1}/care-events`, cgL.token);
   results.push({ name: "cg-former: membresía inactiva no ve sus registros", pass: gone.status >= 400 || !gone.text.includes(eL), detail: `GET care-events -> ${gone.status}` });
+  await expectAbsent("visita terminada: sin registro de otra cuidadora", cgA, `${A}/shifts/${s1}/visit-verification`, [vY]);
+  // Same rules straight at the database, without the application code (RLS layer alone)
+  async function rlsRows(userId: string, sqlText: string, params: unknown[] = []) {
+    await q("BEGIN");
+    try {
+      await q("SET LOCAL ROLE app_runtime");
+      await q("SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true), set_config('app.is_superadmin','false',true)", [userId, orgA]);
+      return (await q(sqlText, params)).rowCount ?? 0;
+    } finally { await q("ROLLBACK"); }
+  }
+  const rlsCheck = async (name: string, userId: string, sqlText: string, params: unknown[], expected: number) => {
+    const n = await rlsRows(userId, sqlText, params);
+    results.push({ name: `RLS: ${name}`, pass: n === expected, detail: `filas=${n}, esperado=${expected}` });
+  };
+  await rlsCheck("cuidadora tras la visita no lee la ficha", cgA.userId, `SELECT id FROM care_recipients WHERE id=$1`, [r1], 0);
+  await rlsCheck("cuidadora tras la visita lee su turno", cgA.userId, `SELECT id FROM shifts WHERE id=$1`, [s1], 1);
+  await rlsCheck("cuidadora lee solo su verificación", cgA.userId, `SELECT id FROM verification_events WHERE shift_id=$1`, [s1], 1);
+  await rlsCheck("cuidadora lee su propio registro", cgA.userId, `SELECT id FROM care_events WHERE id=$1`, [e1], 1);
+  await rlsCheck("cuidadora no lee registros ajenos", cgA.userId, `SELECT id FROM care_events WHERE id=$1`, [e2], 0);
+  await rlsCheck("familiar no edita la ficha", fam1.userId, `UPDATE care_recipients SET allergies='{}' WHERE id=$1 RETURNING id`, [r1], 0);
+  await rlsCheck("familiar no escribe registros de cuidado", fam1.userId, `UPDATE care_events SET note_text='x' WHERE id=$1 RETURNING id`, [e1], 0);
+  await rlsCheck("cuidadora asignada no edita la ficha", cgX.userId, `UPDATE care_recipients SET allergies='{}' WHERE id=$1 RETURNING id`, [r2], 0);
 
   // Establishment administrator (a caregiver who runs one establishment)
   const loc = (await q<{ id: string }>(`INSERT INTO locations (organization_id,name) VALUES ($1,$2) RETURNING id`, [orgA, `Hogar ${tag}`])).rows[0].id;
@@ -320,6 +334,10 @@ async function main() {
     await expectPresent("ver asignaciones de su establecimiento", cgE, `${A}/shifts/${estShiftId}/assignments`, [cgO.membershipId!]);
   } else results.push({ name: "cg-est-admin: id del turno creado", pass: false, detail: JSON.stringify(estShift.body).slice(0, 120) });
   await expectDenied("asignar fuera de su establecimiento", cgE, "POST", `${A}/shifts/${s2}/assignments`, { organizationWorkerMembershipId: cgO.membershipId });
+
+  await rlsCheck("administradora de establecimiento no ve residentes fuera de él", cgE.userId, `SELECT id FROM care_recipients WHERE id=$1`, [r2], 0);
+  await rlsCheck("administradora de establecimiento ve su residente", cgE.userId, `SELECT id FROM care_recipients WHERE id=$1`, [rE], 1);
+  await rlsCheck("administradora de establecimiento no ve turnos fuera de él", cgE.userId, `SELECT id FROM shifts WHERE id=$1`, [s2], 0);
 
   // Cross-tenant
   await expectDenied("residentes de otra agencia", adminB, "GET", `${A}/care-recipients`);

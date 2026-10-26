@@ -268,15 +268,13 @@ export async function listMyShifts(userId: string, organizationId: string) {
              a.response_status AS assignment_response_status,
              -- Only the name to show on the caregiver's own visits (past ones
              -- included), never the rest of the person's profile.
-             COALESCE(NULLIF(cr.preferred_name, ''), trim(cr.first_name || ' ' || cr.last_name)) AS care_recipient_display_name
+             public.app_my_shift_recipient_display_name(s.id) AS care_recipient_display_name
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
       JOIN organization_worker_memberships owm
         ON owm.id = a.organization_worker_membership_id
        AND owm.status = 'active'
-      LEFT JOIN care_recipients cr
-        ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
       WHERE s.organization_id = ${organizationId}
         AND owm.worker_id = ${workerId}
         AND a.response_status IN ('pending', 'accepted')
