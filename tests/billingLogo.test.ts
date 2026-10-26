@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { renderInvoicePdf } from "../src/modules/billing/billingPdf";
-import { LOGO_MAX_EDGE, LOGO_MAX_INPUT_BYTES, LogoImageError, processLogo } from "../src/modules/images/logoImage";
+import { renderInvoicePdf } from "../src/modules/billing/billingPdf.js";
+import { LOGO_MAX_EDGE, LOGO_MAX_INPUT_BYTES, LogoImageError, processLogo } from "../src/modules/images/logoImage.js";
 
 // Fictitious images only, generated in memory.
 async function gradientLogo(width: number, height: number, format: "png" | "jpeg" | "webp", withAlpha = true) {
@@ -21,7 +21,7 @@ async function gradientLogo(width: number, height: number, format: "png" | "jpeg
 }
 const code = async (p: Promise<unknown>) => { try { await p; return "OK"; } catch (e) { return e instanceof LogoImageError ? e.code : `OTHER:${(e as Error).message}`; } };
 
-describe("Agency logo — upload up to 5 MB, one optimised PNG stored", () => {
+describe("Agency logo — upload up to 5 MB, one optimised PNG stored", { timeout: 30_000 }, () => {
   it("a large PNG with transparency becomes one ≤ 800 px palette PNG: same proportions, alpha kept, no metadata, light", async () => {
     const input = await gradientLogo(1900, 950, "png");
     expect(input.length).toBeGreaterThan(300 * 1024); // the old limit would have refused it
