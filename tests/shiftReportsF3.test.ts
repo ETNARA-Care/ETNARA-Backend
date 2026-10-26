@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { gatedFeatureFor } from "../src/middleware/orgFeatureRules.js";
-import { renderShiftReportPdf, type FamilyShiftReport } from "../src/modules/shiftReports/shiftReportPdf.js";
+import { otherDay, renderShiftReportPdf, time, type FamilyShiftReport } from "../src/modules/shiftReports/shiftReportPdf.js";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const O = "11111111-2222-4333-8444-555555555555";
@@ -54,6 +54,25 @@ describe("Informe de Turno F3 (129)", () => {
     expect(family).toMatch(/attachment; filename=/);
     expect(family).toMatch(/informe-de-turno-\$\{report\.serviceDate\}-\$\{report\.id\.slice\(0, 8\)\}\.pdf/);
     expect(pdf).not.toMatch(/console\./); // never logs report content
+  });
+
+  it("PDF times never split «a. m.»/«p. m.» and show the date when they fall on another day", () => {
+    expect(time("2026-10-25T01:44:00Z")).toBe("9:44\u00a0p.\u00a0m."); // 24 oct, 9:44 p. m. PR
+    // crossing midnight: shift day 24 oct; the end at 12:30 a. m. is the 25th
+    expect(otherDay("2026-10-24T23:00:00Z", "2026-10-24")).toBeNull(); // 7:00 p. m. same day
+    expect(otherDay("2026-10-25T04:30:00Z", "2026-10-24")).toBe("25\u00a0oct");
+    // several days: started the 21st, shift on the 24th
+    expect(otherDay("2026-10-22T01:44:00Z", "2026-10-24")).toBe("21\u00a0oct");
+    expect(otherDay(null, "2026-10-24")).toBeNull();
+  });
+
+  it("a multi-day visit still renders on one page with the same sections", async () => {
+    const r = sample(3);
+    r.sections.schedule = { scheduledStart: "2026-10-24T12:00:00.000Z", scheduledEnd: "2026-10-24T15:00:00.000Z", arrivalAt: null,
+      startAt: "2026-10-22T01:44:00.000Z", endAt: "2026-10-25T01:10:00.000Z" };
+    r.serviceDate = "2026-10-24";
+    const pdf = await renderShiftReportPdf(r);
+    expect((pdf.toString("latin1").match(/\/Type \/Page\b/g) ?? []).length).toBe(1);
   });
 
   it("renders a one-page PDF and paginates long reports with a footer on every page", async () => {

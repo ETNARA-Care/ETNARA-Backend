@@ -24,7 +24,18 @@ export interface FamilyShiftReport {
 
 const NAVY = "#16213D", CREAM = "#F7F3EA", SAGE = "#7C9A82", MUTED = "#5B6475", LINE = "#D9DCE3";
 const TZ = "America/Puerto_Rico";
-const time = (v: string | null | undefined) => (v ? new Date(v).toLocaleTimeString("es-PR", { timeZone: TZ, hour: "numeric", minute: "2-digit" }) : "—");
+/** Non-breaking spaces (WinAnsi 0xA0): «9:44 p. m.» is never split across lines. */
+const keep = (t: string) => t.replace(/[\s\u202f]+/g, "\u00a0");
+export const time = (v: string | null | undefined) => (v ? keep(new Date(v).toLocaleTimeString("es-PR", { timeZone: TZ, hour: "numeric", minute: "2-digit" })) : "—");
+/** Puerto Rico calendar day (YYYY-MM-DD). */
+const dayKey = (v: string) => new Date(v).toLocaleDateString("en-CA", { timeZone: TZ });
+/**
+ * Same rule as the portal: a time that falls on another day than the shift's day also
+ * shows its date («24 oct»). Visits can cross midnight or stay open several days; the
+ * records are shown exactly as stored, only labelled with their day.
+ */
+export const otherDay = (v: string | null | undefined, refDay: string) =>
+  v && dayKey(v) !== refDay ? keep(new Date(v).toLocaleDateString("es-PR", { timeZone: TZ, day: "numeric", month: "short" }).replace(/\./g, "")) : null;
 const longDate = (ymd: string) => {
   const s = new Date(`${ymd}T12:00:00Z`).toLocaleDateString("es-PR", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" });
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -86,13 +97,20 @@ export function renderShiftReportPdf(r: FamilyShiftReport): Promise<Buffer> {
     const s = r.sections.schedule;
     if (s) {
       const y = doc.y;
+      const ref = r.serviceDate;
+      const cols: Array<[string, string, string | null]> = [
+        ["Programado", `${time(s.scheduledStart)} – ${time(s.scheduledEnd)}`, otherDay(s.scheduledEnd, ref) ? `termina el ${otherDay(s.scheduledEnd, ref)}` : null],
+        ["Llegada", s.arrivalAt ? time(s.arrivalAt) : "Sin registro", otherDay(s.arrivalAt, ref)],
+        ["Inicio", time(s.startAt), otherDay(s.startAt, ref)],
+        ["Final", time(s.endAt), otherDay(s.endAt, ref)],
+      ];
       doc.roundedRect(left, y, width, 64, 8).fill(CREAM);
-      const cols: Array<[string, string]> = [["Programado", `${time(s.scheduledStart)} – ${time(s.scheduledEnd)}`], ["Llegada", s.arrivalAt ? time(s.arrivalAt) : "Sin registro"], ["Inicio", time(s.startAt)], ["Final", time(s.endAt)]];
       const widths = [0.34, 0.22, 0.22, 0.22].map((f) => f * (width - 28));
-      cols.forEach(([label, value], i) => {
+      cols.forEach(([label, value, day], i) => {
         const x = left + 14 + widths.slice(0, i).reduce((a, b) => a + b, 0);
         doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(label.toUpperCase(), x, y + 14, { characterSpacing: 0.6 });
-        doc.font("Helvetica-Bold").fontSize(12).fillColor(NAVY).text(value, x, y + 30, { width: widths[i] - 8, lineBreak: false });
+        doc.font("Helvetica-Bold").fontSize(12).fillColor(NAVY).text(value, x, y + 28, { width: widths[i] - 8, lineBreak: false });
+        if (day) doc.font("Helvetica").fontSize(8.5).fillColor(MUTED).text(day, x, y + 44, { width: widths[i] - 8, lineBreak: false });
       });
       doc.y = y + 80;
     }
@@ -107,12 +125,14 @@ export function renderShiftReportPdf(r: FamilyShiftReport): Promise<Buffer> {
     };
     const row = (at: string | null, text: string, note?: string | null) => {
       const noteH = note ? doc.font("Helvetica").fontSize(9).heightOfString(note, { width: width - 80 }) + 2 : 0;
-      ensure(16 + noteH);
+      const day = otherDay(at, r.serviceDate);
+      ensure(16 + Math.max(noteH, day ? 10 : 0));
       const y = doc.y;
-      doc.font("Helvetica").fontSize(9.5).fillColor(MUTED).text(at ? time(at) : "", left, y, { width: 70 });
+      doc.font("Helvetica").fontSize(9.5).fillColor(MUTED).text(at ? time(at) : "", left, y, { width: 74, lineBreak: false });
+      if (day) doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(day, left, y + 12, { width: 74, lineBreak: false });
       doc.font("Helvetica").fontSize(10).fillColor("#1F2430").text(text, left + 80, y, { width: width - 80 });
       if (note) doc.font("Helvetica").fontSize(9).fillColor(MUTED).text(note, left + 80, doc.y + 1, { width: width - 80 });
-      doc.y += 6;
+      doc.y = Math.max(doc.y, day ? y + 22 : 0) + 6;
     };
     const empty = (t: string) => { doc.font("Helvetica").fontSize(9.5).fillColor(MUTED).text(t, left, doc.y, { width }); doc.y += 8; };
 

@@ -269,6 +269,27 @@ async function main() {
     check("Z2 only successful downloads are recorded (refused ones leave no trace)", pdfEvents === 2, String(pdfEvents));
     const leaked = logged.filter((l) => /Doña Carmen|Avena|domingo|Tropezó|Cuidadora a-cg|Turno tranquilo/.test(l));
     check("Z3 logs contain no names, notes or report text", leaked.length === 0, `líneas=${leaked.length}`);
+    // ------------------------------------------------------------ M: visits across days (records untouched)
+    const sM = await visit(orgA, rA, A.cg, [["HYDRATION", { amount: "Vaso completo" }, undefined]]);
+    // Synthetic: this visit's check-in happened ~2 days earlier (multi-day / crossing midnight). Original
+    // records are only re-dated here, in the test fixture, before the report is built.
+    await q(`UPDATE verification_events SET occurred_at = occurred_at - interval '50 hours' WHERE shift_id=$1 AND event_type='check_in'`, [sM]);
+    await generatePendingShiftReports();
+    const rM = await rid(sM);
+    const vM = await call("GET", `${SA}/shifts/${sM}/shift-reports`, A.admin.token);
+    await call("POST", `${SA}/shift-reports/${rM.id}/approve`, A.admin.token, { expectedGeneratedAt: vM.body.reports?.[0]?.generatedAt });
+    const startAt: string = vM.body.reports?.[0]?.content?.times?.start?.at;
+    const startDay = new Date(startAt).toLocaleDateString("es-PR", { timeZone: "America/Puerto_Rico", day: "numeric", month: "short" }).replace(/\./g, "");
+    const pM = await pdf(`${FR(rA)}/${rM.id}/pdf`, A.family.token);
+    const textM = pM.status === 200 ? pdfText(pM.buf) : "";
+    const flat = textM.replace(/\u00a0/g, " ");
+    check("M1 multi-day visit: the PDF labels the earlier start with its date; a scheduled end past midnight says «termina el …»",
+      pM.status === 200 && flat.includes(startDay) && /INICIO/.test(textM)
+      // the scheduled end gets «termina el …» only when it really falls on another day
+      && (/termina el/.test(flat) === (new Date(vM.body.reports?.[0]?.content?.shift?.scheduledEnd).toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" })
+        !== new Date(vM.body.reports?.[0]?.content?.shift?.scheduledStart).toLocaleDateString("en-CA", { timeZone: "America/Puerto_Rico" }))), `${startDay} | ${flat.slice(0, 400).replace(/\s+/g, " ")}`);
+    check("M2 times are kept whole («p. m.»/«a. m.» never split across lines)", !/\b[ap]\.\s*\n\s*m\./.test(textM) && /[ap]\.\s?m\./.test(flat));
+    const sampleM = process.env.SR3_PDF_SAMPLE_MULTIDAY; if (sampleM && pM.status === 200) writeFileSync(sampleM, pM.buf);
   } finally {
     server.close();
     await pool.end();
