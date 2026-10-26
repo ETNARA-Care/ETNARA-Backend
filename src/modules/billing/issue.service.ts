@@ -141,9 +141,9 @@ export async function uploadLogo(userId: string, organizationId: string, body: B
     await requireCapability(trx, organizationId, "manage");
     if (!isBillingStorageConfigured()) throw new BillingError("BILLING_STORAGE_NOT_CONFIGURED", 503);
   }));
-  let clean: Buffer;
+  let clean: Buffer; let width = 0; let height = 0;
   try {
-    clean = (await processLogo(body)).body;
+    ({ body: clean, width, height } = await processLogo(body));
   } catch (e) {
     if (e instanceof LogoImageError) throw new BillingError(e.code, LOGO_ERROR_STATUS[e.code]);
     throw e;
@@ -157,8 +157,8 @@ export async function uploadLogo(userId: string, organizationId: string, body: B
     await ensureSettings(trx, organizationId, userId);
     await sql`UPDATE billing_settings SET logo_object_key = ${key}, logo_sha256 = ${hash}, logo_content_type = 'image/png', updated_by_user_id = ${userId}
       WHERE organization_id = ${organizationId}`.execute(trx);
-    await event(trx, organizationId, userId, "FINANCE_BILLING_LOGO_CHANGED", "billing_settings", organizationId, { sha256: hash, bytes: clean.length });
-    return { sha256: hash, bytes: clean.length };
+    await event(trx, organizationId, userId, "FINANCE_BILLING_LOGO_CHANGED", "billing_settings", organizationId, { sha256: hash, bytes: clean.length, width, height });
+    return { sha256: hash, bytes: clean.length, width, height };
   }));
 }
 
