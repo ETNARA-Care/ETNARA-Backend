@@ -281,6 +281,11 @@ async function main() {
     detail: `GET /org/me/shifts -> ${myShifts.status} name=${doneRow?.care_recipient_display_name ?? "null"}` });
   results.push({ name: "cg-assigned: /me/shifts sin datos clínicos", pass: !/allergies|date_of_birth/.test(myShifts.text), detail: "sin alergias ni fecha de nacimiento" });
 
+  // 076 stays closed after the visit: no profile or care plan of the person
+  await expectDenied("visita terminada: sin ficha de la persona", cgA, "GET", `${A}/care-recipients/${r1}`);
+  await expectDenied("visita terminada: sin plan de cuidado", cgA, "GET", `${A}/care-recipients/${r1}/care-plan`);
+  await expectAllowed("plan de cuidado (cuidadora asignada ahora)", cgX, "GET", `${A}/care-recipients/${r2}/care-plan`);
+
   // Establishment administrator (a caregiver who runs one establishment)
   const loc = (await q<{ id: string }>(`INSERT INTO locations (organization_id,name) VALUES ($1,$2) RETURNING id`, [orgA, `Hogar ${tag}`])).rows[0].id;
   const rE = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name,location_id) VALUES ($1,'Sintetico',$2,$3) RETURNING id`, [orgA, `RE-${tag}`, loc])).rows[0].id;
