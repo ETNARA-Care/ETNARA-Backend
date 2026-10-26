@@ -27,6 +27,34 @@ export interface EmailConfig {
   activationBaseUrl: string;
 }
 
+/**
+ * Non-secret summary for the boot log: is a key set, which DOMAIN sends (never the
+ * key or the full address), whether the code default is in use, and where links point.
+ */
+export function emailConfigSummary(config: EmailConfig = loadEmailConfig()) {
+  return {
+    configured: !!config.apiKey,
+    senderDomain: config.senderEmail.split("@")[1]?.toLowerCase() ?? null,
+    senderIsDefault: !process.env.EMAIL_SENDER_ADDRESS,
+    linkHost: (() => { try { return new URL(config.activationBaseUrl).host; } catch { return null; } })(),
+  };
+}
+
+/**
+ * Resend explains a refusal in its body ({ name, message }), e.g. an unverified
+ * sending domain. Keep that reason for the log, with any e-mail address removed.
+ */
+async function resendFailure(response: Response): Promise<string> {
+  let reason = "";
+  try {
+    const body = await response.json() as { name?: unknown; message?: unknown };
+    const name = typeof body.name === "string" ? body.name : "";
+    const message = typeof body.message === "string" ? body.message : "";
+    reason = `${name}${name && message ? ": " : ""}${message}`.replace(/[^\s@<>()"',;:]+@[^\s@<>()"',;:]+/g, "<email>").slice(0, 200);
+  } catch { /* no JSON body */ }
+  return `HTTP ${response.status}${reason ? ` ${reason}` : ""}`;
+}
+
 export function loadEmailConfig(): EmailConfig {
   const apiKey = process.env.RESEND_API_KEY;
   const senderEmail = process.env.EMAIL_SENDER_ADDRESS || "invitations@etnara.care";
@@ -94,10 +122,11 @@ export async function sendOrganizationAdminInvitationEmail(
     });
 
     if (!response.ok) {
-      console.error("Resend API error", { status: response.status });
+      const error = await resendFailure(response);
+      console.error("Resend API error", { error });
       return {
         status: "failed",
-        error: `HTTP ${response.status}`,
+        error,
       };
     }
 
@@ -155,7 +184,7 @@ export async function sendPasswordResetEmail(
         html,
       }),
     });
-    if (!response.ok) return { status: "failed", error: `HTTP ${response.status}` };
+    if (!response.ok) return { status: "failed", error: await resendFailure(response) };
     const result = await response.json() as { id?: string };
     return result.id ? { status: "sent", messageId: result.id } : { status: "failed", error: "INVALID_RESPONSE" };
   } catch (error) {

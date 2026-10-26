@@ -1,6 +1,7 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { photoStorageSelfCheck, photoStorageSelfCheckPassed } from "./modules/activityPhotos/photoStorage.js";
+import { emailConfigSummary } from "./modules/email/email.service.js";
 import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverageEscalation.worker.js";
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
@@ -10,6 +11,9 @@ const app = createApp();
 app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`ETNARA Care backend listening on port ${env.PORT} (${env.NODE_ENV})`);
+  // E-mail (invitations, password recovery): which domain sends and where links point. No secrets.
+  // eslint-disable-next-line no-console
+  console.log(`EMAIL_CONFIG ${JSON.stringify(emailConfigSummary())}`);
   startCoverageEscalationWorker();
   startLateArrivalWorker();
   // Informe de Turno F2 (128): drafts appear when a visit ends; counts only in logs.
