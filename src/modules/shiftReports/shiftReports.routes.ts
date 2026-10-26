@@ -7,6 +7,7 @@ import {
   ShiftReportError, approveSchema, approveShiftReport, getShiftReports, grantShiftReportReviewer, listSchema, listShiftReportReviewers,
   listShiftReports, myShiftReportAccess, refreshShiftReport, returnSchema, returnShiftReport, reviewerGrantSchema, revokeShiftReportReviewer,
 } from "./shiftReports.service.js";
+import { familyShiftReportPdf, getFamilyShiftReport, listFamilyShiftReports, sendShiftReportPdf } from "./shiftReportsFamily.service.js";
 import { getMyShiftReport, listMyShiftReports, observationSchema, setMyObservation, submitMyShiftReport } from "./shiftReportsCaregiver.service.js";
 
 /**
@@ -18,12 +19,14 @@ const router = Router();
 const uuid = z.string().uuid();
 
 type Handler = (req: AuthenticatedRequest, organizationId: string) => Promise<unknown>;
-function handle(status: number, work: Handler) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the sender knows its own payload (F3 PDF)
+function handle(status: number, work: Handler, send?: (res: Response, out: any) => void) {
   return async (req: Request, res: Response) => {
     const org = uuid.safeParse(req.params.organizationId);
     if (!org.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
     try {
-      res.status(status).json(await work(req as AuthenticatedRequest, org.data));
+      const out = await work(req as AuthenticatedRequest, org.data);
+      if (send) send(res, out); else res.status(status).json(out);
     } catch (error) {
       if (error instanceof ShiftReportError) { res.status(error.status).json({ error: error.code }); return; }
       if (error instanceof z.ZodError) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
@@ -57,6 +60,16 @@ router.post("/organizations/:organizationId/me/shift-reports/:reportId/observati
   handle(200, (req, org) => setMyObservation(user(req), org, id(req, "reportId"), observationSchema.parse(req.body ?? {}))));
 router.post("/organizations/:organizationId/me/shift-reports/:reportId/submit", requireAuth,
   handle(200, (req, org) => submitMyShiftReport(user(req), org, id(req, "reportId"))));
+
+// F3 (129): the family reads approved reports of her own resident and downloads the PDF.
+// Never kept in a browser or proxy cache (e.g. a shared family tablet).
+const noStore = (_req: Request, res: Response, next: () => void) => { res.setHeader("Cache-Control", "no-store, private"); res.setHeader("Pragma", "no-cache"); next(); };
+router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports", requireAuth, noStore,
+  handle(200, (req, org) => listFamilyShiftReports(user(req), org, id(req, "recipientId"))));
+router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports/:reportId", requireAuth, noStore,
+  handle(200, (req, org) => getFamilyShiftReport(user(req), org, id(req, "recipientId"), id(req, "reportId"))));
+router.get("/organizations/:organizationId/care-recipients/:recipientId/shift-reports/:reportId/pdf", requireAuth,
+  handle(200, (req, org) => familyShiftReportPdf(user(req), org, id(req, "recipientId"), id(req, "reportId")), sendShiftReportPdf));
 
 router.get("/organizations/:organizationId/shift-report-access", requireAuth,
   handle(200, (req, org) => myShiftReportAccess(user(req), org)));

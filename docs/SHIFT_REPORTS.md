@@ -83,12 +83,29 @@ F1 está implementado en la migración 126 (este PR). F2–F5 están **documenta
 - **API de la agencia:** `POST /organizations/:org/shift-reports/:id/return {note}`.
 - **Recuperación:** `ops/128_shift_reports_caregiver_review.rollback.sql` se aborta si ya hay observaciones, envíos o devoluciones.
 
-## F3: familia y PDF
-- Solo informes APPROVED del residente con relación familiar activa (`app_user_authorized_for_recipient`) y rol FAMILY activo.
-- Se proyectan solo las secciones `family_sections = true`. Las observaciones solo con estado `reviewed`, como hoy en el portal familiar.
-- Al revocar la relación se pierde el acceso en el momento.
-- PDF generado en el servidor bajo demanda a partir del informe aprobado (identificación del informe, fecha de emisión y versión). No se guarda; cada descarga añade `PDF_DOWNLOADED`.
-- Dependencia nueva a revisar (por ejemplo, pdfkit con fuentes que admitan acentos).
+## F3: familia y PDF (implementado en la migración 129)
+- **Quién:** solo el familiar con relación activa con ese residente y rol FAMILY en una membresía activa de esa agencia (`app_is_my_family_recipient`), y solo con SHIFT_REPORTS encendido. ETNARA Central nunca, aunque tenga un vínculo familiar.
+- **Qué:** solo informes APPROVED, en la versión aprobada. Borradores, enviados, devueltos y reemplazados no existen para la familia (404).
+- **Secciones:** solo las marcadas en `family_sections` al aprobar.
+  - **Horarios:** programado, llegada, inicio y final. Sin proximidad ni marcas «sin señal».
+  - **Comidas, hidratación, actividades, movilidad, higiene y ánimo:** el registro tal como se escribió, sin ids internos.
+  - **Observaciones:** las notas libres y la observación final de la cuidadora. Las fichas de observación (categoría y estado de revisión) siguen en su propio circuito de la agencia y no se proyectan.
+  - **Incidentes:** solo si la agencia los aprobó expresamente: hora, gravedad y descripción.
+  - **Fotos:** nunca dentro del informe; se comparten con su propia aprobación.
+  - **Resumen de la agencia:** se incluye si existe.
+- **Cómo:** no se crea ninguna política de lectura para la familia sobre `shift_reports`. La única vía es `app_shift_report_family_list`, `_get` y `_pdf` (SECURITY DEFINER). La proyección (`app_shift_report_family_project`) no es ejecutable por `app_runtime`.
+- **PDF:**
+  - Se genera en el servidor (pdfkit 0.15.2, la misma versión que Facturación F2.3) a partir de la misma proyección, así que no puede mostrar más que el portal.
+  - Contiene id del informe, versión, agencia, residente, cuidadora, fecha, horarios (si se compartieron), secciones autorizadas, estado y fecha de aprobación.
+  - Colores navy, crema y salvia.
+  - Se descarga siempre con sesión: `Content-Disposition: attachment`, `Cache-Control: no-store, private`, sin enlace público y sin guardar copia. El nombre del archivo no lleva nombres de personas.
+  - Cada descarga añade `PDF_DOWNLOADED` (quién y cuándo, sin contenido); las descargas rechazadas no dejan rastro.
+- **Revocación:** al revocar la relación, quitar el rol FAMILY o revocar la membresía se pierde el acceso en el momento, también a informes anteriores y a su PDF.
+- **API:**
+  - `GET /organizations/:org/care-recipients/:rid/shift-reports`
+  - `GET …/:id`
+  - `GET …/:id/pdf`
+- **Recuperación:** `ops/129_shift_reports_family.rollback.sql` solo borra funciones y no toca datos. El historial `PDF_DOWNLOADED` queda (es solo de anexar).
 
 ## F4: avisos y correcciones
 - Correo con enlace al portal (Resend), sin nombre del residente ni datos de salud y sin adjuntos. También aviso en la app.

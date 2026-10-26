@@ -29,6 +29,9 @@ on:
       - 'src/modules/shiftReports/**'
       - 'scripts/verifyShiftReportsF1.ts'
       - 'scripts/verifyShiftReportsF2.ts'
+      - 'scripts/verifyShiftReportsF3.ts'
+      - 'migrations/129_shift_reports_family.sql'
+      - 'ops/129_shift_reports_family.rollback.sql'
       - 'migrations/128_shift_reports_caregiver_review.sql'
       - 'ops/128_shift_reports_caregiver_review.rollback.sql'
       - 'ops/126_shift_reports.rollback.sql'
@@ -168,6 +171,12 @@ jobs:
 
       - name: Facturación F2.2 drafts, reservations, overnight segments, tax treatment, isolation (no issuing)
         run: npx tsx scripts/verifyBillingF22.ts
+
+      - name: Install pdftotext (reads the Informe de Turno PDF in the F3 check)
+        run: command -v pdftotext || (sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils)
+
+      - name: Informe de Turno F3 (family reads approved reports, authorized sections, PDF, revocation, isolation)
+        run: npx tsx scripts/verifyShiftReportsF3.ts
 
       - name: Activity photos security (isolation, tampering, approval, consent, ETNARA central)
         run: npx tsx scripts/verifyActivityPhotoSecurity.ts

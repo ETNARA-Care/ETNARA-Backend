@@ -27,6 +27,8 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   { pattern: new RegExp(`^/organizations/(${UUID})/shift-report-(access|reviewers)(/|$)`), feature: "SHIFT_REPORTS" },
   // F2 (128): the caregiver reviews her own reports.
   { pattern: new RegExp(`^/organizations/(${UUID})/me/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
+  // F3 (129): the family's approved reports of her resident.
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {
