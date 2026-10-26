@@ -96,8 +96,17 @@ export async function evaluateWorkerEligibility(
   membershipId: string
 ): Promise<EligibilityResult> {
   assertUuid(membershipId, "organizationWorkerMembershipId");
-  return withTenantContext({ userId, organizationId }, (trx) =>
-    evaluateWorkerEligibilityInTransaction(trx, organizationId, membershipId));
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers, establishment administrators, or the caregiver about herself.
+    // Family and other caregivers never see someone's compliance (auditoría M3).
+    const allowed = await sql<{ ok: boolean }>`
+      SELECT (app_is_org_manager() OR app_is_any_establishment_admin()
+        OR EXISTS (SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+                   WHERE owm.id = ${membershipId}::uuid AND owm.organization_id = ${organizationId}
+                     AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)) AS ok`.execute(trx);
+    if (!allowed.rows[0]?.ok) throw new ComplianceManagementForbiddenError();
+    return evaluateWorkerEligibilityInTransaction(trx, organizationId, membershipId);
+  });
 }
 
 /**

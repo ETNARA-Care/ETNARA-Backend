@@ -90,9 +90,11 @@ export async function uploadActivityPhoto(userId: string, organizationId: string
 
 export async function getActivityPhotoForEvent(userId: string, organizationId: string, careEventId: string) {
   return inTenant(userId, organizationId, async (trx) => {
-    // RLS: managers, or the caregiver who uploaded it.
+    // Managers, or the caregiver who uploaded it -- checked here, not only by RLS.
     const r = await sql<{ id: string; share_status: string }>`
-      SELECT id, share_status FROM care_event_photos WHERE care_event_id = ${careEventId} AND organization_id = ${organizationId}`.execute(trx);
+      SELECT id, share_status FROM care_event_photos
+      WHERE care_event_id = ${careEventId} AND organization_id = ${organizationId}
+        AND (app_photo_is_manager() OR uploaded_by_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)`.execute(trx);
     if (!r.rows[0]) throw new PhotoError("NOT_FOUND", 404);
     return { id: r.rows[0].id, status: r.rows[0].share_status };
   });

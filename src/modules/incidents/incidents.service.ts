@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { recipientStaffSql } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -217,8 +218,11 @@ export async function createIncident(
     if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
     const recipientRow = await sql<{ id: string }>`
-      SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`care_recipients.id`)}
+      LIMIT 1
     `.execute(trx);
+    // A caregiver reports incidents only for people they are assigned to (RLS WITH CHECK says the same).
     if (!recipientRow.rows[0]) throw new RecipientNotFoundError();
 
     if (input.escalatedFromObservationId) {
@@ -325,7 +329,7 @@ export interface ListIncidentsFilter {
 export async function listIncidents(userId: string, organizationId: string, filter: ListIncidentsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
-    const conditions = [sql`organization_id = ${organizationId}`];
+    const conditions = [sql`organization_id = ${organizationId}`, recipientStaffSql(sql`incidents.care_recipient_id`)];
     if (filter.careRecipientId) conditions.push(sql`care_recipient_id = ${filter.careRecipientId}`);
     if (filter.status) conditions.push(sql`status = ${filter.status}`);
     const result = await sql<IncidentRow>`
@@ -412,7 +416,9 @@ export async function getIncident(userId: string, organizationId: string, incide
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id,
              escalated_from_observation_id, severity, description, actions_taken,
              assigned_to_user_id, resolution, status, created_at
-      FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
     if (!result.rows[0]) throw new IncidentNotFoundError();
     return result.rows[0];
@@ -476,8 +482,11 @@ export async function assignIncident(
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertOrgManager(trx);
     const incidentRow = await sql<{ id: string }>`
-      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
+    // Managers, or a caregiver currently assigned to the person (same rule as RLS).
     if (!incidentRow.rows[0]) throw new IncidentNotFoundError();
 
     const assigneeRow = await sql<{ id: string }>`
@@ -521,8 +530,11 @@ export async function addTimelineEntry(
   assertUuid(incidentId, "incidentId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const incidentRow = await sql<{ id: string }>`
-      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
+    // Managers, or a caregiver currently assigned to the person (same rule as RLS).
     if (!incidentRow.rows[0]) throw new IncidentNotFoundError();
 
     const result = await sql<TimelineEntryRow>`
@@ -538,8 +550,11 @@ export async function listTimelineEntries(userId: string, organizationId: string
   assertUuid(incidentId, "incidentId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const incidentRow = await sql<{ id: string }>`
-      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
+    // Managers, or a caregiver currently assigned to the person (same rule as RLS).
     if (!incidentRow.rows[0]) throw new IncidentNotFoundError();
 
     const result = await sql<TimelineEntryRow>`
@@ -565,8 +580,11 @@ export async function addIncidentAttachment(
   assertUuid(incidentId, "incidentId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const incidentRow = await sql<{ id: string }>`
-      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
+    // Managers, or a caregiver currently assigned to the person (same rule as RLS).
     if (!incidentRow.rows[0]) throw new IncidentNotFoundError();
 
     const fileCheck = await sql<{ id: string; scope_type: string; organization_id: string | null }>`
@@ -594,8 +612,11 @@ export async function listIncidentAttachments(userId: string, organizationId: st
   assertUuid(incidentId, "incidentId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const incidentRow = await sql<{ id: string }>`
-      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
+      LIMIT 1
     `.execute(trx);
+    // Managers, or a caregiver currently assigned to the person (same rule as RLS).
     if (!incidentRow.rows[0]) throw new IncidentNotFoundError();
 
     const result = await sql<{ id: string; organization_id: string; incident_id: string; file_id: string; created_at: string }>`

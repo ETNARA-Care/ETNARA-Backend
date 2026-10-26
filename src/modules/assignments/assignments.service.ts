@@ -1,4 +1,6 @@
 import { sql } from "kysely";
+import { canManageShift } from "../../security/roleGuards.js";
+import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
@@ -175,8 +177,11 @@ export async function createAssignment(
   input: CreateAssignmentInput
 ): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
-  const saved = await withTenantContext({ userId, organizationId }, (trx) =>
-    assignWorkerToShiftInTransaction(trx, organizationId, shiftId, input));
+  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+    // Agency managers, or the administrator of the establishment of that shift's person.
+    if (!(await canManageShift(trx, shiftId))) throw new OrganizationAccessDeniedError();
+    return assignWorkerToShiftInTransaction(trx, organizationId, shiftId, input);
+  });
   return saved.assignment;
 }
 
@@ -322,6 +327,10 @@ export async function listAssignments(userId: string, organizationId: string, sh
              response_status, responded_at, response_reason, created_at
       FROM assignments
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+        AND (app_is_org_manager() OR app_worker_has_shift_assignment(assignments.shift_id)
+          OR EXISTS (SELECT 1 FROM shifts s JOIN care_recipients cr ON cr.id = s.care_recipient_id
+                     WHERE s.id = assignments.shift_id AND cr.location_id IS NOT NULL
+                       AND app_is_establishment_admin(cr.location_id)))
       ORDER BY created_at DESC
     `.execute(trx);
     return result.rows;

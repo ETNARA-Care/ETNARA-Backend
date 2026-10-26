@@ -64,6 +64,20 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyTenantIsolation.ts
 
+      - name: Role authorization matrix, app connected as superuser (production today, RLS bypassed)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyRoleAuthorizationMatrix.ts
+
+      - name: Role authorization matrix, app connected as app_runtime (RLS applies)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyRoleAuthorizationMatrix.ts
+
       - name: PostgreSQL platform PHI boundary verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
