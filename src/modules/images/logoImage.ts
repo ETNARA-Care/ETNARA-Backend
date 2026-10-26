@@ -11,7 +11,7 @@ import { detectKind } from "../activityPhotos/imageSanitizer.js";
  *   and trailing data are gone; orientation is applied to the pixels first.
  * - Proportions are kept (fit "inside", never enlarged) and the longest edge is at
  *   most 800 px — plenty for the 120×60 pt box of the invoice PDF and for the portal.
- * - Transparency is kept: the output is a palette PNG with alpha (typically 3–40 KB).
+ * - Transparency is kept: the output is a palette PNG with alpha (flat logos a few KB; photo-like ones under ~100 KB).
  * - The original upload is never stored.
  *
  * Only `detectKind` is shared with activity photos; their pipeline (JPEG, flattened)

@@ -4,7 +4,7 @@
 
 ## 2026-10-26 — Facturación: logos de agencia hasta 5 MB, optimizados (feat/billing-logo-5mb, sin migración)
 
-- `src/modules/images/logoImage.ts` (reutilizable): PNG, JPEG o WebP por bytes mágicos, hasta 5 MB; orientación aplicada, metadatos fuera, `fit: inside` hasta 800 px sin ampliar, PNG de paleta con transparencia; nunca guarda el original. Solo reutiliza `detectKind` de Fotos de actividad (su flujo no cambia). Máximo 2 procesos a la vez (503 LOGO_BUSY).
+- `src/modules/images/logoImage.ts` (reutilizable): PNG, JPEG o WebP por bytes mágicos, hasta 5 MB; orientación aplicada, metadatos fuera, `fit: inside` hasta 800 px sin ampliar, PNG de paleta con transparencia (logos planos pocos KB; con degradados < ~100 KB); nunca guarda el original. Solo reutiliza `detectKind` de Fotos de actividad (su flujo no cambia). Máximo 2 procesos a la vez (503 LOGO_BUSY).
 - `uploadLogo`: el permiso «manage» se comprueba ANTES de procesar y otra vez al guardar; códigos LOGO_EMPTY 400, LOGO_TOO_LARGE 413 (también desde el lector del cuerpo), LOGO_TYPE_NOT_ALLOWED/LOGO_UNREADABLE 415, LOGO_TOO_SMALL 422. Mismas claves `logo_object_key`/`logo_sha256`; las facturas emitidas conservan el logo por hash.
 - Pruebas: `tests/billingLogo.test.ts` (6) y verifyBillingF23 E03 ampliado (WebP, PNG grande, > 5 MB, otra agencia y Central rechazadas): 22/22; unitarias 664/664.
 
