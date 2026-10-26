@@ -1,5 +1,4 @@
 import { sql } from "kysely";
-import sharp from "sharp";
 import { z } from "zod";
 import { AGENCY_TIME_ZONE, recordFinanceEvent, recordFinancialAudit } from "../finance/financeEvents.js";
 import { withTenantContext } from "../../context/tenantContext.js";
@@ -9,6 +8,7 @@ import { PDF_GENERATOR_VERSION, renderInvoicePdf, type PdfInvoice, type PdfLine 
 import { BillingObjectIntegrityError, BillingStorageNotConfiguredError, getBillingObjectVerified, isBillingStorageConfigured, putBillingObject, sha256 } from "./billingStorage.js";
 import { runBilling as run, rateChangedLines } from "./drafts.service.js";
 import { agencyIssueBlockers } from "./readiness.js";
+import { LOGO_MAX_INPUT_BYTES, LogoImageError, processLogo } from "../images/logoImage.js";
 
 /**
  * Facturación Premium F2.3 — invoice profile, issuing with consecutive numbers,
@@ -39,7 +39,7 @@ export const settingsSchema = z.object({
 export const taxValidationSchema = z.object({ validated: z.boolean(), note: reason.optional() });
 export const issueSchema = z.object({ expectedVersion: z.number().int().min(1) });
 export const voidSchema = z.object({ expectedVersion: z.number().int().min(1), reason });
-export const LOGO_MAX_BYTES = 300 * 1024;
+export const LOGO_MAX_BYTES = LOGO_MAX_INPUT_BYTES; // 5 MB in; one optimised PNG (≤ 800 px) stored
 
 const event = async (trx: Trx, organizationId: string, userId: string, action: string, entityType: string, entityId: string, newValue?: unknown, previousValue?: unknown) => {
   await recordFinanceEvent(trx, { organizationId, actorUserId: userId, action, entityType, entityId, newValue, previousValue });
@@ -125,16 +125,29 @@ export async function setTaxValidation(userId: string, organizationId: string, i
   }));
 }
 
-/** Logo: PNG or JPEG only (magic bytes), ≤ 300 KB, re-encoded on the server (no metadata), ≤ 1000 px. */
+const LOGO_ERROR_STATUS: Record<LogoImageError["code"], number> = {
+  LOGO_EMPTY: 400, LOGO_TOO_LARGE: 413, LOGO_TYPE_NOT_ALLOWED: 415, LOGO_UNREADABLE: 415, LOGO_TOO_SMALL: 422, LOGO_BUSY: 503,
+};
+
+/**
+ * Logo: PNG, JPEG or WebP (magic bytes) up to 5 MB, processed on the server into ONE optimised
+ * PNG (≤ 800 px, proportions and transparency kept, no metadata). The original is never stored.
+ * The permission is checked BEFORE the image is processed, and again when it is saved.
+ */
 export async function uploadLogo(userId: string, organizationId: string, body: Buffer) {
-  if (!body?.length || body.length > LOGO_MAX_BYTES) throw new BillingError("LOGO_TOO_LARGE", 413);
-  const png = body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  const jpeg = body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff;
-  if (!png && !jpeg) throw new BillingError("LOGO_TYPE_NOT_ALLOWED", 415);
-  let clean: Buffer;
+  if (!body?.length) throw new BillingError("LOGO_EMPTY", 400);
+  if (body.length > LOGO_MAX_BYTES) throw new BillingError("LOGO_TOO_LARGE", 413);
+  await inBilling(userId, organizationId, (trx) => run(async () => {
+    await requireCapability(trx, organizationId, "manage");
+    if (!isBillingStorageConfigured()) throw new BillingError("BILLING_STORAGE_NOT_CONFIGURED", 503);
+  }));
+  let clean: Buffer; let width = 0; let height = 0;
   try {
-    clean = await sharp(body, { limitInputPixels: 25_000_000 }).rotate().resize({ width: 1000, height: 1000, fit: "inside", withoutEnlargement: true }).png().toBuffer();
-  } catch { throw new BillingError("LOGO_UNREADABLE", 415); }
+    ({ body: clean, width, height } = await processLogo(body));
+  } catch (e) {
+    if (e instanceof LogoImageError) throw new BillingError(e.code, LOGO_ERROR_STATUS[e.code]);
+    throw e;
+  }
   return inBilling(userId, organizationId, (trx) => run(async () => {
     await requireCapability(trx, organizationId, "manage");
     if (!isBillingStorageConfigured()) throw new BillingError("BILLING_STORAGE_NOT_CONFIGURED", 503);
@@ -144,8 +157,8 @@ export async function uploadLogo(userId: string, organizationId: string, body: B
     await ensureSettings(trx, organizationId, userId);
     await sql`UPDATE billing_settings SET logo_object_key = ${key}, logo_sha256 = ${hash}, logo_content_type = 'image/png', updated_by_user_id = ${userId}
       WHERE organization_id = ${organizationId}`.execute(trx);
-    await event(trx, organizationId, userId, "FINANCE_BILLING_LOGO_CHANGED", "billing_settings", organizationId, { sha256: hash, bytes: clean.length });
-    return { sha256: hash, bytes: clean.length };
+    await event(trx, organizationId, userId, "FINANCE_BILLING_LOGO_CHANGED", "billing_settings", organizationId, { sha256: hash, bytes: clean.length, width, height });
+    return { sha256: hash, bytes: clean.length, width, height };
   }));
 }
 
