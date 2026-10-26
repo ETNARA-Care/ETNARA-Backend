@@ -7,15 +7,18 @@ import pg from "pg";
  * The backend must run as `app_runtime` (NOSUPERUSER, NOBYPASSRLS, owns no table) so that PostgreSQL row level
  * security protects every agency even if application code has a bug. `postgres` is for migrations only.
  *
- * At startup, BEFORE the server accepts traffic:
- *  1. Connect with DATABASE_URL (a few retries). If the database cannot be reached, exit(1): a deployment with a
- *     wrong connection string then fails its healthcheck and Railway keeps the previous deployment serving.
- *  2. Log one line `DB_RUNTIME_ROLE {...}`: the connected role and whether it can bypass RLS (no secrets, no host).
- *  3. Log one line `DB_RUNTIME_READINESS {...}`: whether `app_runtime` already holds every table privilege and
- *     function the code uses (runtimePrivileges.generated.json). Names of what is missing, nothing else.
- *  4. If REQUIRE_RESTRICTED_DB_ROLE=true and the connected role can bypass RLS, exit(1) (after the switch, so a
- *     wrong variable can never silently put production back on the superuser).
- * Everything here is read-only catalog access.
+ * At startup, BEFORE the server accepts traffic (read-only catalog access, no secrets or host in the logs):
+ *  1. Connect with DATABASE_URL (a few retries) and log `DB_RUNTIME_ROLE {...}`: the connected role and whether it
+ *     can bypass RLS.
+ *  2. Log `DB_RUNTIME_READINESS {...}`: whether `app_runtime` already holds every table privilege and function the
+ *     code uses (runtimePrivileges.generated.json). Names of what is missing, nothing else.
+ *
+ * NON-BLOCKING BY DEFAULT: if the database cannot be reached or the inspection fails, it logs that and the server
+ * starts exactly as before (and recovers by itself when the database comes back). Only two opt-in variables, meant
+ * for the switch to app_runtime, can stop the start:
+ *  - DB_STARTUP_FAIL_CLOSED=true  → database unreachable after the retries: exit(1), so a deployment with a wrong
+ *    connection string fails its healthcheck and Railway keeps the previous deployment serving;
+ *  - REQUIRE_RESTRICTED_DB_ROLE=true → connected role can bypass RLS (or cannot be determined): exit(1).
  */
 export interface RuntimeRoleReport {
   role: string; sessionRole: string; superuser: boolean; bypassrls: boolean; createrole: boolean;
@@ -84,25 +87,31 @@ export async function inspectRuntimeReadiness(client: pg.ClientBase, manifest: M
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Runs before app.listen(). Returns normally when the server may start; otherwise exits the process. */
+/** Runs before app.listen(). Returns when the server may start; exits only with the opt-in variables above. */
 export async function startupDatabaseCheck(opts: {
-  connectionString: string; requireRestricted: boolean; attempts?: number; delayMs?: number;
+  connectionString: string; requireRestricted: boolean; failClosed?: boolean; attempts?: number; delayMs?: number;
   log?: (line: string) => void; exit?: (code: number) => never;
-}): Promise<{ role: RuntimeRoleReport; readiness: RuntimeReadinessReport | null }> {
+}): Promise<{ role: RuntimeRoleReport | null; readiness: RuntimeReadinessReport | null }> {
   const log = opts.log ?? ((l: string) => console.log(l));
   const exit = opts.exit ?? ((c: number) => process.exit(c));
-  const attempts = opts.attempts ?? 5;
+  // Fail-closed (switch stage) waits longer for the database; the default only delays the start by a few seconds.
+  const attempts = opts.attempts ?? (opts.failClosed ? 5 : 2);
   let lastCode = "UNKNOWN";
-  let found: { role: RuntimeRoleReport; readiness: RuntimeReadinessReport | null } | null = null;
+  let found: { role: RuntimeRoleReport | null; readiness: RuntimeReadinessReport | null } | null = null;
   for (let i = 1; i <= attempts && !found; i++) {
     const client = new pg.Client({ connectionString: opts.connectionString, connectionTimeoutMillis: 10_000 });
     try {
       await client.connect();
-      await client.query("BEGIN TRANSACTION READ ONLY");
-      const role = await inspectRuntimeRole(client);
-      let readiness: RuntimeReadinessReport | null = null;
-      try { readiness = await inspectRuntimeReadiness(client); } catch { readiness = null; }
-      await client.query("ROLLBACK");
+      // Connected: from here on nothing is retried or fatal by itself (an inspection error is only logged).
+      let role: RuntimeRoleReport | null = null; let readiness: RuntimeReadinessReport | null = null;
+      try {
+        await client.query("BEGIN TRANSACTION READ ONLY");
+        role = await inspectRuntimeRole(client);
+        try { readiness = await inspectRuntimeReadiness(client); } catch { readiness = null; }
+        await client.query("ROLLBACK");
+      } catch (e) {
+        log(`DB_RUNTIME_ROLE_UNKNOWN inspection failed ${JSON.stringify({ code: (e as { code?: string }).code ?? (e as Error).name ?? "ERROR" })}`);
+      }
       found = { role, readiness };
     } catch (e) {
       lastCode = (e as { code?: string }).code ?? (e as Error).name ?? "ERROR";
@@ -112,6 +121,10 @@ export async function startupDatabaseCheck(opts: {
   }
   if (found) {
     const { role, readiness } = found;
+    if (!role) {
+      if (opts.requireRestricted) { log("DB_RUNTIME_ROLE_REFUSED role could not be determined and REQUIRE_RESTRICTED_DB_ROLE=true"); return exit(1); }
+      return found;
+    }
     log(`DB_RUNTIME_ROLE ${JSON.stringify({ role: role.role, sessionRole: role.sessionRole, superuser: role.superuser, bypassrls: role.bypassrls, ownsPublicTables: role.ownsPublicTables, rlsEnabledTables: role.rlsEnabledTables, publicTables: role.publicTables, canBypassRls: role.canBypassRls, requireRestricted: opts.requireRestricted })}`);
     if (readiness) log(`DB_RUNTIME_READINESS ${JSON.stringify(readiness)}`);
     if (role.canBypassRls) {
@@ -120,6 +133,7 @@ export async function startupDatabaseCheck(opts: {
     }
     return found;
   }
-  log(`DB_STARTUP_CHECK FAIL ${JSON.stringify({ code: lastCode })}`);
-  return exit(1);
+  log(`DB_STARTUP_CHECK FAIL ${JSON.stringify({ code: lastCode, failClosed: !!opts.failClosed })}`);
+  if (opts.failClosed) return exit(1);
+  return { role: null, readiness: null }; // default: start as before; the pool recovers when the database is back
 }

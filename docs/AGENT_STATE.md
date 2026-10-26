@@ -2,14 +2,13 @@
 
 ## Current Status
 
-## 2026-10-26 — Seguridad: rol de base de datos (claude/runtime-role-hardening, migración 130, sin desplegar)
+## 2026-10-26 — Seguridad: comprobación del rol de base de datos al arrancar (claude/runtime-role-hardening, PR #226, sin migraciones)
 
 - Hallazgo crítico: producción conecta como `postgres` (superusuario: `DATABASE_URL` → `etnara-care-staging-db.DATABASE_URL`, `POSTGRES_USER=postgres`; `MIGRATIONS_DATABASE_URL` referencia al propio `DATABASE_URL`). RLS no se aplica en producción; el aislamiento depende solo del código.
-- `src/config/dbRuntimeRole.ts`: comprobación antes de escuchar (reintentos y exit 1 si no conecta; `DB_RUNTIME_ROLE`, `DB_RUNTIME_READINESS` con el manifiesto `runtimePrivileges.generated.json`; `REQUIRE_RESTRICTED_DB_ROLE=true` rechaza roles que evitan RLS). Solo lectura.
-- 130: archivos profesionales (PLATFORM_PROFESSIONAL) solo los modifica quien los subió (status, para completar su subida); nadie los borra; lectura igual. Rollback en `ops/`.
-- `scripts/verifyStartupRoleCheck.ts` (7/7) y `scripts/verifyCrossTenantRls.ts` (10/10: 95 tablas × 114 actores de 69 agencias, 0 fugas como app_runtime; 76/95 tablas expuestas como postgres) añadidos al CI. `scripts/verifyRuntimeRole.ts` (puerta previa existente) sin cambios: aún no está en el pre-deploy de Railway.
-- Batería completa: 46 grupos en verde (un fallo intermitente previo de `verifyRecipientLocationAccess`, día aleatorio que choca con otro turno de Carlos; 21/21 al repetir).
-- Siguiente: aprobación de Rafa para la etapa A (desplegar sin cambiar el rol) del plan `claude/seguridad-rol-app-runtime-auditoria-y-plan.md`.
+- `src/config/dbRuntimeRole.ts`: antes de escuchar, solo lectura: `DB_RUNTIME_ROLE` y `DB_RUNTIME_READINESS` (manifiesto `runtimePrivileges.generated.json`). **No bloquea por defecto** (base inaccesible o error de inspección → se registra y arranca igual). Solo con `DB_STARTUP_FAIL_CLOSED=true` / `REQUIRE_RESTRICTED_DB_ROLE=true` (para el cambio a app_runtime) puede negarse a arrancar.
+- `scripts/verifyStartupRoleCheck.ts` 8/8 en CI. `scripts/verifyRuntimeRole.ts` (puerta previa) sin cambios.
+- La migración 130 (archivos profesionales) y la sonda entre agencias están en un PR aparte (claude/stored-files-130), porque cambian políticas y permisos.
+- Siguiente: aprobación de Rafa para la etapa A del plan `claude/seguridad-rol-app-runtime-auditoria-y-plan.md`.
 
 ## 2026-10-26 — Facturación: logos de agencia hasta 5 MB, optimizados (feat/billing-logo-5mb, sin migración)
 

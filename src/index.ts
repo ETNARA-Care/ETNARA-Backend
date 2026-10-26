@@ -9,7 +9,12 @@ import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCareg
 const app = createApp();
 
 // Security audit 26-oct: the database role is checked before accepting traffic (see dbRuntimeRole.ts).
-await startupDatabaseCheck({ connectionString: env.DATABASE_URL, requireRestricted: process.env.REQUIRE_RESTRICTED_DB_ROLE === "true" });
+// Non-blocking by default; DB_STARTUP_FAIL_CLOSED / REQUIRE_RESTRICTED_DB_ROLE are only for the switch to app_runtime.
+await startupDatabaseCheck({
+  connectionString: env.DATABASE_URL,
+  requireRestricted: process.env.REQUIRE_RESTRICTED_DB_ROLE === "true",
+  failClosed: process.env.DB_STARTUP_FAIL_CLOSED === "true",
+});
 
 app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console

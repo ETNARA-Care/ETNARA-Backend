@@ -12,10 +12,10 @@ const results: { check: string; pass: boolean; detail: string }[] = [];
 const check = (check: string, pass: boolean, detail = "") => results.push({ check, pass, detail });
 
 class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
-async function run(url: string, requireRestricted: boolean, attempts = 2) {
+async function run(url: string, requireRestricted: boolean, attempts = 2, failClosed = false) {
   const lines: string[] = [];
   try {
-    const r = await startupDatabaseCheck({ connectionString: url, requireRestricted, attempts, delayMs: 50, log: (l) => lines.push(l), exit: (c) => { throw new Exit(c); } });
+    const r = await startupDatabaseCheck({ connectionString: url, requireRestricted, failClosed, attempts, delayMs: 50, log: (l) => lines.push(l), exit: (c) => { throw new Exit(c); } });
     return { exit: null as number | null, lines, r };
   } catch (e) {
     if (e instanceof Exit) return { exit: e.code, lines, r: null };
@@ -49,14 +49,19 @@ async function main() {
     rt.exit === null && !!rtRole && rtRole.includes('"role":"app_runtime"') && rtRole.includes('"canBypassRls":false') && !rt.lines.some((l) => l.includes("WARNING")), rtRole ?? rt.lines.join(" || "));
 
   const bad = new URL(runtimeUrl); bad.username = "etnara_no_such_role"; // local trust auth ignores passwords; an unknown role is refused everywhere
-  const wrong = await run(bad.toString(), false, 2);
-  check("R05 wrong credentials: retries, then exit 1 before listening (the deployment fails its healthcheck; the previous one keeps serving); the code is logged, never the password",
+  const wrong = await run(bad.toString(), false, 2, true);
+  check("R05 DB_STARTUP_FAIL_CLOSED=true and wrong credentials: retries, then exit 1 before listening (the deployment fails its healthcheck; the previous one keeps serving); the code is logged, never the password",
     wrong.exit === 1 && wrong.lines.filter((l) => l.startsWith("DB_STARTUP_CHECK attempt")).length === 2 && wrong.lines.some((l) => l.startsWith("DB_STARTUP_CHECK FAIL")) && !wrong.lines.join("\n").includes(pw),
     wrong.lines.join(" || "));
 
   const unreachable = new URL(runtimeUrl); unreachable.port = "1";
-  const down = await run(unreachable.toString(), false, 2);
-  check("R06 database unreachable: exit 1 after the retries", down.exit === 1, down.lines.at(-1) ?? "");
+  const down = await run(unreachable.toString(), false, 2, true);
+  check("R06 DB_STARTUP_FAIL_CLOSED=true and database unreachable: exit 1 after the retries", down.exit === 1, down.lines.at(-1) ?? "");
+  const soft = await run(unreachable.toString(), false, 2, false);
+  const softWrong = await run(bad.toString(), false, 2, false);
+  check("R08 DEFAULT (stage A): database unreachable or wrong credentials → logs DB_STARTUP_CHECK FAIL and starts as before (no exit)",
+    soft.exit === null && softWrong.exit === null && soft.lines.some((l) => l.startsWith("DB_STARTUP_CHECK FAIL")) && softWrong.lines.some((l) => l.startsWith("DB_STARTUP_CHECK FAIL")),
+    `${soft.lines.at(-1)} || ${softWrong.lines.at(-1)}`);
 
   // Readiness detects a missing GRANT (simulated inside a rolled-back transaction).
   await admin.query("BEGIN");
