@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { canSeeShift } from "../../security/roleGuards.js";
+import { isOrgManager, ownWorkerMembershipId } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -482,8 +482,25 @@ export async function getVerification(
     const shiftRow = await sql<{ id: string }>`
       SELECT id FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
-    // Managers, the assigned caregiver, or the family of that person (same rule as RLS 018/038).
-    if (!shiftRow.rows[0] || !(await canSeeShift(trx, shiftId))) throw new ShiftNotFoundError();
+    if (!shiftRow.rows[0]) throw new ShiftNotFoundError();
+    // Managers see every caregiver's events. A caregiver who is (or was) assigned
+    // to this shift sees only her own events and arrivals -- also after
+    // check-out, so the completed visit still opens in her app. Family and other
+    // caregivers get nothing here (the family portal has its own summary).
+    // Same row rule as RLS verification_events_worker_own_assignment and
+    // shift_arrivals_worker_read (018, 101).
+    const managerView = await isOrgManager(trx);
+    const ownMembership = managerView ? null : await ownWorkerMembershipId(trx);
+    if (!managerView) {
+      const assigned = ownMembership
+        ? (await sql<{ ok: boolean }>`
+            SELECT EXISTS (SELECT 1 FROM assignments a
+              WHERE a.shift_id = ${shiftId} AND a.organization_id = ${organizationId}
+                AND a.organization_worker_membership_id = ${ownMembership}) AS ok`.execute(trx)).rows[0]?.ok === true
+        : false;
+      if (!assigned) throw new ShiftNotFoundError();
+    }
+    const ownOnly = managerView ? sql`TRUE` : sql`organization_worker_membership_id = ${ownMembership}`;
 
     const result = await sql<{
       id: string;
@@ -496,7 +513,8 @@ export async function getVerification(
       SELECT ve.id, ve.event_type, ve.occurred_at, ve.organization_worker_membership_id, vm.code as method_code, ve.recorded_offline
       FROM verification_events ve
       JOIN verification_methods vm ON vm.id = ve.verification_method_id
-      WHERE ve.shift_id = ${shiftId}
+      WHERE ve.shift_id = ${shiftId} AND ve.organization_id = ${organizationId}
+        AND ${managerView ? sql`TRUE` : sql`ve.organization_worker_membership_id = ${ownMembership}`}
       ORDER BY ve.occurred_at
     `.execute(trx);
 
@@ -526,11 +544,10 @@ export async function getVerification(
     }
 
     // The review note is the agency's: caregivers see whether it was reviewed, not what was written.
-    const managerView = Boolean((await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok);
     const arrivals = (await sql<{ organization_worker_membership_id: string; occurred_at: string; proximity: string;
       distance_m: number | null; needs_review: boolean; reviewed_at: string | null; review_note: string | null; recorded_offline: boolean }>`
       SELECT organization_worker_membership_id, occurred_at, proximity, distance_m, needs_review, reviewed_at, review_note, recorded_offline
-      FROM shift_arrivals WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+      FROM shift_arrivals WHERE shift_id = ${shiftId} AND organization_id = ${organizationId} AND ${ownOnly}
       ORDER BY occurred_at
     `.execute(trx)).rows.map((a) => ({
       membershipId: a.organization_worker_membership_id, occurredAt: a.occurred_at, proximity: a.proximity,

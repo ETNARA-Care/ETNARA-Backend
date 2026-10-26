@@ -1,5 +1,6 @@
 import { sql } from "kysely";
-import { assertOrgManager } from "../../security/roleGuards.js";
+import { canManageShift } from "../../security/roleGuards.js";
+import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
@@ -62,8 +63,8 @@ export async function removeAssignmentAudited(
   }
 
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    // Managers only (RLS assignments_delete_manager says the same).
-    await assertOrgManager(trx);
+    // Agency managers, or the administrator of the establishment of that shift's person.
+    if (!(await canManageShift(trx, shiftId))) throw new OrganizationAccessDeniedError();
     const existing = await sql<RemovalSnapshot>`
       SELECT id, organization_id, shift_id, organization_worker_membership_id,
              care_recipient_id, role_in_shift, response_status, responded_at,

@@ -1,5 +1,5 @@
 import { sql } from "kysely";
-import { isOrgManager } from "../../security/roleGuards.js";
+import { canManageScheduleFor, isOrgManager } from "../../security/roleGuards.js";
 import { journeyStates, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
 import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
@@ -154,8 +154,8 @@ export async function createShift(
     throw new InvalidShiftTimesError();
   }
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    // Managers only (RLS shifts_admin_supervisor_full_tenant says the same).
-    if (!(await isOrgManager(trx))) throw new ShiftUpdateForbiddenError();
+    // Agency managers, or the administrator of the person's establishment.
+    if (!(await canManageScheduleFor(trx, input.careRecipientId))) throw new ShiftUpdateForbiddenError();
     return insertShiftInTransaction(trx, organizationId, input);
   });
 }

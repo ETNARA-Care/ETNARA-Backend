@@ -114,12 +114,16 @@ export async function ownWorkerMembershipId(trx: Trx): Promise<string | null> {
 /**
  * Raw care-event rows (with note_text and structured_data) for staff only:
  * managers, or the caregiver assigned to BOTH that event's shift and person
- * (care_events_worker_assigned_only, 018). Family reads go through the family
+ * (care_events_worker_assigned_only, 018), plus the records a caregiver wrote
+ * herself, so a completed visit still shows her own records. Family reads go through the family
  * timeline, which summarizes events. Expects the care_events alias `ce`.
  */
 export function eventStaffVisibleSql(): RawBuilder<boolean> {
   return sql<boolean>`(app_is_org_manager()
-    OR (app_worker_has_shift_assignment(ce.shift_id) AND app_worker_has_recipient_assignment(ce.care_recipient_id)))`;
+    OR (app_worker_has_shift_assignment(ce.shift_id) AND app_worker_has_recipient_assignment(ce.care_recipient_id))
+    OR EXISTS (SELECT 1 FROM organization_worker_memberships owm_acl JOIN workers w_acl ON w_acl.id = owm_acl.worker_id
+               WHERE owm_acl.id = ce.organization_worker_membership_id
+                 AND w_acl.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid))`;
 }
 
 /**
@@ -140,4 +144,32 @@ export function threadAccessSql(threadId: RawBuilder<unknown>): RawBuilder<boole
         OR app_user_authorized_for_recipient(
              NULLIF(current_setting('app.current_user_id', true), '')::uuid,
              mt_acl.organization_id, mt_acl.care_recipient_id)))`;
+}
+
+/**
+ * Who may schedule for one person: agency managers, or the administrator of
+ * the establishment where that person lives (establishment admins manage
+ * shifts and assignments of their own establishment, see establishmentAccess).
+ */
+export function scheduleManagerSql(recipientId: RawBuilder<unknown> | string | null): RawBuilder<boolean> {
+  return sql<boolean>`(app_is_org_manager() OR EXISTS (
+    SELECT 1 FROM care_recipients cr_acl
+    WHERE cr_acl.id = ${recipientId}::uuid
+      AND cr_acl.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      AND cr_acl.location_id IS NOT NULL
+      AND app_is_establishment_admin(cr_acl.location_id)))`;
+}
+
+export async function canManageScheduleFor(trx: Trx, recipientId: string | null | undefined): Promise<boolean> {
+  const r = await run(sql<{ ok: boolean }>`SELECT ${scheduleManagerSql(recipientId ?? null)} AS ok`, trx);
+  return r.rows[0]?.ok === true;
+}
+
+/** Same as canManageScheduleFor, for an existing shift of the current organization. */
+export async function canManageShift(trx: Trx, shiftId: string): Promise<boolean> {
+  const r = await run(sql<{ ok: boolean }>`
+    SELECT ${scheduleManagerSql(sql`(SELECT s.care_recipient_id FROM shifts s
+      WHERE s.id = ${shiftId}::uuid
+        AND s.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid)`)} AS ok`, trx);
+  return r.rows[0]?.ok === true;
 }
