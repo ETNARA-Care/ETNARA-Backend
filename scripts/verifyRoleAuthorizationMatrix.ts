@@ -42,6 +42,7 @@ const KNOWN_RLS_GAPS: Record<string, string> = {
   "cg-assigned: visita terminada: sus registros": "G2: tras el check-out, RLS oculta a la cuidadora sus propios registros (care_events_worker_assigned_only)",
   "cg-est-admin: crear turno de su establecimiento": "G3: RLS no deja ver a la administradora de establecimiento las personas de su establecimiento",
   "cg-est-admin: id del turno creado": "G3",
+  "cg-assigned: nombre visible en su visita terminada": "G1: tras la visita, RLS oculta el nombre de la persona a la cuidadora",
   "cg-est-admin: asignar en su establecimiento": "G3",
   "cg-est-admin: ver asignaciones de su establecimiento": "G3",
 };
@@ -273,6 +274,12 @@ async function main() {
   await q(`UPDATE shifts SET status='completed' WHERE id=$1`, [s1]);
   await expectPresent("visita terminada: su verificación", cgA, `${A}/shifts/${s1}/visit-verification`, [vA]);
   await expectPresent("visita terminada: sus registros", cgA, `${A}/shifts/${s1}/care-events`, [e1]);
+
+  const myShifts = await call("GET", `${A}/me/shifts`, cgA.token);
+  const doneRow = (myShifts.body.shifts ?? []).find((x: Json) => x.id === s1);
+  results.push({ name: "cg-assigned: nombre visible en su visita terminada", pass: myShifts.status === 200 && typeof doneRow?.care_recipient_display_name === "string" && doneRow.care_recipient_display_name.length > 0,
+    detail: `GET /org/me/shifts -> ${myShifts.status} name=${doneRow?.care_recipient_display_name ?? "null"}` });
+  results.push({ name: "cg-assigned: /me/shifts sin datos clínicos", pass: !/allergies|date_of_birth/.test(myShifts.text), detail: "sin alergias ni fecha de nacimiento" });
 
   // Establishment administrator (a caregiver who runs one establishment)
   const loc = (await q<{ id: string }>(`INSERT INTO locations (organization_id,name) VALUES ($1,$2) RETURNING id`, [orgA, `Hogar ${tag}`])).rows[0].id;

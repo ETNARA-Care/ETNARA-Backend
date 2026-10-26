@@ -138,6 +138,7 @@ export interface ShiftRow {
   updated_at: string;
   assignment_id?: string;
   assignment_response_status?: "pending" | "accepted";
+  care_recipient_display_name?: string | null;
 }
 
 export async function createShift(
@@ -264,13 +265,18 @@ export async function listMyShifts(userId: string, organizationId: string) {
     const result = await sql<ShiftRow>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, a.id AS assignment_id,
-             a.response_status AS assignment_response_status
+             a.response_status AS assignment_response_status,
+             -- Only the name to show on the caregiver's own visits (past ones
+             -- included), never the rest of the person's profile.
+             COALESCE(NULLIF(cr.preferred_name, ''), trim(cr.first_name || ' ' || cr.last_name)) AS care_recipient_display_name
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
       JOIN organization_worker_memberships owm
         ON owm.id = a.organization_worker_membership_id
        AND owm.status = 'active'
+      LEFT JOIN care_recipients cr
+        ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
       WHERE s.organization_id = ${organizationId}
         AND owm.worker_id = ${workerId}
         AND a.response_status IN ('pending', 'accepted')
