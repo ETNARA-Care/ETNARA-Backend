@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { threadAccessSql } from "../../security/roleGuards.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
@@ -210,6 +211,7 @@ export async function listConversations(userId: string, organizationId: string) 
       FROM message_threads mt
       JOIN message_thread_participants mtp ON mtp.message_thread_id = mt.id
       WHERE mt.organization_id = ${organizationId} AND mtp.user_id = ${userId}
+        AND ${threadAccessSql(sql`mt.id`)}
       ORDER BY mt.created_at DESC
     `.execute(trx);
     return result.rows;
@@ -233,8 +235,12 @@ export async function listMessages(
   assertUuid(conversationId, "conversationId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const threadRow = await sql<{ id: string }>`
-      SELECT id FROM message_threads WHERE id = ${conversationId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM message_threads WHERE id = ${conversationId} AND organization_id = ${organizationId}
+        AND ${threadAccessSql(sql`message_threads.id`)}
+      LIMIT 1
     `.execute(trx);
+    // Participants only, and only while they are still authorized for the
+    // person the conversation is about (same rule as RLS messages_read, 038).
     if (!threadRow.rows[0]) throw new ConversationNotFoundError();
 
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
@@ -284,6 +290,7 @@ export async function sendMessage(
     const participant = await sql<{ can_write: boolean }>`
       SELECT can_write FROM message_thread_participants
       WHERE message_thread_id = ${conversationId} AND organization_id = ${organizationId} AND user_id = ${userId}
+        AND ${threadAccessSql(sql`message_thread_participants.message_thread_id`)}
       LIMIT 1
     `.execute(trx);
     if (!participant.rows[0]) throw new ConversationNotFoundError();

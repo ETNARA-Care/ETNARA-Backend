@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { canSeeShift } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -481,7 +482,8 @@ export async function getVerification(
     const shiftRow = await sql<{ id: string }>`
       SELECT id FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
-    if (!shiftRow.rows[0]) throw new ShiftNotFoundError();
+    // Managers, the assigned caregiver, or the family of that person (same rule as RLS 018/038).
+    if (!shiftRow.rows[0] || !(await canSeeShift(trx, shiftId))) throw new ShiftNotFoundError();
 
     const result = await sql<{
       id: string;

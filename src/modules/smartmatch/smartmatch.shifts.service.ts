@@ -179,6 +179,7 @@ export async function getShiftPrivateInstructions(userId: string, organizationId
     const r = await sql<{ instructions: string; updated_at: string }>`
       SELECT instructions, updated_at FROM shift_private_instructions
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+        AND (app_is_org_manager() OR app_worker_has_shift_assignment(shift_private_instructions.shift_id))
     `.execute(trx);
     return r.rows[0] ?? null;
   });

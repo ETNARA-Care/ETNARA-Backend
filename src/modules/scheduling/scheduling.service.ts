@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { isOrgManager } from "../../security/roleGuards.js";
 import { journeyStates, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
 import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
@@ -152,7 +153,11 @@ export async function createShift(
   if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
     throw new InvalidShiftTimesError();
   }
-  return withTenantContext({ userId, organizationId }, (trx) => insertShiftInTransaction(trx, organizationId, input));
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers only (RLS shifts_admin_supervisor_full_tenant says the same).
+    if (!(await isOrgManager(trx))) throw new ShiftUpdateForbiddenError();
+    return insertShiftInTransaction(trx, organizationId, input);
+  });
 }
 
 /**
@@ -205,7 +210,8 @@ export interface ListShiftsFilter {
 export async function listShifts(userId: string, organizationId: string, filter: ListShiftsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
-    const conditions = [sql`s.organization_id = ${organizationId}`];
+    // Managers see the whole schedule; caregivers only shifts they are assigned to (same rule as RLS).
+    const conditions = [sql`s.organization_id = ${organizationId}`, sql`(app_is_org_manager() OR app_worker_has_shift_assignment(s.id))`];
     if (filter.dateFrom) conditions.push(sql`s.scheduled_start >= ${filter.dateFrom}`);
     if (filter.dateTo) conditions.push(sql`s.scheduled_start <= ${filter.dateTo}`);
     if (filter.status) conditions.push(sql`s.status = ${filter.status}`);
@@ -419,6 +425,7 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
       SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
+        AND (app_is_org_manager() OR app_worker_has_shift_assignment(shifts.id))
       LIMIT 1
     `.execute(trx);
     if (!result.rows[0]) throw new ShiftNotFoundError();
@@ -538,6 +545,8 @@ export interface CoverageSummary {
 export async function getCoverageSummary(userId: string, organizationId: string): Promise<CoverageSummary> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
+    // Agency-wide counts: managers only.
+    if (!(await isOrgManager(trx))) throw new ShiftUpdateForbiddenError();
     const result = await sql<{ total: number; covered: number; uncovered: number; cancelled: number }>`
       SELECT
         count(*)::int AS total,

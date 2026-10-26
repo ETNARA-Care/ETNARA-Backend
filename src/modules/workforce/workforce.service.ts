@@ -76,9 +76,17 @@ export async function createOrLinkWorker(
     let workerId = input.workerId;
 
     if (workerId) {
-      const existing = await sql<{ id: string }>`SELECT id FROM workers WHERE id = ${workerId} LIMIT 1`.execute(
-        trx
-      );
+      // Only a profile this agency can already see (own staff, or the caller's
+      // own profile). Never another agency's caregiver: without this filter a
+      // manager could rename and link any caregiver by id (auditoría M1).
+      // Same rule as RLS workers_self_or_shared_org.
+      const existing = await sql<{ id: string }>`
+        SELECT w.id FROM workers w
+        WHERE w.id = ${workerId}
+          AND (w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+            OR EXISTS (SELECT 1 FROM organization_worker_memberships owm
+                       WHERE owm.worker_id = w.id AND owm.organization_id = ${organizationId} AND owm.status = 'active'))
+        LIMIT 1`.execute(trx);
       if (!existing.rows[0]) {
         const err = new Error("WORKER_NOT_FOUND");
         err.name = "WorkerNotFoundError";
@@ -118,8 +126,21 @@ export async function createOrLinkWorker(
   });
 }
 
+/** Managers and establishment administrators see the roster (same staff set as RLS staff_write). */
+async function assertRosterReader(trx: Parameters<Parameters<typeof withTenantContext>[1]>[0], ownMembershipId?: string) {
+  const r = await sql<{ ok: boolean }>`
+    SELECT (app_is_org_manager() OR app_is_any_establishment_admin()
+      OR (${ownMembershipId ?? null}::uuid IS NOT NULL AND EXISTS (
+        SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+        WHERE owm.id = ${ownMembershipId ?? null}::uuid
+          AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid))) AS ok`.execute(trx);
+  if (!r.rows[0]?.ok) throw new WorkforceManagementForbiddenError();
+}
+
 export async function listWorkforce(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Family and caregivers do not see the roster (names, dates, credentials).
+    await assertRosterReader(trx);
     const result = await sql<MembershipRow & { display_name: string | null }>`
       SELECT owm.id, owm.worker_id, owm.organization_id, owm.status, owm.internal_role,
              owm.hired_at, owm.ended_at, owm.created_at, owm.updated_at, w.display_name
@@ -139,6 +160,8 @@ interface WorkerProfileRow extends MembershipRow {
 export async function getWorkerProfile(userId: string, organizationId: string, membershipId: string) {
   assertUuid(membershipId, "organizationWorkerMembershipId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers, establishment administrators, or the caregiver's own profile.
+    await assertRosterReader(trx, membershipId);
     const membershipResult = await sql<WorkerProfileRow>`
       SELECT owm.id, owm.worker_id, owm.organization_id, owm.status, owm.internal_role,
              owm.hired_at, owm.ended_at, owm.created_at, owm.updated_at, w.default_scope, w.display_name

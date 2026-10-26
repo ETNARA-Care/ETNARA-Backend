@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { assertOrgManager } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
@@ -175,8 +176,11 @@ export async function createAssignment(
   input: CreateAssignmentInput
 ): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
-  const saved = await withTenantContext({ userId, organizationId }, (trx) =>
-    assignWorkerToShiftInTransaction(trx, organizationId, shiftId, input));
+  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers only (RLS assignments_insert_manager says the same).
+    await assertOrgManager(trx);
+    return assignWorkerToShiftInTransaction(trx, organizationId, shiftId, input);
+  });
   return saved.assignment;
 }
 
@@ -322,6 +326,7 @@ export async function listAssignments(userId: string, organizationId: string, sh
              response_status, responded_at, response_reason, created_at
       FROM assignments
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+        AND (app_is_org_manager() OR app_worker_has_shift_assignment(assignments.shift_id))
       ORDER BY created_at DESC
     `.execute(trx);
     return result.rows;

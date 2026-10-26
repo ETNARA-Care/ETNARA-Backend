@@ -181,6 +181,8 @@ export async function getFamilyTimeline(
       const photos = await sql<{ care_event_id: string; id: string }>`
         SELECT id, care_event_id FROM care_event_photos
         WHERE care_event_id = ANY(${photoEventIds})
+          AND organization_id = ${organizationId}
+          AND public.app_family_can_view_activity_photo(id)
       `.execute(trx);
       for (const p of photos.rows) photoRefMap.set(p.care_event_id, p.id);
     }
