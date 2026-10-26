@@ -318,5 +318,16 @@ jobs:
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
 
+      - name: Secure the published demo accounts (operator script, own fresh database)
+        env:
+          ETNARA_DISPOSABLE_DB: "true"
+        shell: bash
+        run: |
+          psql postgres://postgres@localhost:5432/postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE etnara_demo_ci"
+          export MIGRATIONS_DATABASE_URL=postgres://postgres@localhost:5432/etnara_demo_ci
+          export APP_RUNTIME_PASSWORD="$(openssl rand -hex 24)" PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)" DEMO_PASSWORD="$(openssl rand -hex 24)"
+          npm run bootstrap:staging
+          npx tsx scripts/verifySecureDemoAccounts.ts
+
       - name: Diff safety check
         run: git diff --check
