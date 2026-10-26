@@ -1,4 +1,4 @@
-import express, { Router, type Request, type Response } from "express";
+import express, { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { MembershipNotActiveError, InvalidTenantContextError } from "../../context/errors.js";
@@ -66,7 +66,13 @@ router.post(`${base}/invoices/:invoiceId/recover`, requireAuth, handle(200, (req
 router.get(`${base}/settings`, requireAuth, handle(200, (req, org) => issuing.getSettings(user(req), org)));
 router.put(`${base}/settings`, requireAuth, handle(200, async (req, org) => { await issuing.updateSettings(user(req), org, issuing.settingsSchema.parse(req.body)); return { ok: true }; }));
 router.post(`${base}/settings/tax-validation`, requireAuth, handle(200, async (req, org) => { await issuing.setTaxValidation(user(req), org, issuing.taxValidationSchema.parse(req.body)); return { ok: true }; }));
-router.post(`${base}/settings/logo`, requireAuth, express.raw({ type: ["image/png", "image/jpeg"], limit: issuing.LOGO_MAX_BYTES + 1024 }),
+// Any declared type is read as raw bytes: the real type is decided by the magic bytes (PNG, JPEG, WebP).
+// A body over 5 MB is answered 413 LOGO_TOO_LARGE before anything is processed.
+router.post(`${base}/settings/logo`, requireAuth, express.raw({ type: () => true, limit: issuing.LOGO_MAX_BYTES }),
+  (err: unknown, _req: Request, res: Response, next: NextFunction) => {
+    if ((err as { type?: unknown } | null)?.type === "entity.too.large") { res.status(413).json({ error: "LOGO_TOO_LARGE" }); return; }
+    next(err);
+  },
   handle(201, async (req, org) => ({ logo: await issuing.uploadLogo(user(req), org, Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)) })));
 router.post(`${base}/invoices/:invoiceId/issue`, requireAuth, handle(200, async (req, org) => ({ issued: await issuing.issueInvoice(user(req), org, id(req, "invoiceId"), issuing.issueSchema.parse(req.body)) })));
 router.post(`${base}/invoices/:invoiceId/void`, requireAuth, handle(200, async (req, org) => ({ voided: await issuing.voidInvoice(user(req), org, id(req, "invoiceId"), issuing.voidSchema.parse(req.body)) })));

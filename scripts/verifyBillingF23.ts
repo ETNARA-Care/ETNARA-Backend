@@ -237,15 +237,31 @@ async function main() {
     };
     const png = await sharp({ create: { width: 400, height: 160, channels: 3, background: "#16213D" } }).png().toBuffer();
     const notImage = await rawCall(`${SET}/logo`, adm.token, Buffer.from("%PDF-1.4 not an image"), "image/png");
-    const big = await rawCall(`${SET}/logo`, adm.token, Buffer.concat([png, Buffer.alloc(320 * 1024)]), "image/png");
+    const gif = await rawCall(`${SET}/logo`, adm.token, Buffer.from("GIF89a\x01\x00\x01\x00"), "image/gif");
+    const empty = await rawCall(`${SET}/logo`, adm.token, Buffer.alloc(0), "image/png");
+    const tooBig = await rawCall(`${SET}/logo`, adm.token, Buffer.concat([png, Buffer.alloc(5 * 1024 * 1024)]), "image/png");
     const supLogo = await rawCall(`${SET}/logo`, sup.token, png, "image/png");
+    const otherAgency = await rawCall(`${SET}/logo`, admB.token, png, "image/png");
+    const platformLogo = await rawCall(`${SET}/logo`, platform.token, png, "image/png");
+    // A large (fictitious) logo with transparency, well over the old 300 KB limit, sent as WebP from a phone.
+    const W = 1600, H = 800, rawPx = Buffer.alloc(W * H * 4);
+    for (let i = 0; i < W * H; i++) { const x = i % W, y = (i / W) | 0; rawPx[i * 4] = (x * 255 / W) | 0; rawPx[i * 4 + 1] = (y * 255 / H) | 0; rawPx[i * 4 + 2] = (i * 7) & 255; rawPx[i * 4 + 3] = x < 40 ? 0 : 255; }
+    const bigPng = await sharp(rawPx, { raw: { width: W, height: H, channels: 4 } }).png().toBuffer();
+    const webp = await sharp(rawPx, { raw: { width: W, height: H, channels: 4 } }).webp({ quality: 95 }).toBuffer();
+    const bigPngUp = await rawCall(`${SET}/logo`, adm.token, bigPng, "image/png");
+    const webpUp = await rawCall(`${SET}/logo`, adm.token, webp, "image/webp");
+    const webpGet = Buffer.from(await (await fetch(`${base}${SET}/logo`, { headers: { Authorization: `Bearer ${adm.token}` } })).arrayBuffer());
+    const webpMeta = await sharp(webpGet).metadata();
     const logo = await rawCall(`${SET}/logo`, adm.token, png, "image/png");
     const logoGet = await fetch(`${base}${SET}/logo`, { headers: { Authorization: `Bearer ${adm.token}` } });
     const logoBytes = Buffer.from(await logoGet.arrayBuffer());
-    check("E03 logo: not an image 415; over 300 KB 413; supervisor 403; valid PNG 201 stored re-encoded in the private bucket and served back (PNG, no-store)",
-      notImage.status === 415 && [413].includes(big.status) && supLogo.status === 403 && logo.status === 201 && logoGet.status === 200
-        && logoBytes.subarray(1, 4).toString() === "PNG" && logoGet.headers.get("cache-control") === "private, no-store",
-      `${S(notImage)} ${S(big)} ${S(supLogo)} ${S(logo)} get=${logoGet.status} ${logoGet.headers.get("cache-control")}`);
+    check("E03 logo: PNG/JPEG/WebP up to 5 MB (WebP and a large PNG accepted: one ≤ 800 px PNG, proportions and transparency kept); PDF/GIF 415; empty 400; over 5 MB 413 LOGO_TOO_LARGE; supervisor, another agency and ETNARA central refused; served back as PNG, no-store",
+      notImage.status === 415 && gif.status === 415 && empty.status === 400 && tooBig.status === 413 && (tooBig.body as Json).error === "LOGO_TOO_LARGE"
+        && supLogo.status === 403 && [403, 404].includes(otherAgency.status) && [403, 404].includes(platformLogo.status)
+        && bigPng.length > 300 * 1024 && bigPngUp.status === 201 && webpUp.status === 201
+        && webpMeta.format === "png" && webpMeta.width === 800 && webpMeta.height === 400 && webpMeta.hasAlpha === true && !webpMeta.exif && webpGet.length < 300 * 1024
+        && logo.status === 201 && logoGet.status === 200 && logoBytes.subarray(1, 4).toString() === "PNG" && logoGet.headers.get("cache-control") === "private, no-store",
+      `${S(notImage)} gif=${gif.status} empty=${empty.status} ${S(tooBig)} ${S(supLogo)} other=${otherAgency.status} platform=${platformLogo.status} bigPng=${bigPng.length}B→${bigPngUp.status} webp=${webpUp.status} ${webpMeta.width}x${webpMeta.height} alpha=${webpMeta.hasAlpha} ${webpGet.length}B get=${logoGet.status}`);
 
     // E04 Configure: profile, prefix, tax treatment and the validation (with a note).
     const put = await call("PUT", SET, adm.token, { legalName: "Cuidado en Casa Demo, LLC (ficticia)", address: "Calle Falsa 123, San Juan, PR", phone: "787-000-0000", merchantRegistration: "000-ficticio", paymentTerms: "15 días", footerNote: "Gracias por confiar en nosotros.", prefix: "CS" });
