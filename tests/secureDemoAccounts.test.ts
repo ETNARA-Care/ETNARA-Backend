@@ -23,10 +23,22 @@ describe("secureDemoAccounts", () => {
     expect(src).toMatch(/else \{ await c\.query\("ROLLBACK"\)/);
   });
 
-  it("demo seeding scripts refuse to run outside a disposable database", () => {
+  it("demo seeding scripts refuse to run outside a disposable database (guard from #231)", () => {
     for (const f of ["seedDemo.ts", "repairDemoAccess.ts", "createMinimalCaregiverDemo.ts"]) {
       const src = readFileSync(new URL(`../scripts/${f}`, import.meta.url), "utf8");
-      expect(src, f).toContain('process.env.ETNARA_DISPOSABLE_DB !== "true"');
+      expect(src, f).toContain("assertDisposableDatabase(");
+      expect(src, f).toContain("demoPasswordFromEnv(");
     }
+  });
+
+  it("the one-shot rotation function has the approved, fixed targets", () => {
+    const fn = readFileSync(new URL("../ops/demo-rotation/apply.function.ts", import.meta.url), "utf8");
+    expect(fn).toContain('const EXPECTED_ORG = "febe519d-3504-4488-a741-d962db40be89"');
+    expect(fn).toContain('const ALIAS_MAILBOX = "etnaracare@gmail.com"');
+    for (const n of ["admin", "carlos", "familia", "maria", "supervisor"]) expect(fn).toContain(`"etnaracare+demo-${n}@gmail.com"`);
+    expect(fn).toContain('endsWith(".railway.internal")');
+    const sim = readFileSync(new URL("../ops/demo-rotation/simulate.function.ts", import.meta.url), "utf8");
+    expect(sim).toContain("apply: false });");
+    expect(sim).not.toContain("apply: true");
   });
 });

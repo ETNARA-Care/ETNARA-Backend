@@ -227,12 +227,20 @@ async function main() {
   // Recurrence: the old demo scripts must not run against a non-disposable database
   const runScript = (file: string, env: Record<string, string>) => {
     try { execFileSync("npx", ["tsx", file], { env: { ...process.env, ...env }, stdio: "pipe", timeout: 60_000 }); return "ok"; }
-    catch (e) { return String((e as { stderr?: Buffer }).stderr ?? "").includes("only runs against a disposable database") ? "refused" : "error"; }
+    catch (e) { return String((e as { stderr?: Buffer }).stderr ?? "").includes("only runs against a disposable local database") ? "refused" : "error"; }
   };
   const snapRepair = await snapshot();
+  const prodUrl = "postgres://postgres:pw@etnara-care-staging-db.railway.internal:5432/railway";
+  const strong = randomBytes(12).toString("hex");
+  const cases: Array<[string, Record<string, string>]> = [
+    ["sin ETNARA_DISPOSABLE_DB", { ETNARA_DISPOSABLE_DB: "", DATABASE_URL: adminUrl!, MIGRATIONS_DATABASE_URL: adminUrl!, DEMO_PASSWORD: strong }],
+    ["base de producción aun con ETNARA_DISPOSABLE_DB=true", { ETNARA_DISPOSABLE_DB: "true", DATABASE_URL: prodUrl, MIGRATIONS_DATABASE_URL: prodUrl, DEMO_PASSWORD: strong }],
+    ["dentro de Railway", { ETNARA_DISPOSABLE_DB: "true", RAILWAY_ENVIRONMENT: "production", DATABASE_URL: adminUrl!, MIGRATIONS_DATABASE_URL: adminUrl!, DEMO_PASSWORD: strong }],
+    ["contraseña corta (como la publicada)", { ETNARA_DISPOSABLE_DB: "true", DATABASE_URL: adminUrl!, MIGRATIONS_DATABASE_URL: adminUrl!, DEMO_PASSWORD: "Short123!" }],
+  ];
   for (const f of ["scripts/repairDemoAccess.ts", "scripts/createMinimalCaregiverDemo.ts", "scripts/seedDemo.ts"]) {
-    const r = runScript(f, { ETNARA_DISPOSABLE_DB: "", DATABASE_URL: adminUrl!, MIGRATIONS_DATABASE_URL: adminUrl!, DEMO_PASSWORD: randomBytes(12).toString("hex") });
-    check(`recurrencia: ${f.split("/")[1]} se niega fuera de una base desechable`, r === "refused", r);
+    const outcomes = cases.map(([label, env]) => `${label}=${runScript(f, env)}`);
+    check(`recurrencia: ${f.split("/")[1]} se niega (sin bandera, producción, Railway, contraseña corta)`, outcomes.every((o) => o.endsWith("=refused")), outcomes.join("; "));
   }
   const demoCount = (await q(`SELECT count(*)::int n FROM users WHERE lower(email) LIKE '%@demo.etnara.care'`)).rows[0].n;
   check("recurrencia: ningún script recreó ni cambió cuentas demo", (await snapshot()) === snapRepair && demoCount === 5);
