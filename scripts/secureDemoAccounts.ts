@@ -75,6 +75,12 @@ export async function secureDemoAccounts(c: pg.ClientBase, opts: { orgId: string
 
     const foreign = (await c.query(`SELECT DISTINCT organization_id FROM organization_memberships WHERE user_id = ANY($1) AND organization_id <> $2`, [ids, opts.orgId])).rowCount ?? 0;
     if (foreign > 0) fail(`alguna cuenta demo pertenece a otra organización (${foreign}); no se toca nada`);
+    const foreignWork = (await c.query(
+      `SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+        WHERE w.user_id = ANY($1) AND owm.organization_id <> $2`, [ids, opts.orgId])).rowCount ?? 0;
+    if (foreignWork > 0) fail(`alguna cuenta demo trabaja como cuidadora en otra organización (${foreignWork}); no se toca nada`);
+    const foreignFamily = (await c.query(`SELECT 1 FROM family_relationships WHERE user_id = ANY($1) AND organization_id <> $2`, [ids, opts.orgId])).rowCount ?? 0;
+    if (foreignFamily > 0) fail(`alguna cuenta demo es familiar en otra organización (${foreignFamily}); no se toca nada`);
     const inOrg = (await c.query(`SELECT 1 FROM organizations WHERE id = $1`, [opts.orgId])).rowCount ?? 0;
     if (inOrg !== 1) fail("la organización indicada no existe");
     const central = (await c.query(`SELECT 1 FROM platform_admins WHERE user_id = ANY($1) AND revoked_at IS NULL`, [ids])).rowCount ?? 0;

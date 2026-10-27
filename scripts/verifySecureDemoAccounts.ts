@@ -89,6 +89,28 @@ async function main() {
   const note = (await q<{ id: string }>(`SELECT id FROM care_event_types WHERE code='NOTE'`)).rows[0].id;
   await q(`INSERT INTO care_events (organization_id,shift_id,care_recipient_id,organization_worker_membership_id,care_event_type_id,note_text) VALUES ($1,$2,$3,$4,$5,'nota sintetica')`, [org, s1, r1, people.maria.owm, note]);
 
+  // Bystanders the script must never touch: ETNARA Central, another agency (with data),
+  // a non-demo account inside Casa Demo, and a look-alike address that only contains the demo domain.
+  const bystanders: Record<string, { id: string; email: string }> = {};
+  const addUser = async (key: string, email: string, orgId: string | null, role: string | null) => {
+    const id = (await q<{ id: string }>(`INSERT INTO users (email,password_hash,status) VALUES ($1,$2,'active') RETURNING id`, [email, hash])).rows[0].id;
+    if (orgId && role) {
+      const m = (await q<{ id: string }>(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [id, orgId])).rows[0].id;
+      await q(`INSERT INTO user_roles (organization_membership_id,organization_id,role_id) SELECT $1,$2,id FROM roles WHERE code = $3`, [m, orgId, role]);
+    }
+    bystanders[key] = { id, email };
+  };
+  await addUser("central", `central-${randomUUID().slice(0, 6)}@example.com`, null, null);
+  await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [bystanders.central.id]);
+  await addUser("otraAdmin", `admin-${randomUUID().slice(0, 6)}@otra.example`, other, "ORGANIZATION_ADMIN");
+  await addUser("duenoCasaDemo", `dueno-${randomUUID().slice(0, 6)}@example.com`, org, "ORGANIZATION_ADMIN");
+  await addUser("parecido", `maria@demo.etnara.care.otra.example`, other, "ORGANIZATION_ADMIN");
+  const r2 = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name) VALUES ($1,'Sintetico','Luis') RETURNING id`, [other])).rows[0].id;
+  await q(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now(),now()+interval '2 hours','confirmed')`, [other, r2]);
+  const bystanderIds = () => Object.values(bystanders).map((b) => b.id);
+  const bystanderSnapshot = async () => (await q(`SELECT u.id, u.email, u.password_hash, (SELECT count(*) FROM sessions s WHERE s.user_id=u.id AND s.revoked_at IS NULL) open, (SELECT count(*) FROM platform_admins p WHERE p.user_id=u.id) central, (SELECT count(*) FROM organization_memberships m WHERE m.user_id=u.id AND m.status='active') memberships FROM users u WHERE u.id = ANY($1) ORDER BY u.id`, [bystanderIds()])).rows.map((r) => Object.values(r).join("|")).join("\n");
+  const otherCounts = async () => JSON.stringify((await q(`SELECT (SELECT count(*) FROM care_recipients WHERE organization_id=$1) r,(SELECT count(*) FROM shifts WHERE organization_id=$1) s,(SELECT count(*) FROM organization_memberships WHERE organization_id=$1 AND status='active') m,(SELECT count(*) FROM user_roles WHERE organization_id=$1) ro,(SELECT count(*) FROM audit_log WHERE organization_id=$1) a`, [other])).rows[0]);
+
   // Real sessions for everyone, and one pending reset link (familia)
   const tokens: Record<string, string> = {};
   for (const k of Object.keys(people)) {
@@ -97,6 +119,23 @@ async function main() {
   }
   check("antes: las 5 cuentas inician sesión", Object.values(tokens).every(Boolean));
   ip++;
+  const byTokens: Record<string, string> = {};
+  for (const k of Object.keys(bystanders)) byTokens[k] = (await call("POST", "/auth/login", "", { email: bystanders[k].email, password })).body.token;
+  check("antes: Central, otra agencia, dueño de Casa Demo y correo parecido inician sesión", Object.values(byTokens).every(Boolean));
+  ip++;
+  let bySnapBefore = await bystanderSnapshot();
+  const otherBefore = await otherCounts();
+  const bystandersUntouched = async (when: string) => {
+    // Compare the stored state first: logging in below opens new sessions on purpose.
+    const sameState = (await bystanderSnapshot()) === bySnapBefore;
+    ip++;
+    const me = await Promise.all(Object.values(byTokens).map((t) => call("GET", "/me", t)));
+    const logins = await Promise.all(Object.values(bystanders).map((b) => call("POST", "/auth/login", "", { email: b.email, password })));
+    const auditHits = (await q(`SELECT count(*)::int n FROM audit_log WHERE action='DEMO_ACCOUNT_SECURED' AND entity_id::text = ANY($1)`, [bystanderIds()])).rows[0].n;
+    check(`${when}: Central, otra agencia, dueño y correo parecido sin cambios (correo, contraseña, sesiones, accesos)`, sameState && me.every((r) => r.status === 200) && logins.every((r) => r.status === 200) && auditHits === 0, `me=${me.map((r) => r.status)} login=${logins.map((r) => r.status)} audit=${auditHits}`);
+    bySnapBefore = await bystanderSnapshot();
+    check(`${when}: la otra agencia conserva residentes, turnos, membresías, roles y auditoría`, (await otherCounts()) === otherBefore, await otherCounts());
+  };
   await call("POST", "/auth/password-reset/request", "", { email: people.familia.email });
   for (let i = 0; i < 40 && mails.length < 1; i++) await new Promise((r) => setTimeout(r, 50));
   const pendingReset = linkToken(mails.find((m) => m.to === people.familia.email)?.html ?? "");
@@ -118,6 +157,13 @@ async function main() {
   const foreignM = (await q<{ id: string }>(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [people.carlos.id, other])).rows[0].id;
   await aborts("protección: una cuenta demo en otra agencia → aborta sin escribir", { orgId: org, expectedCount: 5, apply: true });
   await q(`DELETE FROM organization_memberships WHERE id=$1`, [foreignM]);
+  const carlosWorker = (await q<{ id: string }>(`SELECT id FROM workers WHERE user_id=$1`, [people.carlos.id])).rows[0].id;
+  const foreignW = (await q<{ id: string }>(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,'active','caregiver') RETURNING id`, [carlosWorker, other])).rows[0].id;
+  await aborts("protección: una cuenta demo es cuidadora de otra agencia → aborta sin escribir", { orgId: org, expectedCount: 5, apply: true });
+  await q(`DELETE FROM organization_worker_memberships WHERE id=$1`, [foreignW]);
+  const foreignF = (await q<{ id: string }>(`INSERT INTO family_relationships (user_id,organization_id,care_recipient_id,relationship_type,status) VALUES ($1,$2,$3,'hija','active') RETURNING id`, [people.familia.id, other, r2])).rows[0].id;
+  await aborts("protección: una cuenta demo es familiar en otra agencia → aborta sin escribir", { orgId: org, expectedCount: 5, apply: true });
+  await q(`DELETE FROM family_relationships WHERE id=$1`, [foreignF]);
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [people.admin.id]);
   await aborts("protección: cuenta demo con acceso a ETNARA Central → aborta sin escribir", { orgId: org, expectedCount: 5, apply: true });
   await q(`DELETE FROM platform_admins WHERE user_id=$1`, [people.admin.id]);
@@ -162,6 +208,7 @@ async function main() {
   const audit = (await q<{ previous_value: Json; new_value: Json }>(`SELECT previous_value, new_value FROM audit_log WHERE action='DEMO_ACCOUNT_SECURED' AND organization_id=$1`, [org])).rows;
   check("aplicar: 5 filas de auditoría sin secretos", audit.length === 5 && !audit.some((a) => /scrypt\$|[0-9a-f]{64}/.test(JSON.stringify(a)) || JSON.stringify(a).includes(password)));
   check("aplicar: la salida no contiene hashes, tokens ni contraseñas", !leak(applyLines));
+  await bystandersUntouched("aplicar (bloqueo)");
 
   // Recurrence: the old demo scripts must not run against a non-disposable database
   const runScript = (file: string, env: Record<string, string>) => {
@@ -198,6 +245,7 @@ async function main() {
   ip++;
   const demoEmailLogin = await call("POST", "/auth/login", "", { email: people.maria.email, password: newPassword });
   check("alias: el correo @demo ya no inicia sesión", demoEmailLogin.status === 401);
+  await bystandersUntouched("aplicar (alias)");
 
   server.close(); await pool.end(); await db.end();
   const failed = results.filter((r) => !r.pass);
