@@ -78,6 +78,17 @@ jobs:
           AUTHZ_DB_MODE: app_runtime
         run: npx tsx scripts/verifyRoleAuthorizationMatrix.ts
 
+      - name: PostgreSQL platform PHI boundary verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyPlatformPhiBoundary.ts
+
+      - name: PostgreSQL credential review write boundary verification
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+        run: npx tsx scripts/verifyCredentialReviewWriteBoundary.ts
+
       - name: Shift reschedule permissions, audit and caregiver notice, app as superuser
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -91,17 +102,6 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
           AUTHZ_DB_MODE: app_runtime
         run: npx tsx scripts/verifyShiftReschedule.ts
-
-      - name: PostgreSQL platform PHI boundary verification
-        env:
-          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
-          ETNARA_DISPOSABLE_DB: "true"
-        run: npx tsx scripts/verifyPlatformPhiBoundary.ts
-
-      - name: PostgreSQL credential review write boundary verification
-        env:
-          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
-        run: npx tsx scripts/verifyCredentialReviewWriteBoundary.ts
 
       - name: PostgreSQL SmartMatch RLS verification (app_runtime, synthetic)
         env:
