@@ -234,15 +234,17 @@ function toLocation(row: Record<string, unknown> | undefined): CareRecipientLoca
 }
 
 /**
- * Managers, and workers with an assigned not-yet-ended shift (or open visit)
- * for this recipient, may read. Everyone else, including family members of the
- * recipient, gets RecipientNotFoundError: no signal about the address.
+ * Legacy route (Phase 12.1). Managers only since migration 132 / auditoría B4:
+ * it is not tied to a shift nor to the shift's service address and it does not
+ * log reads, so caregivers read addresses only through
+ * GET /shifts/:shiftId/service-location (accepted, current assignment; logged).
+ * Everyone else gets RecipientNotFoundError: no signal about the address.
  */
 export async function getCareRecipientLocation(userId: string, organizationId: string, recipientId: string) {
   assertValidRecipientId(recipientId);
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const access = await sql<{ allowed: boolean }>`
-      SELECT (app_is_org_manager() OR app_worker_has_recipient_assignment(${recipientId}::uuid)) AS allowed
+      SELECT app_is_org_manager() AS allowed
     `.execute(trx);
     if (!access.rows[0]?.allowed) throw new RecipientNotFoundError();
     const result = await sql<Record<string, unknown>>`

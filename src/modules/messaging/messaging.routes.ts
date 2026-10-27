@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   resolveOrCreateFamilyConversation,
   listConversations,
+  listStartableRecipients,
   listMessages,
   sendMessage,
   sendMessageSchema,
@@ -44,6 +45,25 @@ function handleError(err: unknown, res: Response): boolean {
   }
   return false;
 }
+
+// Registered before "/conversations/:conversationId/..." routes (no clash: different depth).
+router.get(
+  "/organizations/:organizationId/conversations/startable-recipients",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const recipients = await listStartableRecipients(req.auth!.userId, orgIdParsed.data);
+      res.status(200).json({ recipients });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
 
 router.get(
   "/organizations/:organizationId/conversations",
