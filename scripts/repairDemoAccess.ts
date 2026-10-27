@@ -8,8 +8,8 @@
  * tuvo éxito.
  *
  * Alcance exacto:
- *   - admin@demo.etnara.care  -> activo, password Demo1234!, ORGANIZATION_ADMIN
- *   - familia@demo.etnara.care -> activo, password Demo1234!, FAMILY,
+ *   - admin@demo.etnara.care  -> activo, password de DEMO_PASSWORD, ORGANIZATION_ADMIN
+ *   - familia@demo.etnara.care -> activo, password de DEMO_PASSWORD, FAMILY,
  *     family_relationships activa con Carmen Rivera
  *   - maria@demo.etnara.care  -> SOLO VERIFICACIÓN. Cero INSERT/UPDATE.
  *     Si algo no está como se espera, el script aborta y reporta -- nunca
@@ -24,8 +24,11 @@
  */
 import { Client } from "pg";
 import { hashPassword, verifyPassword } from "../src/security/password.js";
+import { assertDisposableDatabase, demoPasswordFromEnv } from "./lib/disposableDatabase.js";
 
-const DEMO_PASSWORD = "Demo1234!";
+// Only against a disposable local database; never production (audit 26-oct-2026, B2).
+assertDisposableDatabase(process.env.DATABASE_URL);
+const DEMO_PASSWORD = demoPasswordFromEnv();
 
 function fail(message: string): never {
   throw new Error(`ABORTADO: ${message}`);
@@ -75,7 +78,7 @@ async function main() {
     const maria = mariaUser.rows[0];
     if (maria.status !== "active") fail(`maria@demo.etnara.care tiene status='${maria.status}', se esperaba 'active'. No se toca nada.`);
     if (!maria.password_hash || !(await verifyPassword(DEMO_PASSWORD, maria.password_hash))) {
-      fail("El password_hash de maria@demo.etnara.care no verifica contra Demo1234!. No se toca nada -- repórtalo aparte.");
+      fail("El password_hash de maria@demo.etnara.care no verifica contra DEMO_PASSWORD. No se toca nada -- repórtalo aparte.");
     }
 
     const mariaMembership = await client.query(
