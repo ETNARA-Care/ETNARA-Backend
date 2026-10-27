@@ -6,7 +6,11 @@
  * with real ids of that agency in the other path parameters. Each answer must be:
  *   - never 2xx (no data, no write), and
  *   - never 5xx (a refusal is not a server failure; it used to be 500 on
- *     documents, coverage offers, operations and agent briefings).
+ *     documents, coverage offers, operations and agent briefings);
+ *   - never echoing internal text or ids in the refusal;
+ *   - exactly the same answer as for a random, non-existent agency and ids, so a
+ *     refusal reveals neither that the agency or object exists nor which features
+ *     the agency has enabled.
  * It also proves the agency's rows are unchanged afterwards.
  *
  * The app connects in the mode given by AUTHZ_DB_MODE (superuser = production
@@ -107,17 +111,24 @@ async function main() {
   const orgRoutes = routes.filter((r) => r.path.startsWith("/organizations/:organizationId"));
   if (orgRoutes.length < 150) throw new Error(`route discovery found only ${orgRoutes.length} organization routes`);
 
+  const send = async (method: string, path: string) => {
+    const go = () => fetch(base + path, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: method === "GET" || method === "DELETE" ? undefined : "{}" });
+    let res = await go();
+    if (res.status === 429) { await new Promise((ok) => setTimeout(ok, 61_000)); res = await go(); }
+    return { status: res.status, text: await res.text() };
+  };
   const failures: string[] = [];
+  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   for (const r of orgRoutes) {
     const path = r.path.replace(/:([A-Za-z]+)/g, (_, n) => ids[n] ?? randomUUID());
-    let res = await fetch(base + path, { method: r.method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: r.method === "GET" || r.method === "DELETE" ? undefined : "{}" });
-    if (res.status === 429) {
-      await new Promise((ok) => setTimeout(ok, 61_000));
-      res = await fetch(base + path, { method: r.method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: r.method === "GET" || r.method === "DELETE" ? undefined : "{}" });
-    }
-    await res.arrayBuffer();
-    const ok = res.status >= 400 && res.status < 500;
-    if (!ok) failures.push(`${r.method} ${r.path} -> ${res.status}`);
+    const real = await send(r.method, path);
+    if (!(real.status >= 400 && real.status < 500)) failures.push(`${r.method} ${r.path} -> ${real.status}`);
+    // The refusal must not echo internal text or ids (user, organization, objects).
+    if (UUID.test(real.text) || /membership|organization [0-9a-f]/i.test(real.text)) failures.push(`${r.method} ${r.path} -> body reveals internals: ${real.text.slice(0, 80)}`);
+    // Nor reveal whether the agency or its objects exist, or which features it has on:
+    // the same request with every id replaced by a random one must answer exactly the same.
+    const fake = await send(r.method, r.path.replace(/:([A-Za-z]+)/g, () => randomUUID()));
+    if (fake.status !== real.status || fake.text !== real.text) failures.push(`${r.method} ${r.path} -> differs from a non-existent agency: real=${real.status} ${real.text.slice(0, 50)} fake=${fake.status} ${fake.text.slice(0, 50)}`);
   }
   const after = await fingerprint();
   const changed = before.filter((x, i) => x !== after[i]);
