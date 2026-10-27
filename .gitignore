@@ -3,3 +3,6 @@ dist/
 .env
 .env.local
 *.log
+
+# Archives (old code copies must not be committed; 27-oct-2026)
+*.zip
