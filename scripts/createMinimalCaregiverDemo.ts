@@ -13,7 +13,8 @@
 import { Client } from "pg";
 import { hashPassword } from "../src/security/password.js";
 
-const DEMO_PASSWORD = "Demo1234!"; // compatible con el seed real
+const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? "";
+if (DEMO_PASSWORD.length < 16) throw new Error("DEMO_PASSWORD (16+ characters, never a published value) is required");
 
 async function main(): Promise<void> {
   const adminUrl = process.env.MIGRATIONS_DATABASE_URL;

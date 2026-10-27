@@ -3,3 +3,6 @@ dist/
 .env
 .env.local
 *.log
+
+# Snapshots of the source code are never committed
+*.zip

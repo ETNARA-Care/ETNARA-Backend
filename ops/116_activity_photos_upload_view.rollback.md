@@ -2,7 +2,7 @@
 
 ## Before deploying
 1. **Separate private bucket for photos** (decision 4): DONE 2026-10-24 —
-   `etnara-activity-photos` in project `hopeful-education`, environment
+   `etnara-activity-photos` in the production Railway project, environment
    `production`, region `ams` (same as the database). Railway buckets are
    private (public buckets are not supported); nothing is ever made public.
 2. DONE 2026-10-24 (as `${{etnara-activity-photos.*}}` references, backend
