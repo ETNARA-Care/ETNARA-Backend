@@ -100,8 +100,21 @@ async function main() {
     }
     bystanders[key] = { id, email };
   };
-  await addUser("central", `central-${randomUUID().slice(0, 6)}@example.com`, null, null);
-  await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [bystanders.central.id]);
+  // VERIFY_CENTRAL_EMAIL / VERIFY_ALIAS_MAILBOX let the run use the real production addresses (e.g. the Central account
+  // mailbox doubles as the alias mailbox), so a "+" alias is proven distinct from the base address.
+  const existingCentral = process.env.VERIFY_CENTRAL_EMAIL
+    ? (await q<{ id: string }>(`SELECT id FROM users WHERE lower(email) = lower($1)`, [process.env.VERIFY_CENTRAL_EMAIL])).rows[0]
+    : undefined;
+  if (existingCentral) {
+    // The bootstrap already provisioned this Central account (as in production); give it the test password.
+    await q(`UPDATE users SET password_hash = $2 WHERE id = $1`, [existingCentral.id, hash]);
+    bystanders.central = { id: existingCentral.id, email: process.env.VERIFY_CENTRAL_EMAIL! };
+  } else {
+    await addUser("central", process.env.VERIFY_CENTRAL_EMAIL || `central-${randomUUID().slice(0, 6)}@example.com`, null, null);
+  }
+  if (!(await q(`SELECT 1 FROM platform_admins WHERE user_id = $1 AND revoked_at IS NULL`, [bystanders.central.id])).rowCount) {
+    await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [bystanders.central.id]);
+  }
   await addUser("otraAdmin", `admin-${randomUUID().slice(0, 6)}@otra.example`, other, "ORGANIZATION_ADMIN");
   await addUser("duenoCasaDemo", `dueno-${randomUUID().slice(0, 6)}@example.com`, org, "ORGANIZATION_ADMIN");
   await addUser("parecido", `maria@demo.etnara.care.otra.example`, other, "ORGANIZATION_ADMIN");
@@ -167,7 +180,7 @@ async function main() {
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [people.admin.id]);
   await aborts("protección: cuenta demo con acceso a ETNARA Central → aborta sin escribir", { orgId: org, expectedCount: 5, apply: true });
   await q(`DELETE FROM platform_admins WHERE user_id=$1`, [people.admin.id]);
-  const mailbox = `owner-${randomUUID().slice(0, 6)}@example.com`;
+  const mailbox = process.env.VERIFY_ALIAS_MAILBOX || `owner-${randomUUID().slice(0, 6)}@example.com`;
   const clash = (await q<{ id: string }>(`INSERT INTO users (email,status) VALUES ($1,'active') RETURNING id`, [aliasFor(mailbox, people.maria.email)])).rows[0].id;
   await aborts("protección: alias ya en uso → aborta sin escribir", { orgId: org, expectedCount: 5, aliasMailbox: mailbox, apply: true });
   await q(`DELETE FROM users WHERE id=$1`, [clash]);
@@ -202,6 +215,7 @@ async function main() {
   check("aplicar (bloqueo): el enlace de recuperación pendiente ya no sirve", usedReset.status >= 400, `confirm -> ${usedReset.status}`);
   const stored = (await q<{ password_hash: string; email: string }>(`SELECT password_hash, email FROM users WHERE id = ANY($1)`, [Object.values(people).map((p) => p.id)])).rows;
   const verifies = await Promise.all(stored.map((r) => verifyPassword(password, r.password_hash)));
+  check("aplicar (bloqueo): las 5 cuentas reciben contraseñas aleatorias distintas", new Set(stored.map((r) => r.password_hash)).size === 5);
   check("aplicar (bloqueo): el hash nuevo tiene el formato de la app y no verifica la contraseña anterior", stored.every((r) => r.password_hash.startsWith("scrypt$N=16384,r=8,p=1$")) && verifies.every((v) => !v));
   check("aplicar (bloqueo): los correos no cambian", stored.every((r) => r.email.endsWith("@demo.etnara.care")));
   check("aplicar: Casa Demo intacta (residentes, turnos, registros, membresías, roles, familia)", (await counts()) === countsBefore, await counts());
@@ -241,6 +255,27 @@ async function main() {
   const login = await call("POST", "/auth/login", "", { email: alias, password: newPassword });
   check("alias: la dueña fija una contraseña nueva y entra", confirm.status < 300 && login.status === 200, `${confirm.status}/${login.status}`);
   const shifts = await call("GET", `/organizations/${org}/me/shifts`, login.body.token);
+  if (process.env.VERIFY_EXPECTED_ALIASES) {
+    const want = process.env.VERIFY_EXPECTED_ALIASES.split(",").map((a) => a.trim().toLowerCase()).sort();
+    check("alias: coinciden exactamente con la lista aprobada", JSON.stringify(emails) === JSON.stringify(want), emails.join(","));
+  }
+  // Every account (not only María) can be recovered through its alias
+  const recovered: string[] = [];
+  for (const p of Object.values(people)) {
+    if (p.email === people.maria.email) continue;
+    const a = aliasFor(mailbox, p.email);
+    ip++;
+    await call("POST", "/auth/password-reset/request", "", { email: a });
+    for (let i = 0; i < 40 && !mails.some((m) => m.to === a); i++) await new Promise((r) => setTimeout(r, 50));
+    const t = linkToken(mails.find((m) => m.to === a)?.html ?? "");
+    const np = randomBytes(14).toString("hex");
+    ip++;
+    const c2 = await call("POST", "/auth/password-reset/confirm", "", { token: t, password: np });
+    ip++;
+    const l2 = await call("POST", "/auth/login", "", { email: a, password: np });
+    if (t && c2.status < 300 && l2.status === 200) recovered.push(p.email.split("@")[0]);
+  }
+  check("alias: las 5 cuentas se recuperan con «¿Olvidaste tu contraseña?» y entran", recovered.length === 4 && confirm.status < 300 && login.status === 200, ["maria", ...recovered].join(","));
   check("alias: María conserva su agencia, su rol y su turno", shifts.status === 200 && (shifts.body.shifts ?? []).some((s: Json) => s.id === s1));
   ip++;
   const demoEmailLogin = await call("POST", "/auth/login", "", { email: people.maria.email, password: newPassword });
