@@ -122,6 +122,8 @@ async function main() {
   check("sin aviso a la administradora que hizo el cambio", (await notices(admin.userId)) === 0);
   const mine = await call("GET", `/organizations/${orgA}/me/notifications`.replace(`/organizations/${orgA}`, ""), cgAccepted.token);
   check("la cuidadora ve el aviso en su bandeja", mine.status === 200 && JSON.stringify(mine.json).includes("SHIFT_RESCHEDULED"), `${mine.status}`);
+  check("el aviso dice «La agencia cambió el horario de uno de tus turnos» y abre el turno",
+    JSON.stringify(mine.json).includes("La agencia cambió el horario de uno de tus turnos") && JSON.stringify(mine.json).includes(shift));
 
   // supervisora
   const r2 = await call("PATCH", P, sup.token, { scheduledEnd: at(4, 18) });
