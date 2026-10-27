@@ -12,8 +12,11 @@
  */
 import { Client } from "pg";
 import { hashPassword } from "../src/security/password.js";
+import { assertDisposableDatabase, demoPasswordFromEnv } from "./lib/disposableDatabase.js";
 
-const DEMO_PASSWORD = "Demo1234!"; // compatible con el seed real
+// Only against a disposable local database; never production (audit 26-oct-2026, B2).
+assertDisposableDatabase(process.env.MIGRATIONS_DATABASE_URL);
+const DEMO_PASSWORD = demoPasswordFromEnv(); // same DEMO_PASSWORD as seedDemo
 
 async function main(): Promise<void> {
   const adminUrl = process.env.MIGRATIONS_DATABASE_URL;
