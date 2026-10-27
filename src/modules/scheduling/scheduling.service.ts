@@ -570,3 +570,56 @@ export async function getCoverageSummary(userId: string, organizationId: string)
     return result.rows[0];
   });
 }
+
+// ------------------------------------------------------------------ 135: exceptional correction
+
+export const scheduleCorrectionSchema = z.object({
+  scheduledStart: z.string().datetime(),
+  scheduledEnd: z.string().datetime(),
+  reason: z.string().trim().min(10).max(500),
+}).strict();
+export type ScheduleCorrectionInput = z.infer<typeof scheduleCorrectionSchema>;
+
+export class ShiftCorrectionError extends Error {
+  constructor(public readonly code: string, public readonly status: number) { super(code); this.name = "ShiftCorrectionError"; }
+}
+
+/**
+ * Exceptional schedule correction once the shift has started (migration 135):
+ * administrators only, with a reason. The database function records the
+ * correction (append-only), the audit row and the notice, and never touches
+ * check-in / check-out / arrival records.
+ */
+export async function correctShiftSchedule(userId: string, organizationId: string, shiftId: string, input: ScheduleCorrectionInput) {
+  assertUuid(shiftId, "shiftId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    try {
+      const r = await sql<{ id: string }>`
+        SELECT app_correct_shift_schedule(${shiftId}::uuid, ${input.scheduledStart}::timestamptz, ${input.scheduledEnd}::timestamptz, ${input.reason}) AS id
+      `.execute(trx);
+      const shift = await sql<ShiftRow>`
+        SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+        FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId}`.execute(trx);
+      return { correctionId: r.rows[0]!.id, shift: shift.rows[0]! };
+    } catch (error) {
+      const m = /SHIFT_CORRECTION_[A-Z_]+|SHIFT_NOT_FOUND|SHIFT_STATUS_CANCELLED_IS_FINAL/.exec((error as { message?: string })?.message ?? "");
+      if (!m) throw error;
+      const status = m[0] === "SHIFT_CORRECTION_FORBIDDEN" ? 403 : m[0] === "SHIFT_NOT_FOUND" ? 404 : m[0] === "SHIFT_STATUS_CANCELLED_IS_FINAL" ? 409 : 400;
+      throw new ShiftCorrectionError(m[0], status);
+    }
+  });
+}
+
+/** Correction history of one shift: agency managers only (RLS + explicit check). */
+export async function listShiftScheduleCorrections(userId: string, organizationId: string, shiftId: string) {
+  assertUuid(shiftId, "shiftId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const manager = (await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok;
+    if (!manager) throw new ShiftUpdateForbiddenError();
+    const r = await sql<{ id: string; previous_start: string; previous_end: string; new_start: string; new_end: string; reason: string; corrected_by_user_id: string | null; corrected_at: string }>`
+      SELECT id, previous_start, previous_end, new_start, new_end, reason, corrected_by_user_id, corrected_at
+      FROM shift_schedule_corrections WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+      ORDER BY corrected_at DESC`.execute(trx);
+    return r.rows;
+  });
+}

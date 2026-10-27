@@ -147,15 +147,55 @@ async function main() {
   check("turno con «Llegué» registrado: no se puede mover (409)", arrival.status < 300 && locked.status === 409, `arrival=${arrival.status} patch=${locked.status}`);
   check("turno con «Llegué» registrado: sin auditoría ni aviso",
     Number((await q(`SELECT count(*)::int n FROM audit_log WHERE entity_id=$1 AND action='SHIFT_RESCHEDULED'`, [s2]))[0].n) === 0);
-  // check-in without «Llegué»: today the schedule can still be moved (107 only locks journey/arrival);
-  // documented as a decision for Rafa. At least it is now audited and the caregiver is told.
+  // 135: once the shift started (check-in, or its start time passed) the ORDINARY change is refused
   const s3 = (await q(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now()-interval '10 minutes',now()+interval '3 hours','in_progress') RETURNING id`, [orgA, r1]))[0].id;
   await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,response_status) VALUES ($1,$2,$3,$4,'accepted')`, [orgA, s3, cgAccepted.owm, r1]);
   await q(`INSERT INTO verification_events (organization_id,shift_id,organization_worker_membership_id,verification_method_id,event_type) VALUES ($1,$2,$3,$4,'check_in')`, [orgA, s3, cgAccepted.owm, method]);
-  const moved = await call("PATCH", `/organizations/${orgA}/shifts/${s3}`, admin.token, { scheduledEnd: new Date(Date.now() + 5 * 36e5).toISOString() });
-  const movedAudit = Number((await q(`SELECT count(*)::int n FROM audit_log WHERE entity_id=$1 AND action='SHIFT_RESCHEDULED'`, [s3]))[0].n);
-  check("turno ya comenzado sin «Llegué»: el cambio (permitido hoy) queda auditado y avisado",
-    moved.status === 200 && movedAudit === 1, `patch=${moved.status} audit=${movedAudit}`);
+  const P3 = `/organizations/${orgA}/shifts/${s3}`;
+  const moved = await call("PATCH", P3, admin.token, { scheduledEnd: new Date(Date.now() + 5 * 36e5).toISOString() });
+  check("turno comenzado (check-in sin «Llegué»): cambio ordinario rechazado (409)", moved.status === 409 && moved.json.error === "SHIFT_SCHEDULE_LOCKED", `${moved.status} ${moved.json.error ?? ""}`);
+  const s4 = (await q(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now()-interval '5 minutes',now()+interval '3 hours','confirmed') RETURNING id`, [orgA, r1]))[0].id;
+  const byTime = await call("PATCH", `/organizations/${orgA}/shifts/${s4}`, sup.token, { scheduledEnd: new Date(Date.now() + 5 * 36e5).toISOString() });
+  check("turno cuya hora de inicio ya pasó (sin marcajes): cambio ordinario rechazado (409)", byTime.status === 409, `${byTime.status}`);
+  check("cambios rechazados tras el inicio: sin auditoría", Number((await q(`SELECT count(*)::int n FROM audit_log WHERE entity_id = ANY($1) AND action LIKE 'SHIFT_%'`, [[s3, s4]]))[0].n) === 0);
+  let superBlocked = false;
+  try { await q(`UPDATE shifts SET scheduled_end = scheduled_end + interval '1 hour' WHERE id=$1`, [s3]); } catch (e) { superBlocked = /SHIFT_SCHEDULE_LOCKED/.test((e as Error).message); }
+  check("ni siquiera una conexión directa a la base puede mover un turno comenzado", superBlocked);
+
+  // exceptional correction
+  const marks = async () => (await q(`SELECT md5(string_agg(md5(v::text), ',' ORDER BY v.id)) h, count(*)::int n FROM verification_events v WHERE shift_id=$1`, [s3]))[0];
+  const marksBefore = await marks();
+  const newEnd = new Date(Date.now() + 6 * 36e5).toISOString();
+  const C = `${P3}/schedule-correction`;
+  const body = (reason: string) => ({ scheduledStart: new Date(Date.now() - 10 * 6e4).toISOString(), scheduledEnd: newEnd, reason });
+  check("corrección: supervisora no puede (403)", (await call("POST", C, sup.token, body("La familia pidió extender"))).status === 403);
+  check("corrección: cuidadora no puede (403)", (await call("POST", C, cgAccepted.token, body("La familia pidió extender"))).status === 403);
+  check("corrección: otra agencia no puede", [403, 404].includes((await call("POST", C, adminB.token, body("La familia pidió extender"))).status));
+  check("corrección: sin motivo suficiente → 400", (await call("POST", C, admin.token, body("corto"))).status === 400);
+  const corr = await call("POST", C, admin.token, body("La familia pidió extender la visita"));
+  check("corrección: administradora con motivo → 201", corr.status === 201 && Boolean(corr.json.correctionId), `${corr.status} ${JSON.stringify(corr.json).slice(0, 80)}`);
+  const hist = await call("GET", `${P3}/schedule-corrections`, sup.token);
+  check("historial: la supervisora lo ve con motivo y horarios", hist.status === 200 && hist.json.corrections?.length === 1 && hist.json.corrections[0].reason === "La familia pidió extender la visita");
+  check("historial: la cuidadora no lo ve (403)", (await call("GET", `${P3}/schedule-corrections`, cgAccepted.token)).status === 403);
+  const audC = await q(`SELECT action, new_value FROM audit_log WHERE entity_id=$1 ORDER BY occurred_at`, [s3]);
+  check("auditoría: SHIFT_SCHEDULE_CORRECTED con el motivo + SHIFT_RESCHEDULED",
+    audC.some((r) => r.action === "SHIFT_SCHEDULE_CORRECTED" && r.new_value.reason === "La familia pidió extender la visita") && audC.some((r) => r.action === "SHIFT_RESCHEDULED"), JSON.stringify(audC.map((r) => r.action)));
+  check("aviso a la cuidadora tras la corrección", Number((await q(`SELECT count(*)::int n FROM notifications WHERE user_id=$1 AND related_entity_id=$2 AND notification_type='SHIFT_RESCHEDULED'`, [cgAccepted.userId, s3]))[0].n) === 1);
+  const marksAfter = await marks();
+  check("marcajes originales intactos (check-in sin cambios)", marksAfter.h === marksBefore.h && marksAfter.n === marksBefore.n);
+  let appendOnly = false;
+  try { await q(`UPDATE shift_schedule_corrections SET reason='cambiado por alguien' WHERE shift_id=$1`, [s3]); } catch { appendOnly = true; }
+  check("historial de correcciones: no se puede modificar", appendOnly);
+  let forged = false;
+  try {
+    await q(`BEGIN`);
+    await q(`SELECT set_config('app.shift_schedule_correction', $1, true)`, [corr.json.correctionId]);
+    await q(`UPDATE shifts SET scheduled_end = scheduled_end + interval '2 hours' WHERE id=$1`, [s3]);
+    await q(`COMMIT`);
+  } catch (e) { forged = /SHIFT_SCHEDULE_LOCKED/.test((e as Error).message); await q(`ROLLBACK`).catch(() => undefined); }
+  check("reutilizar una corrección anterior para otro cambio: rechazado", forged);
+  const s5 = (await q(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,now()+interval '1 day',now()+interval '1 day 4 hours','cancelled') RETURNING id`, [orgA, r1]))[0].id;
+  check("corrección de un turno cancelado: 409", (await call("POST", `/organizations/${orgA}/shifts/${s5}/schedule-correction`, admin.token, body("Corrección de un turno cancelado"))).status === 409);
 
   const failed = results.filter((r) => !r.pass);
   console.log(`\nCAMBIO DE HORARIO — modo ${mode}`);
