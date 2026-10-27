@@ -1,6 +1,7 @@
 -- Rollback of 132 (ventana de acceso de las cuidadoras). Functions and policies only;
 -- no data is changed or removed. Restores the exact rules of 038 (messaging) and 100
 -- (service addresses): pending assignments and past caregivers regain access.
+-- If 134 is applied, roll back 134 FIRST (its policy uses app_worker_confirmed_shift_assignment).
 -- Run as the migrations superuser, then redeploy the previous backend build
 -- (the code of 132 calls app_user_can_message_recipient and app_worker_confirmed_shift_assignment).
 BEGIN;

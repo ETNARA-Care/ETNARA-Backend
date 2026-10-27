@@ -279,6 +279,50 @@ async function main() {
   const logged = Number((await q(`SELECT count(*)::int n FROM care_recipient_location_access_log WHERE user_id=$1`, [cg.future.userId]))[0].n);
   check("dirección: cada lectura de la cuidadora queda registrada", logged >= 1, `${logged}`);
 
+  // ------------------------------------------------------------------ pending = minimal data (134)
+  await q(`UPDATE care_recipients SET preferred_name=NULL, date_of_birth='1938-01-01', allergies=ARRAY['penicilina-${tag}'] WHERE id=$1`, [r1]);
+  await q(`INSERT INTO care_plans (organization_id,care_recipient_id,version,plan_details,effective_from,status) VALUES ($1,$2,1,$3::jsonb,now()-interval '1 day','active')`,
+    [orgA, r1, JSON.stringify({ summary: `PLAN-${tag}` })]).catch(() => undefined);
+  for (const s of [S.pending, S.future]) await call("PUT", `${A}/shifts/${s}/private-instructions`, admin.token, { instructions: `CLAVE-${tag}` });
+  {
+    const p = cg.pending;
+    const mine = await call("GET", `${A}/me/shifts`, p.token);
+    const row = (mine.json.shifts ?? []).find((x: Json) => x.id === S.pending);
+    check("pendiente: ve su turno en Mis turnos (para aceptar o rechazar)", Boolean(row) && row.assignment_response_status === "pending");
+    check("pendiente: nombre corto (nombre + inicial), sin apellido completo", row?.care_recipient_display_name === `Sintetico R.` , String(row?.care_recipient_display_name));
+    check("pendiente: ve el municipio, no la dirección", row?.service_municipality === "San Juan" && !mine.text.includes(ADDRESS), String(row?.service_municipality));
+    check("pendiente: abre el turno (fecha y hora)", (await call("GET", `${A}/shifts/${S.pending}`, p.token)).status === 200);
+    const prof = await call("GET", `${A}/care-recipients/${r1}`, p.token);
+    check("pendiente: NO ve la ficha de la persona", prof.status === 404 && !prof.text.includes("penicilina"), `${prof.status}`);
+    const list = await call("GET", `${A}/care-recipients`, p.token);
+    check("pendiente: la persona NO aparece en su lista", list.status === 200 && !list.text.includes(r1) && !list.text.includes("penicilina"), `${list.status}`);
+    const plan = await call("GET", `${A}/care-recipients/${r1}/care-plan`, p.token);
+    check("pendiente: NO ve el plan de cuidado", !plan.text.includes(`PLAN-${tag}`), `${plan.status}`);
+    const instr = await call("GET", `${A}/shifts/${S.pending}/private-instructions`, p.token);
+    check("pendiente: NO ve las instrucciones privadas del turno", !instr.text.includes(`CLAVE-${tag}`), `${instr.status}`);
+    const ev = await call("GET", `${A}/care-recipients/${r1}/care-events`, p.token);
+    check("pendiente: NO ve registros de la persona", ev.status !== 200 || (ev.json.events ?? []).length === 0, `${ev.status}`);
+    const inc = await call("POST", `${A}/incidents`, p.token, { careRecipientId: r1, severity: "low", description: "x" });
+    check("pendiente: NO puede crear incidentes de la persona", inc.status >= 400, `${inc.status}`);
+    // control: the accepted caregiver keeps everything
+    const a = cg.future;
+    const mineA = await call("GET", `${A}/me/shifts`, a.token);
+    const rowA = (mineA.json.shifts ?? []).find((x: Json) => x.id === S.future);
+    check("aceptada: nombre completo y municipio", rowA?.care_recipient_display_name === `Sintetico R1-${tag}` && rowA?.service_municipality === "San Juan", String(rowA?.care_recipient_display_name));
+    check("aceptada: ve la ficha", (await call("GET", `${A}/care-recipients/${r1}`, a.token)).status === 200);
+    check("aceptada: ve el plan", (await call("GET", `${A}/care-recipients/${r1}/care-plan`, a.token)).text.includes(`PLAN-${tag}`));
+    check("aceptada: ve las instrucciones privadas", (await call("GET", `${A}/shifts/${S.future}/private-instructions`, a.token)).text.includes(`CLAVE-${tag}`));
+    // the pending caregiver accepts -> full access right away
+    const acc = await call("POST", `${A}/me/shifts/${S.pending}/respond`, p.token, { decision: "accepted" });
+    check("pendiente acepta: 200", acc.status < 300, `${acc.status}`);
+    check("tras aceptar: ve la ficha", (await call("GET", `${A}/care-recipients/${r1}`, p.token)).status === 200);
+    check("tras aceptar: ve el plan", (await call("GET", `${A}/care-recipients/${r1}/care-plan`, p.token)).text.includes(`PLAN-${tag}`));
+    check("tras aceptar: ve las instrucciones", (await call("GET", `${A}/shifts/${S.pending}/private-instructions`, p.token)).text.includes(`CLAVE-${tag}`));
+    check("tras aceptar: ve la dirección", (await call("GET", `${A}/shifts/${S.pending}/service-location`, p.token)).text.includes(ADDRESS));
+    const mine2 = await call("GET", `${A}/me/shifts`, p.token);
+    check("tras aceptar: nombre completo", ((mine2.json.shifts ?? []).find((x: Json) => x.id === S.pending))?.care_recipient_display_name === `Sintetico R1-${tag}`);
+  }
+
   // ------------------------------------------------------------------ SmartMatch
   const opp = await call("POST", `${A}/smartmatch/opportunities`, admin.token, {
     visibility: "INTERNAL", regionLabel: "San Juan", roleLabel: "Cuidador/a",
