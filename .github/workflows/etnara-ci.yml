@@ -78,6 +78,20 @@ jobs:
           AUTHZ_DB_MODE: app_runtime
         run: npx tsx scripts/verifyRoleAuthorizationMatrix.ts
 
+      - name: Non-member access guard, app as superuser (every organization route refuses with 4xx, never 2xx or 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyNonMemberAccess.ts
+
+      - name: Non-member access guard, app as app_runtime
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyNonMemberAccess.ts
+
       - name: PostgreSQL platform PHI boundary verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
