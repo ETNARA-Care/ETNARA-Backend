@@ -232,7 +232,7 @@ async function main() {
     [admin.id]
   );
   const supervisor = await createUser("supervisor@demo.etnara.care");
-  await addMembership(supervisor.id, "ORGANIZATION_ADMIN");
+  await addMembership(supervisor.id, "SUPERVISOR");
   const caregiver1 = await createUser("maria@demo.etnara.care");
   await addMembership(caregiver1.id, "WORKER");
   const caregiver2 = await createUser("carlos@demo.etnara.care");
