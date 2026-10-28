@@ -138,6 +138,8 @@ export function threadAccessSql(threadId: RawBuilder<unknown>): RawBuilder<boole
     WHERE mt_acl.id = ${threadId}
       AND mt_acl.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
       AND mtp_acl.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+      AND (mt_acl.thread_type <> 'caregiver_agency'
+        OR app_user_can_access_caregiver_thread(NULLIF(current_setting('app.current_user_id', true), '')::uuid, mt_acl.id))
       AND (app_is_org_manager()
         OR mt_acl.care_recipient_id IS NULL
         OR app_user_authorized_for_recipient(
