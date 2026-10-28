@@ -116,7 +116,7 @@ async function main() {
     check("Ventana abierta: la conversación de la residente aparece con su nombre corto", find(l, t1)?.care_recipient_name === r1Name, JSON.stringify(find(l, t1)));
     check("Ventana abierta: el nombre no incluye el apellido", !l.raw.includes("Apellidoprivado"));
     check("Otra residente (visita de hace 30 días): ni conversación ni nombre", !find(l, t2) && !l.raw.includes("Josefo") && !l.raw.includes("Otroapellido"));
-    check("Conversación directa: sin nombre de residente", find(l, direct) !== undefined && find(l, direct).care_recipient_name == null, JSON.stringify(find(l, direct)));
+    check("Conversación directa: sin nombre de residente", find(l, direct) !== undefined && find(l, direct)?.care_recipient_name == null, JSON.stringify(find(l, direct)));
     check("Ventana abierta: lee (200) y responde (201)", (await msgs(cg.token, t1)).status === 200 && (await reply(cg.token, t1)).status === 201);
     check("Otra residente: no lee ni responde (404)", (await msgs(cg.token, t2)).status === 404 && (await reply(cg.token, t2)).status === 404);
     let st = await startable(cg.token);
