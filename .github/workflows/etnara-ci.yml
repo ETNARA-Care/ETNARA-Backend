@@ -98,6 +98,20 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyPlatformPhiBoundary.ts
 
+      - name: Caregiver access window (messaging 24 h, addresses only with an accepted current shift), app as superuser
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyCaregiverAccessWindow.ts
+
+      - name: Caregiver access window, app as app_runtime
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyCaregiverAccessWindow.ts
+
       - name: PostgreSQL credential review write boundary verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

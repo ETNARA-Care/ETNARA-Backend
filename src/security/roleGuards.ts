@@ -127,8 +127,10 @@ export function eventStaffVisibleSql(): RawBuilder<boolean> {
 
 /**
  * A conversation is open to its participants only, and only while they are
- * still authorized for the person it is about (manager, assigned caregiver or
- * active family). Same rule as RLS message_threads_read / messages_read (038).
+ * still authorized for the person it is about: manager, active family, or a
+ * caregiver with an ACCEPTED assignment with that person until 24 h after that
+ * shift ended (migration 132, app_worker_messaging_window). Same rule as RLS
+ * message_threads_read (132).
  */
 export function threadAccessSql(threadId: RawBuilder<unknown>): RawBuilder<boolean> {
   return sql<boolean>`EXISTS (
@@ -142,7 +144,7 @@ export function threadAccessSql(threadId: RawBuilder<unknown>): RawBuilder<boole
         OR app_user_can_access_caregiver_thread(NULLIF(current_setting('app.current_user_id', true), '')::uuid, mt_acl.id))
       AND (app_is_org_manager()
         OR mt_acl.care_recipient_id IS NULL
-        OR app_user_authorized_for_recipient(
+        OR app_user_can_message_recipient(
              NULLIF(current_setting('app.current_user_id', true), '')::uuid,
              mt_acl.organization_id, mt_acl.care_recipient_id)))`;
 }
