@@ -306,6 +306,9 @@ export async function sendMessage(
     const others = await sql<{ user_id: string }>`
       SELECT user_id FROM message_thread_participants
       WHERE message_thread_id = ${conversationId} AND organization_id = ${organizationId} AND user_id != ${userId}
+        -- Direct agency/caregiver conversations (136): notify only who may still read them.
+        AND (NOT app_is_caregiver_thread(${conversationId}::uuid)
+          OR app_user_can_access_caregiver_thread(user_id, ${conversationId}::uuid))
     `.execute(trx);
     for (const other of others.rows) {
       await sql`
