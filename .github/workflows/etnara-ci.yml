@@ -341,6 +341,9 @@ jobs:
           npx tsx scripts/verifyTenantPolicyClosure.ts
           npx tsx scripts/verifyOfflineCheckInOut.ts
           npx tsx scripts/verifyAssignmentMessagingSync.ts
+          # Direct agency/caregiver messaging (136): app as superuser (production today) and as app_runtime (RLS).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyCaregiverDirectMessages.ts
+          npx tsx scripts/verifyCaregiverDirectMessages.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts

@@ -12,6 +12,11 @@ import {
   NotAuthorizedForConversationError,
   CannotWriteError,
 } from "./messaging.service.js";
+import {
+  openCaregiverConversation,
+  listCaregiverConversations,
+  CaregiverConversationError,
+} from "./caregiverConversations.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
   OrganizationAccessDeniedError,
@@ -41,6 +46,11 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof CannotWriteError) {
     res.status(403).json({ error: "CANNOT_WRITE_TO_CONVERSATION" });
+    return true;
+  }
+  if (err instanceof CaregiverConversationError) {
+    const status = err.code === "CAREGIVER_THREAD_FORBIDDEN" ? 403 : err.code === "CAREGIVER_NOT_FOUND" ? 404 : 409;
+    res.status(status).json({ error: err.code });
     return true;
   }
   return false;
@@ -149,6 +159,45 @@ router.post(
         bodyParsed.data
       );
       res.status(201).json({ message });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+// Mensajería directa agencia ↔ cuidadora (136). Abrir: solo ORGANIZATION_ADMIN, desde el perfil
+// de la cuidadora (devuelve la misma conversación si ya existe). Leer/responder: rutas de arriba.
+router.post(
+  "/organizations/:organizationId/workers/:membershipId/conversation",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    const membershipParsed = uuidParam.safeParse(req.params.membershipId);
+    if (!orgIdParsed.success || !membershipParsed.success) {
+      res.status(400).json({ error: "INVALID_ID" });
+      return;
+    }
+    try {
+      const result = await openCaregiverConversation(req.auth!.userId, orgIdParsed.data, membershipParsed.data);
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/caregiver-conversations",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const conversations = await listCaregiverConversations(req.auth!.userId, orgIdParsed.data);
+      res.status(200).json({ conversations });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }

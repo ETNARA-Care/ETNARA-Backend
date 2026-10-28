@@ -289,6 +289,9 @@ export async function sendMessage(
       WHERE mtp.message_thread_id = ${conversationId} AND mtp.organization_id = ${organizationId} AND mtp.user_id != ${userId}
         AND (mt.care_recipient_id IS NULL
              OR app_user_can_message_recipient(mtp.user_id, mt.organization_id, mt.care_recipient_id))
+        -- Direct agency/caregiver conversations (136): notify only who may still read them.
+        AND (mt.thread_type <> 'caregiver_agency'
+             OR app_user_can_access_caregiver_thread(mtp.user_id, mt.id))
     `.execute(trx);
     for (const other of others.rows) {
       await sql`
