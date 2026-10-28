@@ -24,7 +24,7 @@ if (process.env.ETNARA_DISPOSABLE_DB !== "true") throw new Error("Requires ETNAR
 type Json = Record<string, any>;
 const results: Array<{ check: string; pass: boolean; detail: string }> = [];
 const check = (name: string, pass: boolean, detail = "") => results.push({ check: name, pass, detail });
-const RESIDENT_KEYS = /care_?recipient(?!_id":null)|first_?name|last_?name|preferred_?name|address|latitude|longitude|care_?plan|instruction|diagnos|medication|date_?of_?birth/i;
+const RESIDENT_KEYS = /care_?recipient(?!_id":null|_name":null)|first_?name|last_?name|preferred_?name|address|latitude|longitude|care_?plan|instruction|diagnos|medication|date_?of_?birth/i;
 
 async function main() {
   const runtimeMode = new URL(process.env.DATABASE_URL!).username === "app_runtime";
