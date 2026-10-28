@@ -50,6 +50,14 @@ interface ConversationRow {
   care_recipient_id: string | null;
   thread_type: string;
   created_at: string;
+  /**
+   * Short name of the resident the conversation is about (preferred name, or first
+   * name + last initial), so the portal can title it even when the resident is no
+   * longer in the caller's /care-recipients list (e.g. a caregiver inside the 24 h
+   * window after her visit). Only for residents the caller may message
+   * (app_my_message_recipients, 132); null otherwise and for direct conversations.
+   */
+  care_recipient_name?: string | null;
 }
 interface MessageRow {
   id: string;
@@ -185,9 +193,16 @@ export async function resolveOrCreateFamilyConversation(
 export async function listConversations(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const result = await sql<ConversationRow>`
-      SELECT mt.id, mt.organization_id, mt.care_recipient_id, mt.thread_type, mt.created_at
+      WITH my_recipients AS MATERIALIZED (
+        SELECT id, COALESCE(NULLIF(btrim(preferred_name), ''),
+                            btrim(first_name || ' ' || COALESCE(left(last_name, 1) || '.', ''))) AS short_name
+        FROM app_my_message_recipients()
+      )
+      SELECT mt.id, mt.organization_id, mt.care_recipient_id, mt.thread_type, mt.created_at,
+             r.short_name AS care_recipient_name
       FROM message_threads mt
       JOIN message_thread_participants mtp ON mtp.message_thread_id = mt.id
+      LEFT JOIN my_recipients r ON r.id = mt.care_recipient_id
       WHERE mt.organization_id = ${organizationId} AND mtp.user_id = ${userId}
         AND ${threadAccessSql(sql`mt.id`)}
       ORDER BY mt.created_at DESC

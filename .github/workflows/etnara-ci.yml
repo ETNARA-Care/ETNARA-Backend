@@ -344,6 +344,9 @@ jobs:
           # Direct agency/caregiver messaging (136): app as superuser (production today) and as app_runtime (RLS).
           DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyCaregiverDirectMessages.ts
           npx tsx scripts/verifyCaregiverDirectMessages.ts
+          # Conversation resident names inside the 24 h window (both modes).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyConversationResidentNames.ts
+          npx tsx scripts/verifyConversationResidentNames.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
