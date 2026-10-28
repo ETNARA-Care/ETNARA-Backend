@@ -1,4 +1,5 @@
 import { Router, type Response } from "express";
+import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
 import { z } from "zod";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -11,6 +12,7 @@ import {
 const router = Router();
 const uuid = z.string().uuid();
 function fail(error: unknown, res: Response): void {
+  if (isTenantAccessDenied(error)) { res.status(403).json(TENANT_ACCESS_DENIED_BODY); return; }
   if (error instanceof CoverageOfferForbiddenError) res.status(403).json({ error: "COVERAGE_OFFER_FORBIDDEN" });
   else if (error instanceof CoverageOfferShiftNotFoundError || error instanceof CoverageOfferNotFoundError) res.status(404).json({ error: "NOT_FOUND" });
   else if (error instanceof CoverageCampaignAlreadyOpenError) res.status(409).json({ error: "COVERAGE_CAMPAIGN_ALREADY_OPEN" });
