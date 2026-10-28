@@ -338,6 +338,17 @@ async function assertComplianceManager(trx: unknown): Promise<void> {
   if (!result.rows[0]?.allowed) throw new ComplianceManagementForbiddenError();
 }
 
+/**
+ * The compliance policy (which credentials each job requires, and whether the agency must
+ * review them) is agency-wide configuration and decides who may be assigned to work, so only
+ * the agency administrator changes it. Supervisors still read it and manage each caregiver's
+ * credentials and reviews (auditoría B4, 27-oct-2026).
+ */
+async function assertCompliancePolicyAdmin(trx: unknown): Promise<void> {
+  const result = await sql<{ allowed: boolean }>`SELECT app_is_org_admin() AS allowed`.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new ComplianceManagementForbiddenError();
+}
+
 async function readPolicy(
   trx: unknown,
   organizationId: string,
@@ -423,7 +434,7 @@ export async function saveCompliancePolicy(
   input: SaveCompliancePolicyInput
 ): Promise<CompliancePolicy> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertComplianceManager(trx);
+    await assertCompliancePolicyAdmin(trx);
     const workerRole = input.workerRole.trim();
     const previous = await readPolicy(trx, organizationId, workerRole);
     const codes = input.requirements.map((item) => item.credentialTypeCode.toUpperCase());
