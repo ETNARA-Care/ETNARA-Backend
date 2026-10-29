@@ -347,6 +347,9 @@ jobs:
           # Conversation resident names inside the 24 h window (both modes).
           DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyConversationResidentNames.ts
           npx tsx scripts/verifyConversationResidentNames.ts
+          # Overdue shifts (B5): no start after the scheduled end; agency review alert (both modes).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyOverdueShifts.ts
+          npx tsx scripts/verifyOverdueShifts.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
