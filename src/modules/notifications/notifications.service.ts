@@ -96,6 +96,9 @@ function summarizeType(notificationType: string): string {
     // Migration 113: cancellations and reassignments (never an address or a name).
     case "SHIFT_CANCELLED":
       return "La agencia canceló uno de tus turnos";
+    // Migration 133: schedule changes (never the new times or a name in the text).
+    case "SHIFT_RESCHEDULED":
+      return "La agencia cambió el horario de uno de tus turnos";
     case "SHIFT_UNASSIGNED":
       return "Ya no tienes asignado un turno";
     case "FAMILY_VISIT_CANCELLED":
