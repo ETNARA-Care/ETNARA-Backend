@@ -363,6 +363,9 @@ jobs:
           AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyCaregiverDeactivation.ts
           # G4 at the database: who reads / writes an inactive caregiver's profile, credentials, documents.
           npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
+          # Renaming a caregiver whose membership is inactive: explicit 409, never a silent save.
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifyInactiveCaregiverRename.ts
+          AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyInactiveCaregiverRename.ts
 
       - name: Diff safety check
         run: git diff --check
