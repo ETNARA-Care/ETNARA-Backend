@@ -31,7 +31,9 @@ const PATTERNS: Array<[RegExp, "SELECT" | "INSERT" | "UPDATE" | "DELETE"]> = [
   [/deleteFrom\(\s*["']([a-z_]+)/g, "DELETE"],
 ];
 // Words the SQL patterns catch that are not tables (functions, CTEs, set-returning calls, keywords).
-const NOT_TABLES = new Set(["unnest", "generate_series", "jsonb_array_elements", "jsonb_each", "lateral", "only", "pg_stat_activity", "pg_roles", "pg_class", "pg_namespace", "pg_policies", "pg_proc", "information_schema"]);
+const NOT_TABLES = new Set(["unnest", "generate_series", "jsonb_array_elements", "jsonb_each", "lateral", "only", "pg_stat_activity", "pg_roles", "pg_class", "pg_namespace", "pg_policies", "pg_proc", "information_schema",
+  // CTE in messaging.service listConversations (#239).
+  "my_recipients"]);
 
 export function buildManifest() {
   const tables = new Map<string, Set<string>>();

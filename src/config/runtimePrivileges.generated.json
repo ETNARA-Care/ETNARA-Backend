@@ -510,7 +510,9 @@
     "app_is_shift_report_admin",
     "app_is_superadmin",
     "app_my_confirmed_commitment_overlaps",
+    "app_my_message_recipients",
     "app_my_org_features",
+    "app_my_shift_preview",
     "app_notification_assignment_shift_id",
     "app_notification_credential_membership_id",
     "app_notify_assignment_managers",
@@ -521,6 +523,7 @@
     "app_notify_late_shift_arrivals",
     "app_notify_shift_location_changed",
     "app_notify_shifts_not_en_route",
+    "app_open_caregiver_thread",
     "app_org_billing_enabled",
     "app_org_feature_enabled",
     "app_photo_consent_form_for_view",
@@ -557,8 +560,11 @@
     "app_smartmatch_expire_opportunities",
     "app_smartmatch_is_active_worker",
     "app_smartmatch_worker_has_commitment",
-    "app_user_authorized_for_recipient",
+    "app_user_can_access_caregiver_thread",
+    "app_user_can_message_recipient",
+    "app_worker_confirmed_shift_assignment",
     "app_worker_has_recipient_assignment",
-    "app_worker_has_shift_assignment"
+    "app_worker_has_shift_assignment",
+    "app_worker_messaging_window"
   ]
 }
