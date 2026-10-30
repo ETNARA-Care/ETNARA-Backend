@@ -80,6 +80,7 @@ async function main() {
     const recent = await shift(-50, 2); // ended 2 days ago, never started
     const endedNow = await shift(-2.2, 2); // ended 12 min ago
     const current = await shift(-0.5, 2); // started 30 min ago
+    const eightLate = await shift(-2 - 8 / 60, 2); // ended 8 min ago (like 5829d304 in production)
     const P = `/organizations/${org}/shifts`;
     const snapshot = async (id: string) => (await db.query(`SELECT s.status, s.updated_at, a.response_status,
         (SELECT count(*) FROM verification_events v WHERE v.shift_id = s.id)::int AS events,
@@ -110,6 +111,11 @@ async function main() {
     check("Turno vencido: nada se guardó ni cambió (estado, asignación, registros, horas, avisos)",
       JSON.stringify(before) === JSON.stringify(after) && after.status === "confirmed" && after.response_status === "accepted" && after.events === 0 && after.arrivals === 0 && after.sheets === 0 && after.notices === 0,
       JSON.stringify(after));
+
+    // 1b. Production case 5829d304: start tapped 8 minutes after the scheduled end.
+    const late8 = await call("POST", `${P}/${eightLate}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION" });
+    const late8Events = Number((await db.query(`SELECT count(*) FROM verification_events WHERE shift_id = $1`, [eightLate])).rows[0].count);
+    check("Inicio 8 minutos después del final (caso 5829d304): rechazado, nada guardado", refused(late8, "CHECK_IN_OUTSIDE_WINDOW") && late8Events === 0, `${late8.status} ${late8.raw} events=${late8Events}`);
 
     // 2. History preserved, nothing cancelled automatically.
     const stored = (await db.query(`SELECT status FROM shifts WHERE id = $1`, [past])).rows[0];
