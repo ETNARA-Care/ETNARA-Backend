@@ -354,6 +354,9 @@ jobs:
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
+          # Supervisor vs admin on personnel, credentials, compliance and team (B4). Superuser mode =
+          # production today; under app_runtime, credential routes still hit the known RLS gaps (#229).
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifySupervisorStaffPermissions.ts
 
       - name: Diff safety check
         run: git diff --check

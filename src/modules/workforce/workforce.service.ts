@@ -241,8 +241,8 @@ export async function updateMembership(
         ) VALUES (
           ${userId}, ${organizationId}, ${organizationId},
           'WORKER_MEMBERSHIP_STATUS_CHANGED', 'organization_worker_membership', ${membershipId},
-          jsonb_build_object('status', ${current.rows[0].status}),
-          jsonb_build_object('status', ${input.status})
+          jsonb_build_object('status', ${current.rows[0].status}::text),
+          jsonb_build_object('status', ${input.status}::text)
         )
       `.execute(trx);
     }
