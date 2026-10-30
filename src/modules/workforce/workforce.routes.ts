@@ -9,6 +9,8 @@ import {
   updateMembershipSchema,
   MembershipNotFoundError,
   WorkforceManagementForbiddenError,
+  WorkerMembershipInactiveError,
+  WorkerProfileNotSavedError,
 } from "./workforce.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -39,6 +41,10 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   if (err instanceof Error && err.name === "WorkerNotFoundError") {
     res.status(404).json({ error: "WORKER_NOT_FOUND" });
+    return true;
+  }
+  if (err instanceof WorkerMembershipInactiveError || err instanceof WorkerProfileNotSavedError) {
+    res.status(409).json({ error: err.message });
     return true;
   }
   if (err instanceof Error && err.name === "MembershipAlreadyExistsError") {
