@@ -90,8 +90,13 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
     LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id
     WHERE s.organization_id = ${organizationId}
       AND s.status <> 'cancelled'
-      AND s.scheduled_end > now()
       AND s.scheduled_start < now() + interval '7 days'
+      AND (
+        s.scheduled_end > now()
+        -- Ended in the last 7 days without ever starting: the agency must review it
+        -- (nothing is cancelled or changed automatically).
+        OR (s.scheduled_end > now() - interval '7 days' AND s.status IN ('unassigned', 'confirmed'))
+      )
   `.execute(trx as never);
 
   const credentials = await sql<any>`
@@ -135,6 +140,25 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
 
   for (const shift of shifts.rows) {
     const start = new Date(shift.scheduled_start).getTime();
+    const ended = new Date(shift.scheduled_end).getTime() <= now;
+    if (ended) {
+      if (shift.checked_in) continue;
+      // Same key as «Falta registrar entrada» so an escalation carries over.
+      const key = `missed_check_in:${shift.id}`;
+      alerts.push({
+        key,
+        category: "missed_check_in",
+        severity: "critical",
+        title: shift.accepted ? "Turno terminado sin registro de entrada" : "Turno terminado sin cubrir",
+        detail: `${shift.recipient || "Residente"} · ${formatShiftStart(shift.scheduled_start)} · revisar`,
+        relatedEntityType: "shift",
+        relatedEntityId: shift.id,
+        actionPath: `/agency/shifts/${shift.id}`,
+        occurredAt: shift.scheduled_start,
+        escalatedAt: escalatedAt.get(key) || null,
+      });
+      continue;
+    }
     if (!shift.accepted) {
       const key = `uncovered_shift:${shift.id}`;
       alerts.push({

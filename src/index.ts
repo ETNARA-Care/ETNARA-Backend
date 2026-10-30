@@ -1,11 +1,20 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
+import { startupDatabaseCheck } from "./config/dbRuntimeRole.js";
 import { photoStorageSelfCheck, photoStorageSelfCheckPassed } from "./modules/activityPhotos/photoStorage.js";
 import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverageEscalation.worker.js";
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
 
 const app = createApp();
+
+// Security audit 26-oct: the database role is checked before accepting traffic (see dbRuntimeRole.ts).
+// Non-blocking by default; DB_STARTUP_FAIL_CLOSED / REQUIRE_RESTRICTED_DB_ROLE are only for the switch to app_runtime.
+await startupDatabaseCheck({
+  connectionString: env.DATABASE_URL,
+  requireRestricted: process.env.REQUIRE_RESTRICTED_DB_ROLE === "true",
+  failClosed: process.env.DB_STARTUP_FAIL_CLOSED === "true",
+});
 
 app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console

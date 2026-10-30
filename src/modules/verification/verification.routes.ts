@@ -18,6 +18,7 @@ import {
   InvalidVerificationMethodError,
   AlreadyCheckedInError,
   OccurredAtOutOfRangeError,
+  CheckInOutsideWindowError,
   NoActiveCheckInError,
   NotOrgManagerError,
 } from "./verification.service.js";
@@ -74,6 +75,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof InvalidVerificationMethodError) {
     res.status(400).json({ error: "INVALID_VERIFICATION_METHOD" });
+    return true;
+  }
+  if (err instanceof CheckInOutsideWindowError) {
+    res.status(409).json({ error: "CHECK_IN_OUTSIDE_WINDOW" });
     return true;
   }
   if (err instanceof OccurredAtOutOfRangeError) {

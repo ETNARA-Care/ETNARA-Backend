@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
 import { z } from "zod";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -24,6 +25,10 @@ router.get(
     try {
       res.json(await getOperationsCenter(req.auth!.userId, organization.data));
     } catch (error) {
+      if (isTenantAccessDenied(error)) {
+        res.status(403).json(TENANT_ACCESS_DENIED_BODY);
+        return;
+      }
       res.status(error instanceof OperationsForbiddenError ? 403 : 500).json({
         error: error instanceof OperationsForbiddenError ? error.message : "INTERNAL_ERROR",
       });
@@ -45,6 +50,10 @@ router.post(
         await generateOperationsAgentBriefing(req.auth!.userId, organization.data)
       );
     } catch (error) {
+      if (isTenantAccessDenied(error)) {
+        res.status(403).json(TENANT_ACCESS_DENIED_BODY);
+        return;
+      }
       res.status(error instanceof OperationsForbiddenError ? 403 : 500).json({
         error: error instanceof OperationsForbiddenError ? error.message : "INTERNAL_ERROR",
       });
@@ -67,6 +76,10 @@ router.post(
         await escalateOperationalAlert(req.auth!.userId, organization.data, input.data)
       );
     } catch (error) {
+      if (isTenantAccessDenied(error)) {
+        res.status(403).json(TENANT_ACCESS_DENIED_BODY);
+        return;
+      }
       res.status(error instanceof OperationsForbiddenError ? 403 : 409).json({
         error: error instanceof OperationsForbiddenError ? error.message : "ALERT_NOT_ACTIVE",
       });

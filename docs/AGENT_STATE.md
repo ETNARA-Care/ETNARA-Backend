@@ -2,6 +2,14 @@
 
 ## Current Status
 
+## 2026-10-26 — Seguridad: comprobación del rol de base de datos al arrancar (claude/runtime-role-hardening, PR #226, sin migraciones)
+
+- Hallazgo crítico: producción conecta como `postgres` (superusuario: `DATABASE_URL` → `etnara-care-staging-db.DATABASE_URL`, `POSTGRES_USER=postgres`; `MIGRATIONS_DATABASE_URL` referencia al propio `DATABASE_URL`). RLS no se aplica en producción; el aislamiento depende solo del código.
+- `src/config/dbRuntimeRole.ts`: antes de escuchar, solo lectura: `DB_RUNTIME_ROLE` y `DB_RUNTIME_READINESS` (manifiesto `runtimePrivileges.generated.json`). **No bloquea por defecto** (base inaccesible o error de inspección → se registra y arranca igual). Solo con `DB_STARTUP_FAIL_CLOSED=true` / `REQUIRE_RESTRICTED_DB_ROLE=true` (para el cambio a app_runtime) puede negarse a arrancar.
+- `scripts/verifyStartupRoleCheck.ts` 8/8 en CI. `scripts/verifyRuntimeRole.ts` (puerta previa) sin cambios.
+- La migración 130 (archivos profesionales) y la sonda entre agencias están en un PR aparte (claude/stored-files-130), porque cambian políticas y permisos.
+- Siguiente: aprobación de Rafa para la etapa A del plan `claude/seguridad-rol-app-runtime-auditoria-y-plan.md`.
+
 ## 2026-10-26 — Facturación: logos de agencia hasta 5 MB, optimizados (feat/billing-logo-5mb, sin migración)
 
 - `src/modules/images/logoImage.ts` (reutilizable): PNG, JPEG o WebP por bytes mágicos, hasta 5 MB; orientación aplicada, metadatos fuera, `fit: inside` hasta 800 px sin ampliar, PNG de paleta con transparencia (logos planos pocos KB; con degradados < ~100 KB); nunca guarda el original. Solo reutiliza `detectKind` de Fotos de actividad (su flujo no cambia). Máximo 2 procesos a la vez (503 LOGO_BUSY).

@@ -47,19 +47,6 @@ AS $$
   );
 $$;
 
-CREATE OR REPLACE FUNCTION public.app_my_shift_recipient_display_name(p_shift_id uuid)
-RETURNS text
-LANGUAGE sql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-  -- Only the name, only for a shift the caller has (or had) an own assignment on.
-  SELECT COALESCE(NULLIF(cr.preferred_name, ''), trim(cr.first_name || ' ' || cr.last_name))
-  FROM public.shifts s
-  JOIN public.care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
-  WHERE s.id = p_shift_id
-    AND public.app_worker_own_shift(p_shift_id);
-$$;
-
 CREATE OR REPLACE FUNCTION public.app_establishment_admin_for_recipient(p_recipient_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -89,11 +76,9 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.app_worker_own_shift(uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.app_my_shift_recipient_display_name(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_establishment_admin_for_recipient(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_establishment_admin_for_shift(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_worker_own_shift(uuid) TO app_runtime;
-GRANT EXECUTE ON FUNCTION public.app_my_shift_recipient_display_name(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_establishment_admin_for_recipient(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_establishment_admin_for_shift(uuid) TO app_runtime;
 
