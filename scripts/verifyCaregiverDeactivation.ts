@@ -105,6 +105,9 @@ async function main() {
   const d = await person("d", orgA, "WORKER", true);
   const dB = await person("d-b", orgB, "WORKER", true, d.userId, d.workerId);
   const supTarget = await person("sup-target", orgA, "WORKER", true);
+  // A credential of hers, so «the agency still reads her credentials» is measured on a real row.
+  const dCredential = (await q(`INSERT INTO credentials (worker_id,credential_type_id,issuing_entity_type,status)
+                                SELECT $1,id,'government','active' FROM credential_types ORDER BY code LIMIT 1 RETURNING id`, [d.workerId]))[0].id as string;
 
   const recipient = async (o: string, last: string) => (await q(`INSERT INTO care_recipients (organization_id,first_name,last_name) VALUES ($1,'Sintetico',$2) RETURNING id`, [o, `${last}-${tag}`]))[0].id as string;
   const r1 = await recipient(orgA, "R1");
@@ -310,14 +313,14 @@ async function main() {
     // The portal profile loads her credentials too: a 404 here showed «Error del servidor» and hid «Reactivar».
     const notifBefore = Number((await q(`SELECT count(*) FROM notifications WHERE organization_id=$1`, [orgA]))[0].count);
     const creds = await call("GET", `${A}/workers/${d.workerId}/credentials`, admin.token);
-    check("administradora: ve las credenciales de la inactiva (perfil y «Reactivar» en el portal)", creds.status === 200, `${creds.status}`);
-    check("supervisora: ve las credenciales de la inactiva", (await call("GET", `${A}/workers/${d.workerId}/credentials`, sup.token)).status === 200);
+    check("administradora: ve las credenciales de la inactiva (perfil y «Reactivar» en el portal)", creds.status === 200 && creds.text.includes(dCredential), `${creds.status}`);
+    check("supervisora: ve las credenciales de la inactiva", (await call("GET", `${A}/workers/${d.workerId}/credentials`, sup.token)).text.includes(dCredential));
     const notifAfter = Number((await q(`SELECT count(*) FROM notifications WHERE organization_id=$1`, [orgA]))[0].count);
     check("sin avisos de vencimiento por una persona inactiva", notifAfter === notifBefore, `${notifBefore}→${notifAfter}`);
     const ownCreds = await call("GET", `${A}/workers/${d.workerId}/credentials`, d.token);
     check("desactivada: NO lee credenciales por la URL de la agencia", denied(ownCreds.status), `${ownCreds.status}`);
     const credWrite = await call("POST", `${A}/workers/${d.workerId}/credentials`, admin.token, { credentialTypeCode: (await q(`SELECT code FROM credential_types ORDER BY code LIMIT 1`))[0].code, issuingEntityType: "government" });
-    check("credenciales de la inactiva: escribir sigue bloqueado", denied(credWrite.status) && Number((await q(`SELECT count(*) FROM credentials WHERE worker_id=$1`, [d.workerId]))[0].count) === 0, `${credWrite.status}`);
+    check("credenciales de la inactiva: escribir sigue bloqueado", denied(credWrite.status) && Number((await q(`SELECT count(*) FROM credentials WHERE worker_id=$1`, [d.workerId]))[0].count) === 1, `${credWrite.status}`);
     const all = await call("GET", `${A}/workers`, admin.token);
     check("administradora: sigue en la lista de personal", all.text.includes(d.owm!), `${all.status}`);
     const asg = await call("POST", `${A}/shifts/${S.unassigned}/assignments`, admin.token, { organizationWorkerMembershipId: d.owm });
