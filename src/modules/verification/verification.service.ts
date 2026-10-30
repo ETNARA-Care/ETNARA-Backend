@@ -73,6 +73,26 @@ export class OccurredAtOutOfRangeError extends Error {
   }
 }
 
+/**
+ * «Comenzar turno» is refused once the scheduled end has passed (same limit as
+ * «Llegué», 107). The time checked is the real one: the device time of an offline
+ * record (already validated) or now(), so a check-in made in time and synced later
+ * still counts. A visit that really happened but was never started is recorded by
+ * the agency (supervisor override, audited), never by the caregiver days later.
+ * Before the start, the portal only offers «Comenzar» from 2 h before; the server
+ * does not enforce that side yet (see the B5 report: test fixtures check in early).
+ */
+export class CheckInOutsideWindowError extends Error {
+  constructor() {
+    super("CHECK_IN_OUTSIDE_WINDOW");
+    this.name = "CheckInOutsideWindowError";
+  }
+}
+
+export function checkInAfterScheduledEnd(at: number, scheduledEnd: string | Date): boolean {
+  return at > new Date(scheduledEnd).getTime();
+}
+
 export class NotOrgManagerError extends Error {
   constructor() {
     super("SUPERVISOR_OVERRIDE_REQUIRES_ORG_MANAGER");
@@ -302,13 +322,16 @@ export async function checkIn(
     }
     const when = resolveOccurredAt(input.occurredAt, undefined, input.recordedOffline === true);
 
-    const shiftRow = await sql<{ id: string; status: string }>`
-      SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
+    const shiftRow = await sql<{ id: string; status: string; scheduled_end: Date }>`
+      SELECT id, status, scheduled_end FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
     const shift = shiftRow.rows[0];
     if (!shift) throw new ShiftNotFoundError();
     if (shift.status === "cancelled") throw new ShiftCancelledError();
     if (shift.status === "completed") throw new ShiftCompletedError();
+    if (checkInAfterScheduledEnd(when.at ? new Date(when.at).getTime() : Date.now(), shift.scheduled_end)) {
+      throw new CheckInOutsideWindowError();
+    }
 
     const assignmentRow = await sql<{ id: string; response_status: string }>`
       SELECT id, response_status FROM assignments
@@ -395,6 +418,10 @@ export async function checkOut(
       const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_out");
       if (existing) return { ...existing, replayed: true };
     }
+    // Deactivated in this agency (paso 1B): same answer as «Comenzar». Without it the timesheet
+    // trigger refused the write and the caller got a 500. A replay of a check-out already stored
+    // (above) still returns it; the agency closes any visit left open.
+    if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1

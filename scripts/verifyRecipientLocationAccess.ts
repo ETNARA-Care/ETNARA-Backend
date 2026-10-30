@@ -5,7 +5,8 @@
  * prepared by bootstrap:staging + seedDemo. Proves who can read and write
  * care_recipient_locations (Migration 084):
  *   - managers read and write
- *   - a worker reads only while assigned to a not-yet-ended shift
+ *   - a worker reads only through her shift, once ACCEPTED, while it has not ended (132);
+ *     the recipient-level route is managers only
  *   - unassigned workers, family members and other organizations get nothing
  *   - workers cannot write; payloads are validated
  * Direct RLS attacks run as app_runtime with forged session context.
@@ -111,14 +112,23 @@ async function main() {
     const shiftId = (shift.body.shift as { id: string }).id;
     const assign = await call("POST", `/organizations/${org}/shifts/${shiftId}/assignments`, adminToken, { organizationWorkerMembershipId: carlosMembership });
     if (assign.status !== 201) throw new Error(`assign failed: ${assign.status} ${JSON.stringify(assign.body)}`);
-    const assigned = await call("GET", path(recipient), carlos);
-    check("Assigned worker with an upcoming shift reads the address", assigned.status === 200 && (assigned.body.location as Json | null)?.access_notes === address.accessNotes, `${assigned.status}`);
-    const otherWorker = await call("GET", path(recipient), maria);
+    // Migration 132 / auditoría B4: the recipient-level route is managers only, and a
+    // caregiver reads the address through her shift once she ACCEPTED it.
+    const legacy = await call("GET", path(recipient), carlos);
+    check("Recipient-level address route is managers only (assigned worker gets 404)", legacy.status === 404, `${legacy.status}`);
+    const shiftPath = `/organizations/${org}/shifts/${shiftId}/service-location`;
+    const pending = await call("GET", shiftPath, carlos);
+    check("Pending assignment does not reveal the address", pending.status === 404 || (pending.status === 200 && pending.body.location == null), `${pending.status}`);
+    const accept = await call("POST", `/organizations/${org}/me/shifts/${shiftId}/respond`, carlos, { decision: "accepted" });
+    const assigned = await call("GET", shiftPath, carlos);
+    check("Accepted upcoming shift: the worker reads the address through her shift",
+      accept.status < 300 && assigned.status === 200 && (assigned.body.location as Json | null)?.accessNotes === address.accessNotes, `accept=${accept.status} read=${assigned.status}`);
+    const otherWorker = await call("GET", shiftPath, maria);
     check("Another, unassigned worker still gets 404", otherWorker.status === 404, `${otherWorker.status}`);
     const workerWrite = await call("PUT", path(recipient), carlos, { addressLine: "Cambiada por el cuidador" });
     check("Worker cannot change the address (403)", workerWrite.status === 403, `${workerWrite.status}`);
     const cancel = await call("POST", `/organizations/${org}/shifts/${shiftId}/cancel`, adminToken, { reason: "Verificación" });
-    const afterCancel = await call("GET", path(recipient), carlos);
+    const afterCancel = await call("GET", shiftPath, carlos);
     check("After the shift is cancelled the worker loses access (404)", cancel.status < 300 && afterCancel.status === 404, `cancel=${cancel.status} read=${afterCancel.status}`);
 
     // Family.
@@ -141,7 +151,7 @@ async function main() {
       JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id
       JOIN workers w ON w.id = owm.worker_id
       WHERE w.user_id = $1 AND a.organization_id = $2 AND owm.status = 'active'
-        AND a.response_status IN ('pending', 'accepted') AND s.status IN ('unassigned', 'confirmed', 'in_progress')
+        AND a.response_status = 'accepted' AND s.status IN ('confirmed', 'in_progress')
         AND s.scheduled_end > now()`, [carlosUserId, org])).rows.map((r) => r.id);
     const unbacked = visible instanceof Error ? ["error"] : visible.filter((id) => !backed.includes(id));
     check("RLS: every address a worker can read is backed by a live assignment", unbacked.length === 0, `visible=${visible instanceof Error ? "error" : visible.length} unbacked=${unbacked.length}`);

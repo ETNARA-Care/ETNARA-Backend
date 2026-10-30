@@ -237,8 +237,10 @@ async function main() {
     // ---------------------------------------------------------- private instructions
     const ins = (p: P) => call("GET", `/organizations/${orgA}/shifts/${shiftId}/private-instructions`, p.token);
     const [iAdmin, iSup, iCg, iOther] = await Promise.all([ins(A.admin1), ins(A.supervisor), ins(A.cg1), ins(A.cg2)]);
-    check("T21 instructions readable by agency managers and the assigned caregiver",
-      iAdmin.status === 200 && iSup.status === 200 && iCg.status === 200 && iCg.body.instructions?.instructions?.startsWith("Llegar"), `${iAdmin.status},${iSup.status},${iCg.status}`);
+    // 134 (auditoría B4): the caregiver's assignment is still PENDING here, so she does not
+    // see them yet; she reads them once she accepts (T30).
+    check("T21 instructions readable by agency managers; the caregiver with a PENDING assignment does not see them yet",
+      iAdmin.status === 200 && iSup.status === 200 && iCg.status === 404, `${iAdmin.status},${iSup.status},${iCg.status}`);
     const iB = await call("GET", `/organizations/${orgB}/shifts/${shiftId}/private-instructions`, B.admin.token);
     check("T22 not readable by another caregiver or by agency B", iOther.status === 404 && iB.status === 404, `${iOther.status},${iB.status}`);
     const famShift = await asRuntime(A.family.userId, orgA, `SELECT id FROM shifts WHERE id=$1`, [shiftId]);
@@ -277,6 +279,9 @@ async function main() {
     const accepted = await listed(opp1);
     check("T30 caregiver accepts in Turnos; SmartMatch shows the accepted assignment",
       respond.status === 200 && accepted?.shift_assignment_status === "accepted", `status=${respond.status}`);
+    const iCgAfter = await ins(A.cg1);
+    check("T31 once accepted, the caregiver reads the instructions",
+      iCgAfter.status === 200 && iCgAfter.body.instructions?.instructions?.startsWith("Llegar"), `${iCgAfter.status}`);
   } finally {
     await runtime.end();
     server.close();

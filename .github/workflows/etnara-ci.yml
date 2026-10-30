@@ -78,11 +78,39 @@ jobs:
           AUTHZ_DB_MODE: app_runtime
         run: npx tsx scripts/verifyRoleAuthorizationMatrix.ts
 
+      - name: Non-member access guard, app as superuser (every organization route refuses with 4xx, never 2xx or 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyNonMemberAccess.ts
+
+      - name: Non-member access guard, app as app_runtime
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyNonMemberAccess.ts
+
       - name: PostgreSQL platform PHI boundary verification
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyPlatformPhiBoundary.ts
+
+      - name: Caregiver access window (messaging 24 h, addresses only with an accepted current shift), app as superuser
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyCaregiverAccessWindow.ts
+
+      - name: Caregiver access window, app as app_runtime
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyCaregiverAccessWindow.ts
 
       - name: PostgreSQL credential review write boundary verification
         env:
@@ -313,10 +341,28 @@ jobs:
           npx tsx scripts/verifyTenantPolicyClosure.ts
           npx tsx scripts/verifyOfflineCheckInOut.ts
           npx tsx scripts/verifyAssignmentMessagingSync.ts
+          # Direct agency/caregiver messaging (136): app as superuser (production today) and as app_runtime (RLS).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyCaregiverDirectMessages.ts
+          npx tsx scripts/verifyCaregiverDirectMessages.ts
+          # Conversation resident names inside the 24 h window (both modes).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyConversationResidentNames.ts
+          npx tsx scripts/verifyConversationResidentNames.ts
+          # Overdue shifts (B5): no start after the scheduled end; agency review alert (both modes).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyOverdueShifts.ts
+          npx tsx scripts/verifyOverdueShifts.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
+          # Supervisor vs admin on personnel, credentials, compliance and team (B4), and deactivating /
+          # reactivating a caregiver (paso 1B). Both modes since 137 closed RLS gap G4 (managers read an
+          # inactive caregiver of their agency).
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifySupervisorStaffPermissions.ts
+          AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifySupervisorStaffPermissions.ts
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifyCaregiverDeactivation.ts
+          AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyCaregiverDeactivation.ts
+          # G4 at the database: who reads / writes an inactive caregiver's profile, credentials, documents.
+          npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
 
       - name: PostgreSQL runtime role check at startup (app_runtime vs postgres, readiness, refusal, unreachable DB)
         env:
