@@ -96,10 +96,40 @@ async function main() {
       insertar: await attempt(`INSERT INTO credentials (worker_id,credential_type_id,issuing_entity_type,status) VALUES ($1,$2,'government','active') RETURNING id`, [w, type]),
       borrar: await attempt(`DELETE FROM credentials WHERE id=$1 RETURNING id`, [cred]),
       documento: await attempt(`UPDATE documents SET status=status WHERE id=$1 RETURNING id`, [doc]),
+      // Write paths that a new SELECT policy could combine with (RETURNING, row locks, inserts).
+      borrarPerfil: await attempt(`DELETE FROM workers WHERE id=$1 RETURNING id`, [w]),
+      bloquearPerfil: await attempt(`SELECT id FROM workers WHERE id=$1 FOR UPDATE`, [w]),
+      bloquearCredencial: await attempt(`SELECT id FROM credentials WHERE id=$1 FOR UPDATE`, [cred]),
+      nuevoDocumento: await attempt(`INSERT INTO documents (worker_id,credential_type_id,file_id) VALUES ($1,$2,$3) RETURNING id`, [w, type, file]),
+      borrarDocumento: await attempt(`DELETE FROM documents WHERE id=$1 RETURNING id`, [doc]),
+      nuevaVersion: await attempt(`INSERT INTO document_versions (document_id,file_id,version) VALUES ($1,$2,99) RETURNING id`, [doc, file]),
+      cambiarVersion: await attempt(`UPDATE document_versions SET version=version WHERE document_id=$1 RETURNING id`, [doc]),
+      borrarVersion: await attempt(`DELETE FROM document_versions WHERE document_id=$1 RETURNING id`, [doc]),
     }));
     const blocked = (r: string) => r === "filas=0" || r === "42501";
     check(`${k}: no escribe nada de la inactiva (perfil, credenciales, documentos)`, Object.values(upd).every(blocked), JSON.stringify(upd));
   }
+  // The helper itself, outside its intended context (SECURITY DEFINER must not leak across agencies).
+  const fn = async (k: string | null, org?: string) => {
+    await q("BEGIN");
+    try {
+      if (k) await q(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [actors[k].user, org ?? actors[k].org]);
+      await q("SET LOCAL ROLE app_runtime");
+      return (await q(`SELECT public.app_manager_reads_org_worker($1) AS ok`, [w]))[0].ok as boolean;
+    } finally { await q("ROLLBACK"); }
+  };
+  check("función: administradora de A en su agencia → verdadero", (await fn("adminA")) === true);
+  check("función: sin contexto → falso", (await fn(null)) === false);
+  check("función: administradora de C (sin relación) → falso", (await fn("adminC")) === false);
+  check("función: administradora de C fingiendo la agencia A → falso (no es gestora allí)", (await fn("adminC", A)) === false);
+  check("función: otra cuidadora de A → falso", (await fn("otraA")) === false);
+  check("función: familia de A → falso", (await fn("famA")) === false);
+  const execPublic = (await q(`SELECT has_function_privilege('pg_monitor','public.app_manager_reads_org_worker(uuid)','EXECUTE') AS p`))[0].p;
+  const def = (await q(`SELECT prosecdef, proconfig::text AS cfg, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname='app_manager_reads_org_worker'`))[0];
+  check("función: sin EXECUTE para PUBLIC; search_path fijo", execPublic === false && def.prosecdef === true && /search_path=pg_catalog, public/.test(def.cfg), JSON.stringify(def));
+  const newPolicies = await q(`SELECT tablename, cmd, permissive FROM pg_policies WHERE policyname LIKE '%_manager_read_any_status'`);
+  check("las 4 políticas nuevas son solo SELECT y permisivas", newPolicies.length === 4 && newPolicies.every((r: any) => r.cmd === "SELECT" && r.permissive === "PERMISSIVE"), JSON.stringify(newPolicies));
+
   for (const k of ["otraA", "famA", "adminC"]) {
     const v = await sees(k);
     check(`${k}: no ve nada de la inactiva`, want(v, 0), JSON.stringify(v));
