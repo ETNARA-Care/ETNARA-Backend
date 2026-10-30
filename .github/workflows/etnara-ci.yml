@@ -364,5 +364,11 @@ jobs:
           # G4 at the database: who reads / writes an inactive caregiver's profile, credentials, documents.
           npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
 
+      - name: PostgreSQL runtime role check at startup (app_runtime vs postgres, readiness, refusal, unreachable DB)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyStartupRoleCheck.ts
+
       - name: Diff safety check
         run: git diff --check
