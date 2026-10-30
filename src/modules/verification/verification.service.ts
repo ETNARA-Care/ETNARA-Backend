@@ -418,6 +418,10 @@ export async function checkOut(
       const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_out");
       if (existing) return { ...existing, replayed: true };
     }
+    // Deactivated in this agency (paso 1B): same answer as «Comenzar». Without it the timesheet
+    // trigger refused the write and the caller got a 500. A replay of a check-out already stored
+    // (above) still returns it; the agency closes any visit left open.
+    if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1

@@ -354,6 +354,12 @@ jobs:
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
+          # Supervisor vs admin on personnel, credentials, compliance and team (B4). Superuser mode =
+          # production today; under app_runtime, credential routes still hit the known RLS gaps (#229).
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifySupervisorStaffPermissions.ts
+          # Deactivate / reactivate a caregiver (paso 1B). Superuser = production today; under
+          # app_runtime the workers policy hides an inactive caregiver from her agency (gap G4).
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifyCaregiverDeactivation.ts
 
       - name: Diff safety check
         run: git diff --check
