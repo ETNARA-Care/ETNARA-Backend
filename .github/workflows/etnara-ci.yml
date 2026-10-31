@@ -376,5 +376,11 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyStartupRoleCheck.ts
 
+      - name: PostgreSQL cross-agency probe over every organization table, as app_runtime (runs last, on the data of all suites)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCrossTenantRls.ts
+
       - name: Diff safety check
         run: git diff --check
