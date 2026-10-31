@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { isOrgManager, ownWorkerMembershipId } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -70,6 +71,26 @@ export class OccurredAtOutOfRangeError extends Error {
     super("OCCURRED_AT_OUT_OF_RANGE");
     this.name = "OccurredAtOutOfRangeError";
   }
+}
+
+/**
+ * «Comenzar turno» is refused once the scheduled end has passed (same limit as
+ * «Llegué», 107). The time checked is the real one: the device time of an offline
+ * record (already validated) or now(), so a check-in made in time and synced later
+ * still counts. A visit that really happened but was never started is recorded by
+ * the agency (supervisor override, audited), never by the caregiver days later.
+ * Before the start, the portal only offers «Comenzar» from 2 h before; the server
+ * does not enforce that side yet (see the B5 report: test fixtures check in early).
+ */
+export class CheckInOutsideWindowError extends Error {
+  constructor() {
+    super("CHECK_IN_OUTSIDE_WINDOW");
+    this.name = "CheckInOutsideWindowError";
+  }
+}
+
+export function checkInAfterScheduledEnd(at: number, scheduledEnd: string | Date): boolean {
+  return at > new Date(scheduledEnd).getTime();
 }
 
 export class NotOrgManagerError extends Error {
@@ -301,13 +322,16 @@ export async function checkIn(
     }
     const when = resolveOccurredAt(input.occurredAt, undefined, input.recordedOffline === true);
 
-    const shiftRow = await sql<{ id: string; status: string }>`
-      SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
+    const shiftRow = await sql<{ id: string; status: string; scheduled_end: Date }>`
+      SELECT id, status, scheduled_end FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
     const shift = shiftRow.rows[0];
     if (!shift) throw new ShiftNotFoundError();
     if (shift.status === "cancelled") throw new ShiftCancelledError();
     if (shift.status === "completed") throw new ShiftCompletedError();
+    if (checkInAfterScheduledEnd(when.at ? new Date(when.at).getTime() : Date.now(), shift.scheduled_end)) {
+      throw new CheckInOutsideWindowError();
+    }
 
     const assignmentRow = await sql<{ id: string; response_status: string }>`
       SELECT id, response_status FROM assignments
@@ -394,6 +418,10 @@ export async function checkOut(
       const existing = await findByClientEventId(trx, organizationId, membership.id, input.clientEventId, "check_out");
       if (existing) return { ...existing, replayed: true };
     }
+    // Deactivated in this agency (paso 1B): same answer as «Comenzar». Without it the timesheet
+    // trigger refused the write and the caller got a 500. A replay of a check-out already stored
+    // (above) still returns it; the agency closes any visit left open.
+    if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
     const shiftRow = await sql<{ id: string; status: string }>`
       SELECT id, status FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
@@ -482,6 +510,24 @@ export async function getVerification(
       SELECT id FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId} LIMIT 1
     `.execute(trx);
     if (!shiftRow.rows[0]) throw new ShiftNotFoundError();
+    // Managers see every caregiver's events. A caregiver who is (or was) assigned
+    // to this shift sees only her own events and arrivals -- also after
+    // check-out, so the completed visit still opens in her app. Family and other
+    // caregivers get nothing here (the family portal has its own summary).
+    // Same row rule as RLS verification_events_worker_own_assignment and
+    // shift_arrivals_worker_read (018, 101).
+    const managerView = await isOrgManager(trx);
+    const ownMembership = managerView ? null : await ownWorkerMembershipId(trx);
+    if (!managerView) {
+      const assigned = ownMembership
+        ? (await sql<{ ok: boolean }>`
+            SELECT EXISTS (SELECT 1 FROM assignments a
+              WHERE a.shift_id = ${shiftId} AND a.organization_id = ${organizationId}
+                AND a.organization_worker_membership_id = ${ownMembership}) AS ok`.execute(trx)).rows[0]?.ok === true
+        : false;
+      if (!assigned) throw new ShiftNotFoundError();
+    }
+    const ownOnly = managerView ? sql`TRUE` : sql`organization_worker_membership_id = ${ownMembership}`;
 
     const result = await sql<{
       id: string;
@@ -494,7 +540,8 @@ export async function getVerification(
       SELECT ve.id, ve.event_type, ve.occurred_at, ve.organization_worker_membership_id, vm.code as method_code, ve.recorded_offline
       FROM verification_events ve
       JOIN verification_methods vm ON vm.id = ve.verification_method_id
-      WHERE ve.shift_id = ${shiftId}
+      WHERE ve.shift_id = ${shiftId} AND ve.organization_id = ${organizationId}
+        AND ${managerView ? sql`TRUE` : sql`ve.organization_worker_membership_id = ${ownMembership}`}
       ORDER BY ve.occurred_at
     `.execute(trx);
 
@@ -524,11 +571,10 @@ export async function getVerification(
     }
 
     // The review note is the agency's: caregivers see whether it was reviewed, not what was written.
-    const managerView = Boolean((await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok);
     const arrivals = (await sql<{ organization_worker_membership_id: string; occurred_at: string; proximity: string;
       distance_m: number | null; needs_review: boolean; reviewed_at: string | null; review_note: string | null; recorded_offline: boolean }>`
       SELECT organization_worker_membership_id, occurred_at, proximity, distance_m, needs_review, reviewed_at, review_note, recorded_offline
-      FROM shift_arrivals WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+      FROM shift_arrivals WHERE shift_id = ${shiftId} AND organization_id = ${organizationId} AND ${ownOnly}
       ORDER BY occurred_at
     `.execute(trx)).rows.map((a) => ({
       membershipId: a.organization_worker_membership_id, occurredAt: a.occurred_at, proximity: a.proximity,

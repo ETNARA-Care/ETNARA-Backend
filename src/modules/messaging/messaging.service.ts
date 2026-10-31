@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { threadAccessSql } from "../../security/roleGuards.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
@@ -49,6 +50,14 @@ interface ConversationRow {
   care_recipient_id: string | null;
   thread_type: string;
   created_at: string;
+  /**
+   * Short name of the resident the conversation is about (preferred name, or first
+   * name + last initial), so the portal can title it even when the resident is no
+   * longer in the caller's /care-recipients list (e.g. a caregiver inside the 24 h
+   * window after her visit). Only for residents the caller may message
+   * (app_my_message_recipients, 132); null otherwise and for direct conversations.
+   */
+  care_recipient_name?: string | null;
 }
 interface MessageRow {
   id: string;
@@ -66,34 +75,16 @@ export async function resolveOrCreateFamilyConversation(
 ): Promise<ConversationRow> {
   assertUuid(careRecipientId, "careRecipientId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    const recipientRow = await sql<{ id: string }>`
-      SELECT id FROM care_recipients WHERE id = ${careRecipientId} AND organization_id = ${organizationId} LIMIT 1
+    // One rule for everyone (migration 132): managers, active family, or a caregiver
+    // with an ACCEPTED assignment with THIS person until 24 h after that shift ended.
+    // Pending, rejected or cancelled assignments never qualify. The same answer is
+    // given whether the person does not exist or is not hers, so a caregiver or a
+    // family member learns nothing about other residents.
+    const allowed = await sql<{ ok: boolean }>`
+      SELECT app_user_can_message_recipient(${userId}::uuid, ${organizationId}::uuid, ${careRecipientId}::uuid) AS ok
     `.execute(trx);
-    if (!recipientRow.rows[0]) throw new RecipientNotFoundError();
-
-    const isManager = await sql<{ exists: boolean }>`SELECT app_is_org_manager() as exists`.execute(trx);
-    const hasAssignment = await sql<{ exists: boolean }>`SELECT app_worker_has_recipient_assignment(${careRecipientId}) as exists`.execute(
-      trx
-    );
-    // Family authorization requires BOTH an active family_relationship AND
-    // the FAMILY role still being held (section 23: removing the FAMILY
-    // role must block recipient-scoped messaging even if the relationship
-    // row itself is untouched -- the role and the relationship are two
-    // independent things that can each be revoked separately).
-    const relationship = await sql<{ id: string }>`
-      SELECT fr.id FROM family_relationships fr
-      WHERE fr.user_id = ${userId} AND fr.organization_id = ${organizationId} AND fr.care_recipient_id = ${careRecipientId} AND fr.status = 'active'
-        AND EXISTS (
-          SELECT 1 FROM user_roles ur
-          JOIN organization_memberships om ON ur.organization_membership_id = om.id
-          JOIN roles r ON ur.role_id = r.id
-          WHERE om.user_id = ${userId} AND om.organization_id = ${organizationId}
-            AND om.status = 'active' AND r.code = 'FAMILY'
-        )
-      LIMIT 1
-    `.execute(trx);
-    const authorized = isManager.rows[0]?.exists || hasAssignment.rows[0]?.exists || !!relationship.rows[0];
-    if (!authorized) throw new NotAuthorizedForConversationError();
+    // (false also when the person does not exist in this agency: same 403 either way)
+    if (!allowed.rows[0]?.ok) throw new NotAuthorizedForConversationError();
 
     // Uses app_find_family_thread_id() (migration 035) rather than a plain
     // SELECT: message_threads_read requires already being a participant,
@@ -167,14 +158,10 @@ export async function resolveOrCreateFamilyConversation(
       FROM assignments a
       JOIN organization_worker_memberships owm ON owm.id = a.organization_worker_membership_id AND owm.status = 'active'
       JOIN workers w ON w.id = owm.worker_id
-      LEFT JOIN shifts s ON s.id = a.shift_id
       WHERE a.organization_id = ${organizationId}
         AND a.response_status = 'accepted'
-        AND (
-              a.care_recipient_id = ${careRecipientId}
-              OR s.care_recipient_id = ${careRecipientId}
-              OR (s.room_id IS NOT NULL AND s.room_id = app_recipient_room_id(${careRecipientId}))
-        )
+        -- only caregivers inside their window with this person (132); never past ones
+        AND app_worker_messaging_window(w.user_id, ${organizationId}::uuid, ${careRecipientId}::uuid)
       UNION
       SELECT DISTINCT om.user_id
       FROM organization_memberships om
@@ -206,10 +193,18 @@ export async function resolveOrCreateFamilyConversation(
 export async function listConversations(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const result = await sql<ConversationRow>`
-      SELECT mt.id, mt.organization_id, mt.care_recipient_id, mt.thread_type, mt.created_at
+      WITH my_recipients AS MATERIALIZED (
+        SELECT id, COALESCE(NULLIF(btrim(preferred_name), ''),
+                            btrim(first_name || ' ' || COALESCE(left(last_name, 1) || '.', ''))) AS short_name
+        FROM app_my_message_recipients()
+      )
+      SELECT mt.id, mt.organization_id, mt.care_recipient_id, mt.thread_type, mt.created_at,
+             r.short_name AS care_recipient_name
       FROM message_threads mt
       JOIN message_thread_participants mtp ON mtp.message_thread_id = mt.id
+      LEFT JOIN my_recipients r ON r.id = mt.care_recipient_id
       WHERE mt.organization_id = ${organizationId} AND mtp.user_id = ${userId}
+        AND ${threadAccessSql(sql`mt.id`)}
       ORDER BY mt.created_at DESC
     `.execute(trx);
     return result.rows;
@@ -233,8 +228,12 @@ export async function listMessages(
   assertUuid(conversationId, "conversationId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const threadRow = await sql<{ id: string }>`
-      SELECT id FROM message_threads WHERE id = ${conversationId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM message_threads WHERE id = ${conversationId} AND organization_id = ${organizationId}
+        AND ${threadAccessSql(sql`message_threads.id`)}
+      LIMIT 1
     `.execute(trx);
+    // Participants only, and only while they are still authorized for the
+    // person the conversation is about (same rule as RLS messages_read, 038).
     if (!threadRow.rows[0]) throw new ConversationNotFoundError();
 
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
@@ -284,6 +283,7 @@ export async function sendMessage(
     const participant = await sql<{ can_write: boolean }>`
       SELECT can_write FROM message_thread_participants
       WHERE message_thread_id = ${conversationId} AND organization_id = ${organizationId} AND user_id = ${userId}
+        AND ${threadAccessSql(sql`message_thread_participants.message_thread_id`)}
       LIMIT 1
     `.execute(trx);
     if (!participant.rows[0]) throw new ConversationNotFoundError();
@@ -296,9 +296,17 @@ export async function sendMessage(
     `.execute(trx);
     const message = result.rows[0];
 
+    // Notify only participants who may still read the conversation (a caregiver
+    // whose window closed stays a participant row but is no longer notified).
     const others = await sql<{ user_id: string }>`
-      SELECT user_id FROM message_thread_participants
-      WHERE message_thread_id = ${conversationId} AND organization_id = ${organizationId} AND user_id != ${userId}
+      SELECT mtp.user_id FROM message_thread_participants mtp
+      JOIN message_threads mt ON mt.id = mtp.message_thread_id AND mt.organization_id = mtp.organization_id
+      WHERE mtp.message_thread_id = ${conversationId} AND mtp.organization_id = ${organizationId} AND mtp.user_id != ${userId}
+        AND (mt.care_recipient_id IS NULL
+             OR app_user_can_message_recipient(mtp.user_id, mt.organization_id, mt.care_recipient_id))
+        -- Direct agency/caregiver conversations (136): notify only who may still read them.
+        AND (mt.thread_type <> 'caregiver_agency'
+             OR app_user_can_access_caregiver_thread(mtp.user_id, mt.id))
     `.execute(trx);
     for (const other of others.rows) {
       await sql`
@@ -308,5 +316,20 @@ export async function sendMessage(
     }
 
     return message;
+  });
+}
+
+/**
+ * People the caller may start (or reopen) a conversation about: everyone for
+ * managers, her own relatives for family, and for a caregiver only the residents
+ * inside her messaging window (accepted assignment, until 24 h after that shift
+ * ended). Minimal fields: id and the display name the portal already shows.
+ */
+export async function listStartableRecipients(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const result = await sql<{ id: string; first_name: string; last_name: string; preferred_name: string | null }>`
+      SELECT id, first_name, last_name, preferred_name FROM app_my_message_recipients()
+    `.execute(trx);
+    return result.rows.map((r) => ({ id: r.id, firstName: r.first_name, lastName: r.last_name, preferredName: r.preferred_name }));
   });
 }

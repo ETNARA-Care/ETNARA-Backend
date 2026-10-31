@@ -96,8 +96,17 @@ export async function evaluateWorkerEligibility(
   membershipId: string
 ): Promise<EligibilityResult> {
   assertUuid(membershipId, "organizationWorkerMembershipId");
-  return withTenantContext({ userId, organizationId }, (trx) =>
-    evaluateWorkerEligibilityInTransaction(trx, organizationId, membershipId));
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers, establishment administrators, or the caregiver about herself.
+    // Family and other caregivers never see someone's compliance (auditoría M3).
+    const allowed = await sql<{ ok: boolean }>`
+      SELECT (app_is_org_manager() OR app_is_any_establishment_admin()
+        OR EXISTS (SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+                   WHERE owm.id = ${membershipId}::uuid AND owm.organization_id = ${organizationId}
+                     AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)) AS ok`.execute(trx);
+    if (!allowed.rows[0]?.ok) throw new ComplianceManagementForbiddenError();
+    return evaluateWorkerEligibilityInTransaction(trx, organizationId, membershipId);
+  });
 }
 
 /**
@@ -329,6 +338,17 @@ async function assertComplianceManager(trx: unknown): Promise<void> {
   if (!result.rows[0]?.allowed) throw new ComplianceManagementForbiddenError();
 }
 
+/**
+ * The compliance policy (which credentials each job requires, and whether the agency must
+ * review them) is agency-wide configuration and decides who may be assigned to work, so only
+ * the agency administrator changes it. Supervisors still read it and manage each caregiver's
+ * credentials and reviews (auditoría B4, 27-oct-2026).
+ */
+async function assertCompliancePolicyAdmin(trx: unknown): Promise<void> {
+  const result = await sql<{ allowed: boolean }>`SELECT app_is_org_admin() AS allowed`.execute(trx as never);
+  if (!result.rows[0]?.allowed) throw new ComplianceManagementForbiddenError();
+}
+
 async function readPolicy(
   trx: unknown,
   organizationId: string,
@@ -414,7 +434,7 @@ export async function saveCompliancePolicy(
   input: SaveCompliancePolicyInput
 ): Promise<CompliancePolicy> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertComplianceManager(trx);
+    await assertCompliancePolicyAdmin(trx);
     const workerRole = input.workerRole.trim();
     const previous = await readPolicy(trx, organizationId, workerRole);
     const codes = input.requirements.map((item) => item.credentialTypeCode.toUpperCase());

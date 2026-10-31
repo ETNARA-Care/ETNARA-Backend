@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { recipientStaffSql } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -146,7 +147,8 @@ export async function createObservation(
     if (membership.status !== "active") throw new MembershipNotActiveError("Membership not active");
 
     const recipientRow = await sql<{ id: string }>`
-      SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
+      SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`care_recipients.id`)} LIMIT 1
     `.execute(trx);
     if (!recipientRow.rows[0]) throw new RecipientNotFoundError();
 
@@ -176,7 +178,8 @@ export interface ListObservationsFilter {
 export async function listObservations(userId: string, organizationId: string, filter: ListObservationsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
-    const conditions = [sql`organization_id = ${organizationId}`];
+    // Managers see all; caregivers only people they are currently assigned to (same rule as RLS).
+    const conditions = [sql`organization_id = ${organizationId}`, recipientStaffSql(sql`observations.care_recipient_id`)];
     if (filter.careRecipientId) conditions.push(sql`care_recipient_id = ${filter.careRecipientId}`);
     if (filter.status) conditions.push(sql`status = ${filter.status}`);
     const result = await sql<ObservationRow>`
@@ -253,7 +256,8 @@ export async function getObservation(userId: string, organizationId: string, obs
     await assertStaffCaller(trx);
     const result = await sql<ObservationRow>`
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id, care_event_id, category, description, status, created_at
-      FROM observations WHERE id = ${observationId} AND organization_id = ${organizationId} LIMIT 1
+      FROM observations WHERE id = ${observationId} AND organization_id = ${organizationId}
+        AND ${recipientStaffSql(sql`observations.care_recipient_id`)} LIMIT 1
     `.execute(trx);
     if (!result.rows[0]) throw new ObservationNotFoundError();
     return result.rows[0];

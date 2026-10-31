@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { canManageScheduleFor, isOrgManager } from "../../security/roleGuards.js";
 import { journeyStates, toJourney, type JourneyState } from "../verification/verification.journey.js";
 import { z } from "zod";
 import { resolveShiftLocationInTransaction } from "../careRecipients/serviceLocations.service.js";
@@ -137,6 +138,9 @@ export interface ShiftRow {
   updated_at: string;
   assignment_id?: string;
   assignment_response_status?: "pending" | "accepted";
+  care_recipient_display_name?: string | null;
+  /** Municipality of the service (never the address); own shifts only (134). */
+  service_municipality?: string | null;
 }
 
 export async function createShift(
@@ -152,7 +156,11 @@ export async function createShift(
   if (new Date(input.scheduledStart).getTime() >= new Date(input.scheduledEnd).getTime()) {
     throw new InvalidShiftTimesError();
   }
-  return withTenantContext({ userId, organizationId }, (trx) => insertShiftInTransaction(trx, organizationId, input));
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Agency managers, or the administrator of the person's establishment.
+    if (!(await canManageScheduleFor(trx, input.careRecipientId))) throw new ShiftUpdateForbiddenError();
+    return insertShiftInTransaction(trx, organizationId, input);
+  });
 }
 
 /**
@@ -205,7 +213,8 @@ export interface ListShiftsFilter {
 export async function listShifts(userId: string, organizationId: string, filter: ListShiftsFilter = {}) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
-    const conditions = [sql`s.organization_id = ${organizationId}`];
+    // Managers see the whole schedule; caregivers only shifts they are assigned to (same rule as RLS).
+    const conditions = [sql`s.organization_id = ${organizationId}`, sql`(app_is_org_manager() OR app_worker_has_shift_assignment(s.id))`];
     if (filter.dateFrom) conditions.push(sql`s.scheduled_start >= ${filter.dateFrom}`);
     if (filter.dateTo) conditions.push(sql`s.scheduled_start <= ${filter.dateTo}`);
     if (filter.status) conditions.push(sql`s.status = ${filter.status}`);
@@ -258,13 +267,19 @@ export async function listMyShifts(userId: string, organizationId: string) {
     const result = await sql<ShiftRow>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, a.id AS assignment_id,
-             a.response_status AS assignment_response_status
+             a.response_status AS assignment_response_status,
+             -- Only a name and the municipality (migration 134): the full name once she
+             -- accepted, a short one (preferred name, or first name + initial) while the
+             -- assignment is pending. Never the rest of the person's profile or the address.
+             prev.display_name AS care_recipient_display_name,
+             prev.municipality AS service_municipality
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
       JOIN organization_worker_memberships owm
         ON owm.id = a.organization_worker_membership_id
        AND owm.status = 'active'
+      LEFT JOIN LATERAL app_my_shift_preview(s.id) prev ON true
       WHERE s.organization_id = ${organizationId}
         AND owm.worker_id = ${workerId}
         AND a.response_status IN ('pending', 'accepted')
@@ -419,6 +434,7 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
       SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
+        AND (app_is_org_manager() OR app_worker_has_shift_assignment(shifts.id))
       LIMIT 1
     `.execute(trx);
     if (!result.rows[0]) throw new ShiftNotFoundError();
@@ -538,6 +554,8 @@ export interface CoverageSummary {
 export async function getCoverageSummary(userId: string, organizationId: string): Promise<CoverageSummary> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
+    // Agency-wide counts: managers only.
+    if (!(await isOrgManager(trx))) throw new ShiftUpdateForbiddenError();
     const result = await sql<{ total: number; covered: number; uncovered: number; cancelled: number }>`
       SELECT
         count(*)::int AS total,

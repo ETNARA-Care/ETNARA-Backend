@@ -11,14 +11,12 @@
  */
 import { Client } from "pg";
 import { hashPassword } from "../src/security/password.js";
+import { assertDisposableDatabase, demoPasswordFromEnv } from "./lib/disposableDatabase.js";
 
-const configuredDemoPassword = process.env.DEMO_PASSWORD;
-
-if (!configuredDemoPassword) {
-  throw new Error("DEMO_PASSWORD is required to seed demo users");
-}
-
-const DEMO_PASSWORD: string = configuredDemoPassword;
+// Only against a disposable local database; never production (audit 26-oct-2026, B2).
+// With DATABASE_URL unset the script falls back to a localhost database, which is allowed.
+assertDisposableDatabase(process.env.DATABASE_URL ?? "postgres://localhost/caretest");
+const DEMO_PASSWORD: string = demoPasswordFromEnv();
 
 async function main() {
   const client = new Client({ connectionString: process.env.DATABASE_URL ?? "******localhost:5432/caretest" });

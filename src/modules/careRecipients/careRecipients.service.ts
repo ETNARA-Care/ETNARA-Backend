@@ -2,6 +2,7 @@ import { sql, type RawBuilder } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
+import { assertOrgManager, recipientVisibleSql } from "../../security/roleGuards.js";
 
 const recipientIdSchema = z.string().uuid();
 function assertValidRecipientId(recipientId: string): void {
@@ -77,6 +78,8 @@ export async function createCareRecipient(
   input: CreateRecipientInput
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers only (same rule as RLS care_recipients_admin_supervisor_full_tenant).
+    await assertOrgManager(trx);
     const result = await sql<RecipientRow>`
       INSERT INTO care_recipients (
         organization_id, first_name, last_name, preferred_name, date_of_birth,
@@ -97,16 +100,15 @@ export async function createCareRecipient(
 
 export async function listCareRecipients(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    // No role branching in application code: RLS itself returns the right
-    // set -- staff see every recipient in the org (minus FAMILY-only
-    // members), a FAMILY-only member sees only recipients they have an
-    // active family_relationship with. Same query, different rows,
-    // entirely enforced by the two OR'd policies on care_recipients.
+    // Explicit scope, never RLS alone: managers see every person in the
+    // organization, caregivers only those they are currently assigned to,
+    // family only their own relatives (mirrors the care_recipients policies).
     const result = await sql<RecipientRow>`
       SELECT id, organization_id, first_name, last_name, preferred_name, date_of_birth,
              allergies, preferences, routines, status, room_id, created_at, updated_at, archived_at
       FROM care_recipients
       WHERE organization_id = ${organizationId}
+        AND ${recipientVisibleSql(sql`care_recipients.id`)}
       ORDER BY last_name, first_name
     `.execute(trx);
     return result.rows;
@@ -121,6 +123,7 @@ export async function getCareRecipient(userId: string, organizationId: string, r
              allergies, preferences, routines, status, room_id, created_at, updated_at, archived_at
       FROM care_recipients
       WHERE id = ${recipientId} AND organization_id = ${organizationId}
+        AND ${recipientVisibleSql(sql`care_recipients.id`)}
       LIMIT 1
     `.execute(trx);
     if (!result.rows[0]) throw new RecipientNotFoundError();
@@ -136,6 +139,9 @@ export async function updateCareRecipient(
 ) {
   assertValidRecipientId(recipientId);
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Managers only. Family and caregivers do not edit the profile (allergies,
+    // date of birth, routines) even for a person they are linked to.
+    await assertOrgManager(trx);
     // Each SET fragment is built with Kysely's own `sql` tag, so every
     // value is still a real bound parameter -- never string-interpolated.
     // organization_id never appears in this list under any circumstance.
@@ -228,15 +234,17 @@ function toLocation(row: Record<string, unknown> | undefined): CareRecipientLoca
 }
 
 /**
- * Managers, and workers with an assigned not-yet-ended shift (or open visit)
- * for this recipient, may read. Everyone else, including family members of the
- * recipient, gets RecipientNotFoundError: no signal about the address.
+ * Legacy route (Phase 12.1). Managers only since migration 132 / auditoría B4:
+ * it is not tied to a shift nor to the shift's service address and it does not
+ * log reads, so caregivers read addresses only through
+ * GET /shifts/:shiftId/service-location (accepted, current assignment; logged).
+ * Everyone else gets RecipientNotFoundError: no signal about the address.
  */
 export async function getCareRecipientLocation(userId: string, organizationId: string, recipientId: string) {
   assertValidRecipientId(recipientId);
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const access = await sql<{ allowed: boolean }>`
-      SELECT (app_is_org_manager() OR app_worker_has_recipient_assignment(${recipientId}::uuid)) AS allowed
+      SELECT app_is_org_manager() AS allowed
     `.execute(trx);
     if (!access.rows[0]?.allowed) throw new RecipientNotFoundError();
     const result = await sql<Record<string, unknown>>`

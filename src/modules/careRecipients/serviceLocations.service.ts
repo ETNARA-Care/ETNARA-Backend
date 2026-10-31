@@ -375,7 +375,9 @@ export async function getShiftServiceLocation(userId: string, organizationId: st
     if (!shift || !shift.care_recipient_id) throw new LocationNotFoundError();
     const manager = (await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok;
     if (!manager) {
-      const assigned = (await sql<{ ok: boolean }>`SELECT app_worker_has_shift_assignment(${shiftId}::uuid) AS ok`.execute(trx)).rows[0]?.ok;
+      // Accepted assignment on a current shift only (132): a pending assignment never
+      // reveals the address, and access ends with the shift or the open visit.
+      const assigned = (await sql<{ ok: boolean }>`SELECT app_worker_confirmed_shift_assignment(${shiftId}::uuid) AS ok`.execute(trx)).rows[0]?.ok;
       if (!assigned) throw new LocationNotFoundError();
     }
     const row = (await sql<LocationRow>`

@@ -17,7 +17,9 @@ describe("Phase 7.1 individual care plans", () => {
     const service = read("src/modules/carePlans/carePlans.service.ts");
     const migration = read("migrations/049_care_plan_authorization.sql");
     expect(service).toContain("app_is_org_manager()");
-    expect(service).toMatch(/a\.response_status IN \('pending', 'accepted'\)/);
+    // Assigned workers read the plan only while the assignment is current (076 lifecycle,
+    // auditoría 26-oct-2026): a finished visit no longer opens the person's plan.
+    expect(service).toContain("app_worker_has_recipient_assignment(${recipientId}::uuid)");
     expect(migration).toContain("care_plans_manager_or_assigned_worker_read");
     expect(migration).toContain("care_plans_manager_insert");
     expect(migration).not.toContain("FOR DELETE");

@@ -1,4 +1,5 @@
 import { sql } from "kysely";
+import { eventStaffVisibleSql } from "../../security/roleGuards.js";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
@@ -362,6 +363,7 @@ export async function listShiftCareEvents(userId: string, organizationId: string
       FROM care_events ce
       JOIN care_event_types cet ON cet.id = ce.care_event_type_id
       WHERE ce.shift_id = ${shiftId} AND ce.organization_id = ${organizationId}
+        AND ${eventStaffVisibleSql()}
       ORDER BY ce.occurred_at
     `.execute(trx);
     return result.rows;
@@ -378,6 +380,7 @@ export async function listRecipientCareEvents(userId: string, organizationId: st
       FROM care_events ce
       JOIN care_event_types cet ON cet.id = ce.care_event_type_id
       WHERE ce.care_recipient_id = ${careRecipientId} AND ce.organization_id = ${organizationId}
+        AND ${eventStaffVisibleSql()}
       ORDER BY ce.occurred_at DESC
     `.execute(trx);
     return result.rows;

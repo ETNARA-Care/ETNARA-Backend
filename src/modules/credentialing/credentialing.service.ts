@@ -152,13 +152,28 @@ export async function listCredentialTypes(
  * enforced both here (clean 403/404) AND independently by credentials' own
  * RLS policy (last line of defense) -- neither one alone is trusted.
  */
-async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, workerId: string) {
-  const result = await sql<{ id: string }>`
-    SELECT id FROM organization_worker_memberships
-    WHERE worker_id = ${workerId} AND organization_id = ${organizationId} AND status = 'active'
+/**
+ * The worker belongs to this agency and the caller may act on her credentials. Writes need an
+ * active membership. `managerReadInactive` lets the agency's managers READ the credentials of a
+ * caregiver they deactivated (her profile and history stay visible; paso 1B, 30-oct-2026); the
+ * caregiver herself and everyone else still need the active membership. Returns that status.
+ */
+async function assertWorkerLinkedToOrg(
+  trx: unknown,
+  organizationId: string,
+  workerId: string,
+  opts: { managerReadInactive?: boolean } = {}
+): Promise<{ active: boolean }> {
+  const result = await sql<{ status: string; manager: boolean }>`
+    SELECT status, (app_is_org_manager() OR app_is_superadmin()) AS manager FROM organization_worker_memberships
+    WHERE worker_id = ${workerId} AND organization_id = ${organizationId}
+    ORDER BY (status = 'active') DESC
     LIMIT 1
   `.execute(trx as never);
-  if (!result.rows[0]) throw new WorkerNotLinkedError();
+  const membership = result.rows[0];
+  if (!membership) throw new WorkerNotLinkedError();
+  const active = membership.status === "active";
+  if (!active && !(opts.managerReadInactive && membership.manager)) throw new WorkerNotLinkedError();
 
   const actor = await sql<{ allowed: boolean }>`
     SELECT (
@@ -172,6 +187,7 @@ async function assertWorkerLinkedToOrg(trx: unknown, organizationId: string, wor
     ) AS allowed
   `.execute(trx as never);
   if (!actor.rows[0]?.allowed) throw new CredentialAccessDeniedError();
+  return { active };
 }
 
 async function assertCredentialManager(trx: unknown) {
@@ -281,7 +297,7 @@ export async function createCredential(
 export async function listCredentials(userId: string, organizationId: string, workerId: string) {
   assertUuid(workerId, "workerId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
-    await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    const { active } = await assertWorkerLinkedToOrg(trx, organizationId, workerId, { managerReadInactive: true });
     const result = await sql<CredentialRow & { type_code: string; document_status: string | null; organization_review_status: string | null; organization_review_notes: string | null }>`
       SELECT c.id, c.worker_id, c.credential_type_id, c.document_id, c.issuing_entity_name,
              c.issuing_entity_type, c.issued_at, c.expires_at, c.status, c.created_at, c.updated_at,
@@ -295,7 +311,8 @@ export async function listCredentials(userId: string, organizationId: string, wo
       WHERE c.worker_id = ${workerId}
       ORDER BY ct.code
     `.execute(trx);
-    await sql`SELECT app_notify_credential_expiry_managers(${workerId})`.execute(trx);
+    // No expiry notices about someone who no longer works for the agency.
+    if (active) await sql`SELECT app_notify_credential_expiry_managers(${workerId})`.execute(trx);
     return result.rows;
   });
 }

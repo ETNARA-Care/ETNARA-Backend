@@ -173,12 +173,14 @@ export async function createShiftFromSmartMatch(
   });
 }
 
-/** Managers of the agency and the assigned worker only (RLS, migration 099). */
+/** Managers of the agency and the caregiver who ACCEPTED the shift (RLS 099, 134). */
 export async function getShiftPrivateInstructions(userId: string, organizationId: string, shiftId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const r = await sql<{ instructions: string; updated_at: string }>`
       SELECT instructions, updated_at FROM shift_private_instructions
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}
+        -- 134: an ACCEPTED, current assignment (a pending one does not see them)
+        AND (app_is_org_manager() OR app_worker_confirmed_shift_assignment(shift_private_instructions.shift_id))
     `.execute(trx);
     return r.rows[0] ?? null;
   });

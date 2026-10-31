@@ -82,6 +82,12 @@ export async function createFamilyInvitation(
   input: CreateInvitationInput
 ): Promise<{ invitation: InvitationRow; rawToken: string }> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
+    // Only agency managers invite family (auditoría 26-oct-2026, C3). Without
+    // this check any member -- a relative or a caregiver -- could invite their
+    // own address for any person and accept it, gaining family access. RLS 104
+    // (family_invitations_manager_all) says the same, but must not be the only guard.
+    const manager = await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx);
+    if (!manager.rows[0]?.ok) throw new FamilyManagerOnlyError();
     // Confirm the recipient is real and visible in this org context first,
     // so an admin cannot probe for the existence of a recipient in another
     // organization via this endpoint (RLS already prevents data leakage;
