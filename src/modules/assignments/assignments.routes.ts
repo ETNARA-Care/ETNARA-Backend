@@ -1,3 +1,4 @@
+import { NoApplicableRequirementSetError } from "../eligibility/eligibility.service.js";
 import { Router, type Response } from "express";
 import { z } from "zod";
 import {
@@ -49,6 +50,12 @@ function logUnexpectedAssignmentError(operation: string, err: unknown): void {
 }
 
 function handleError(err: unknown, res: Response): boolean {
+  // The agency has no credential policy for this role (new agency, nothing configured yet). Not a
+  // server error: the agency must set its requirements in Cumplimiento → Políticas (30-oct-2026).
+  if (err instanceof NoApplicableRequirementSetError) {
+    res.status(409).json({ error: "NO_APPLICABLE_REQUIREMENT_SET" });
+    return true;
+  }
   if (err instanceof MembershipNotActiveError || err instanceof OrganizationAccessDeniedError) {
     res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
     return true;
