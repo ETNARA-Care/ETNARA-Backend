@@ -92,9 +92,10 @@ async function main() {
 
     // 1. Overdue shift: no start, no arrival, no «en camino», no check-out.
     // Production connects as superuser (RLS bypassed): the code answers 409. With
-    // app_runtime, RLS already hides a caregiver's shift once it ended (081): 404.
+    // app_runtime, RLS hides a caregiver's shift once it ended (081): 404; since 131 (G1) her own
+    // shifts of the last 30 days stay readable, so those get the code's 409 like production.
     const refused = (r: { status: number; body: Json }, code: string) =>
-      runtimeMode ? r.status === 404 : r.status === 409 && r.body?.error === code;
+      (r.status === 409 && r.body?.error === code) || (runtimeMode && r.status === 404);
     const ci = await call("POST", `${P}/${past}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION" });
     check(`Turno vencido: «Comenzar turno» rechazado (${runtimeMode ? "404, RLS" : "409 CHECK_IN_OUTSIDE_WINDOW"})`, refused(ci, "CHECK_IN_OUTSIDE_WINDOW"), `${ci.status} ${ci.raw}`);
     const ciOff = await call("POST", `${P}/${past}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION", clientEventId: randomUUID(), occurredAt: new Date(Date.now() - 60_000).toISOString(), recordedOffline: true });
@@ -128,9 +129,9 @@ async function main() {
 
     // 3. Offline check-in made in time, synced after the end: accepted with its real time.
     const realStart = new Date(Date.now() - 20 * 60_000).toISOString();
-    // Only in superuser mode: with app_runtime the shift is already hidden by RLS (081)
-    // once it ended, so this offline replay gets 404 (existing behaviour, see report).
-    if (!runtimeMode) {
+    // Both modes: under app_runtime, 131 (G1b) admits her own offline check-in made in time and
+    // synced after the end (same limits as the code), and lets her mark that visit «en curso».
+    {
     const late = await call("POST", `${P}/${endedNow}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION", clientEventId: randomUUID(), occurredAt: realStart, recordedOffline: true });
     check("Inicio hecho a tiempo sin señal y enviado después del final: aceptado con su hora real (201)", late.status === 201, `${late.status} ${late.raw}`);
     const lateOut = await call("POST", `${P}/${endedNow}/check-out`, carlos, {});
