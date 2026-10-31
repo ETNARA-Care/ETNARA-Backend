@@ -129,10 +129,9 @@ async function main() {
 
     // 3. Offline check-in made in time, synced after the end: accepted with its real time.
     const realStart = new Date(Date.now() - 20 * 60_000).toISOString();
-    // Only in superuser mode. With app_runtime the caregiver reads her own ended shift (131, G1)
-    // but the verification_events write policy (081) only accepts current shifts, so this offline
-    // replay fails (500). Pending before activating app_runtime (informe G1–G3, 30-oct-2026).
-    if (!runtimeMode) {
+    // Both modes: under app_runtime, 131 (G1b) admits her own offline check-in made in time and
+    // synced after the end (same limits as the code), and lets her mark that visit «en curso».
+    {
     const late = await call("POST", `${P}/${endedNow}/check-in`, carlos, { verificationMethodCode: "CAREGIVER_SESSION", clientEventId: randomUUID(), occurredAt: realStart, recordedOffline: true });
     check("Inicio hecho a tiempo sin señal y enviado después del final: aceptado con su hora real (201)", late.status === 201, `${late.status} ${late.raw}`);
     const lateOut = await call("POST", `${P}/${endedNow}/check-out`, carlos, {});

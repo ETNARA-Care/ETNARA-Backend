@@ -363,6 +363,8 @@ jobs:
           AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyCaregiverDeactivation.ts
           # G4 at the database: who reads / writes an inactive caregiver's profile, credentials, documents.
           npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
+          # G1b: offline check-in made in time and synced after the end, under app_runtime (131).
+          npx tsx scripts/verifyRlsLateOfflineCheckIn.ts
 
       - name: PostgreSQL runtime role check at startup (app_runtime vs postgres, readiness, refusal, unreachable DB)
         env:

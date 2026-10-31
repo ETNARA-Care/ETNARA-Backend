@@ -1,6 +1,8 @@
 -- Rollback of 131 (RLS role gaps). Policies and functions only; no data is changed.
 -- Restores the three policies to FOR ALL with their previous USING clause (as of 129).
 BEGIN;
+DROP POLICY IF EXISTS verification_events_worker_late_offline_check_in ON verification_events;
+DROP POLICY IF EXISTS shifts_worker_open_visit_status ON shifts;
 DROP POLICY IF EXISTS shifts_worker_own_history_read ON shifts;
 DROP POLICY IF EXISTS verification_events_worker_own_read ON verification_events;
 DROP POLICY IF EXISTS care_events_worker_own_read ON care_events;
@@ -20,5 +22,7 @@ DROP FUNCTION IF EXISTS app_my_shift_recipient_display_name(uuid);
 DROP FUNCTION IF EXISTS app_establishment_admin_for_shift(uuid);
 DROP FUNCTION IF EXISTS app_establishment_admin_for_recipient(uuid);
 DROP FUNCTION IF EXISTS app_worker_own_shift(uuid);
+DROP FUNCTION IF EXISTS app_worker_late_offline_check_in(uuid, uuid, timestamptz);
+DROP FUNCTION IF EXISTS app_worker_open_visit(uuid);
 DELETE FROM schema_migrations WHERE filename = '131_rls_role_gaps.sql';
 COMMIT;

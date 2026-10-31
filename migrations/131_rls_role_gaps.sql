@@ -157,6 +157,79 @@ CREATE POLICY notifications_insert_establishment_assignment ON notifications
                   AND w.user_id = notifications.user_id
                   AND public.app_establishment_admin_for_shift(a.shift_id)));
 
+-- G1b (30-oct-2026): a start made in time WITHOUT SIGNAL and synced after the scheduled end.
+-- The code accepts it with its real time (resolveOccurredAt: at most 7 days old, never after
+-- the scheduled end). Under app_runtime the only caregiver write policy (081) needs a current
+-- shift, so the insert failed (500) and the visit could not be closed. Same limits as the code:
+-- her own accepted assignment, a check-in marked offline, real time not after the end, 7 days.
+CREATE OR REPLACE FUNCTION public.app_worker_late_offline_check_in(p_shift_id uuid, p_membership_id uuid, p_occurred_at timestamptz)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT public.app_is_own_worker_membership(p_membership_id)
+     AND EXISTS (
+       SELECT 1
+       FROM public.assignments a
+       JOIN public.shifts s ON s.id = a.shift_id AND s.organization_id = a.organization_id
+       WHERE a.shift_id = p_shift_id
+         AND a.organization_worker_membership_id = p_membership_id
+         AND a.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+         AND a.response_status = 'accepted'
+         AND s.status IN ('unassigned', 'confirmed')
+         AND p_occurred_at <= s.scheduled_end
+         AND p_occurred_at <= now() + interval '2 minutes'
+         AND p_occurred_at >= now() - interval '7 days'
+     );
+$$;
+
+-- Her own visit is open (her check-in, no later check-out) on a shift not cancelled or completed.
+CREATE OR REPLACE FUNCTION public.app_worker_open_visit(p_shift_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.assignments a
+    JOIN public.shifts s ON s.id = a.shift_id AND s.organization_id = a.organization_id
+    JOIN public.verification_events ci
+      ON ci.shift_id = a.shift_id AND ci.organization_id = a.organization_id
+     AND ci.organization_worker_membership_id = a.organization_worker_membership_id
+     AND ci.event_type = 'check_in'
+    WHERE a.shift_id = p_shift_id
+      AND a.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+      AND a.response_status = 'accepted'
+      AND public.app_is_own_worker_membership(a.organization_worker_membership_id)
+      AND s.status NOT IN ('cancelled', 'completed')
+      AND NOT EXISTS (
+        SELECT 1 FROM public.verification_events co
+        WHERE co.shift_id = ci.shift_id AND co.organization_id = ci.organization_id
+          AND co.organization_worker_membership_id = ci.organization_worker_membership_id
+          AND co.event_type = 'check_out' AND co.occurred_at > ci.occurred_at)
+  );
+$$;
+REVOKE ALL ON FUNCTION public.app_worker_late_offline_check_in(uuid, uuid, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.app_worker_open_visit(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_worker_late_offline_check_in(uuid, uuid, timestamptz) TO app_runtime;
+GRANT EXECUTE ON FUNCTION public.app_worker_open_visit(uuid) TO app_runtime;
+
+DROP POLICY IF EXISTS verification_events_worker_late_offline_check_in ON verification_events;
+CREATE POLICY verification_events_worker_late_offline_check_in ON verification_events
+  FOR INSERT
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+              AND event_type = 'check_in'
+              AND recorded_offline
+              AND public.app_worker_late_offline_check_in(shift_id, organization_worker_membership_id, occurred_at));
+
+-- Marking that shift «en curso» (the code does it right after the check-in).
+DROP POLICY IF EXISTS shifts_worker_open_visit_status ON shifts;
+CREATE POLICY shifts_worker_open_visit_status ON shifts
+  FOR UPDATE
+  USING (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+         AND public.app_worker_open_visit(id))
+  WITH CHECK (organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid);
+
 -- W: family and assigned caregivers read, never write, the profile and the care log.
 -- Same USING as before; only the command changes from ALL to SELECT.
 DO $$
