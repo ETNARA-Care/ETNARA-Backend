@@ -1,7 +1,7 @@
 import { sql } from "kysely";
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
-import { evaluateWorkerEligibility } from "../eligibility/eligibility.service.js";
+import { evaluateWorkerEligibility, NoApplicableRequirementSetError, type EligibilityResult } from "../eligibility/eligibility.service.js";
 
 /** "1 turno" / "3 turnos": real Spanish plurals instead of a parenthesized plural. */
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -134,7 +134,16 @@ export async function recommendCoverage(
 
   const candidates: CoverageCandidate[] = [];
   for (const worker of workers) {
-    const eligibility = await evaluateWorkerEligibility(userId, organizationId, worker.membership_id);
+    // No credential policy for her role: not eligible, with that reason (the list still loads).
+    const eligibility = await evaluateWorkerEligibility(userId, organizationId, worker.membership_id).catch((error: unknown) => {
+      if (!(error instanceof NoApplicableRequirementSetError)) throw error;
+      const noPolicy: EligibilityResult = {
+        eligibilityStatus: "not_eligible",
+        requirementSetId: "",
+        requirements: [{ credentialTypeCode: "POLITICA", isMandatory: true, requiresOrganizationReview: false, satisfied: false, reason: "NO_APPLICABLE_REQUIREMENT_SET" }],
+      };
+      return noPolicy;
+    });
     const mandatoryFailures = eligibility.requirements
       .filter((requirement) => requirement.isMandatory && !requirement.satisfied)
       .map((requirement) => `${requirement.credentialTypeCode}: ${requirement.reason}`);

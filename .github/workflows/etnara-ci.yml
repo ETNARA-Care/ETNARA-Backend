@@ -365,6 +365,12 @@ jobs:
           npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
           # G1b: offline check-in made in time and synced after the end, under app_runtime (131).
           npx tsx scripts/verifyRlsLateOfflineCheckIn.ts
+          # Renaming a caregiver whose membership is inactive: explicit 409, never a silent save.
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifyInactiveCaregiverRename.ts
+          AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyInactiveCaregiverRename.ts
+          # A new agency without a credential policy: clear 409, never a 500 (auditoría integral 30-oct).
+          AUTHZ_DB_MODE=superuser npx tsx scripts/verifyNoRequirementSet.ts
+          AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyNoRequirementSet.ts
 
       - name: PostgreSQL runtime role check at startup (app_runtime vs postgres, readiness, refusal, unreachable DB)
         env:
