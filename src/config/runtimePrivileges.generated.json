@@ -497,6 +497,7 @@
     "app_create_photo_consent_form",
     "app_escalate_operational_alert",
     "app_establishment_address",
+    "app_establishment_create_worker",
     "app_family_can_view_activity_photo",
     "app_find_family_thread_id",
     "app_find_own_verification_event",

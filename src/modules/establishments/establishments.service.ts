@@ -9,6 +9,18 @@ export class EstablishmentManagementForbiddenError extends Error {
   }
 }
 
+/**
+ * C1/C2 (auditoría 31-oct-2026): only agency managers (ORGANIZATION_ADMIN / SUPERVISOR) move a resident
+ * into an establishment, attach an existing caregiver to one, or change a caregiver's role, status or name.
+ * An establishment administrator who is not an agency manager gets this explicit 403.
+ */
+export class EstablishmentAgencyChangeForbiddenError extends Error {
+  constructor(code: "RESIDENT_TRANSFER_FORBIDDEN" | "ESTABLISHMENT_STAFF_ASSIGNMENT_FORBIDDEN" | "ESTABLISHMENT_STAFF_CHANGE_FORBIDDEN") {
+    super(code);
+    this.name = "EstablishmentAgencyChangeForbiddenError";
+  }
+}
+
 export class EstablishmentNotFoundError extends Error {
   constructor() {
     super("ESTABLISHMENT_NOT_FOUND");
