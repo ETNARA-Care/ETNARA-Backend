@@ -98,6 +98,18 @@ async function main() {
   });
   check("recomendaciones de cobertura sin política → 200, no recomendada y con el motivo", cov.status === 200 && cov.text.includes("NO_APPLICABLE_REQUIREMENT_SET") && !/"recommended":\s*true/.test(cov.text), `${cov.status} ${cov.text.slice(0, 120)}`);
 
+  // 3b. Establishment route: creating a shift with a caregiver goes through the same assignment rule.
+  const est = (await q(`INSERT INTO locations (organization_id,name) VALUES ($1,$2) RETURNING id`, [org, `Hogar ${tag}`]))[0].id;
+  await q(`UPDATE care_recipients SET location_id=$1 WHERE id=$2`, [est, rec]);
+  await q(`INSERT INTO establishment_worker_assignments (organization_id,location_id,organization_worker_membership_id,created_by_user_id)
+           SELECT $1,$2,$3,u.id FROM users u WHERE u.email=$4`, [org, est, cg.owm, `nopol-admin-${tag}@example.invalid`]);
+  const before = Number((await q(`SELECT count(*) FROM assignments WHERE organization_id=$1`, [org]))[0].count);
+  const es = await call("POST", `${A}/establishments/${est}/shifts`, admin.token, {
+    recipientId: rec, membershipId: cg.owm, scheduledStart: new Date(Date.now() + 50 * 3600_000).toISOString(), scheduledEnd: new Date(Date.now() + 54 * 3600_000).toISOString(),
+  });
+  const after = Number((await q(`SELECT count(*) FROM assignments WHERE organization_id=$1`, [org]))[0].count);
+  check("establecimiento: crear turno con cuidadora sin política → 409, sin asignación", es.status === 409 && es.json.error === "NO_APPLICABLE_REQUIREMENT_SET" && after === before, `${es.status} ${es.text.slice(0, 80)} asignaciones ${before}→${after}`);
+
   // 4. Once the agency saves its policy, assigning works.
   const type = (await q(`SELECT code FROM credential_types ORDER BY code LIMIT 1`))[0].code;
   const pol = await call("PUT", `${A}/compliance/configuration`, admin.token, { workerRole: role, requirements: [{ credentialTypeCode: type, isMandatory: false, requiresOrganizationReview: false }] });
