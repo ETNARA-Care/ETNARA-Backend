@@ -11,6 +11,26 @@ export class MembershipNotFoundError extends Error {
   }
 }
 
+/**
+ * The agency changed the name of someone whose membership in it is inactive (decisión de Rafa,
+ * 30-oct-2026): the profile is shared with other agencies, so only an agency where she is active
+ * edits it. Reactivate first. Never a silent "saved".
+ */
+export class WorkerMembershipInactiveError extends Error {
+  constructor() {
+    super("WORKER_MEMBERSHIP_INACTIVE");
+    this.name = "WorkerMembershipInactiveError";
+  }
+}
+
+/** The name change reached no row (it must never be reported as saved). */
+export class WorkerProfileNotSavedError extends Error {
+  constructor() {
+    super("WORKER_PROFILE_NOT_SAVED");
+    this.name = "WorkerProfileNotSavedError";
+  }
+}
+
 export class WorkforceManagementForbiddenError extends Error {
   constructor() {
     super("WORKFORCE_MANAGEMENT_FORBIDDEN");
@@ -208,16 +228,11 @@ export async function updateMembership(
     `.execute(trx);
     if (!current.rows[0]) throw new MembershipNotFoundError();
 
-    if (input.displayName !== undefined) {
-      await sql`
-        UPDATE workers w
-        SET display_name = ${input.displayName}, updated_at = now()
-        FROM organization_worker_memberships owm
-        WHERE owm.id = ${membershipId}
-          AND owm.organization_id = ${organizationId}
-          AND w.id = owm.worker_id
-      `.execute(trx);
-    }
+    // The portal always sends the name; only an actual change counts. A change needs the
+    // membership to be active once this request is applied (reactivate + rename together is fine).
+    const renaming = input.displayName !== undefined && input.displayName !== (current.rows[0].display_name ?? "").trim();
+    const effectiveStatus = input.status ?? current.rows[0].status;
+    if (renaming && effectiveStatus !== "active") throw new WorkerMembershipInactiveError();
     const fragments = [];
     if (input.internalRole !== undefined) fragments.push(sql`internal_role = ${input.internalRole}`);
     if (input.status !== undefined) fragments.push(sql`status = ${input.status}`);
@@ -233,6 +248,21 @@ export async function updateMembership(
     `.execute(trx);
     if (!result.rows[0]) throw new MembershipNotFoundError();
 
+    // After the status (so a reactivated membership is already active for RLS under app_runtime).
+    if (renaming) {
+      const renamed = await sql<{ id: string }>`
+        UPDATE workers w
+        SET display_name = ${input.displayName!}, updated_at = now()
+        FROM organization_worker_memberships owm
+        WHERE owm.id = ${membershipId}
+          AND owm.organization_id = ${organizationId}
+          AND owm.status = 'active'
+          AND w.id = owm.worker_id
+        RETURNING w.id
+      `.execute(trx);
+      if (!renamed.rows[0]) throw new WorkerProfileNotSavedError();
+    }
+
     if (input.status !== undefined && input.status !== current.rows[0].status) {
       await sql`
         INSERT INTO audit_log (
@@ -247,7 +277,7 @@ export async function updateMembership(
       `.execute(trx);
     }
 
-    return { ...result.rows[0], display_name: input.displayName ?? current.rows[0].display_name };
+    return { ...result.rows[0], display_name: renaming ? input.displayName! : current.rows[0].display_name };
   });
 }
 
