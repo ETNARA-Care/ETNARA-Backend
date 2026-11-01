@@ -326,25 +326,38 @@ async function main() {
       eDenied.length === 0 && eRlsCg === 0 && eRlsB === 0 && eRlsForged === 0 && eInsB.code === "42501" && eInsBest.code === "42501" && eInsApproved.code === "42501",
       `${eDenied.join("; ") || "all 403"} rls=${eRlsCg}/${eRlsB}/${eRlsForged} ins=${eInsB.code}/${eInsBest.code}/${eInsApproved.code}`);
     const selfApprove = await rt(A.admin.userId, orgA, `UPDATE establishment_documents SET review_status='approved', reviewed_by_user_id=$2, reviewed_at=now() WHERE id=$1`, [eDoc2, A.admin.userId]);
-    check("E5 the agency cannot approve its own document (review is ETNARA central only)", selfApprove.code === "42501", String(selfApprove.code));
+    check("E5 the agency cannot approve its own document (no self-approval; the 125 trigger is kept)", selfApprove.code === "42501", String(selfApprove.code));
 
-    // ------------------------------------------------------------ establishment documents: ETNARA Verified
+    // ------------------------------------------------------------ establishment documents: ETNARA Central closed (140)
+    // Central no longer has standing access: the queue answers 200 with an EMPTY list (the Central
+    // portal keeps working), opening or reviewing answers 403, and RLS gives a verified platform
+    // admin 0 rows with or without an organization context.
+    const statusBefore = (await q<Json>(`SELECT review_status, reviewed_at FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
     const queue = await call("GET", "/platform/establishment-documents/verification-queue", platform.token);
-    const inQueue = queue.body.documents?.find((d: Json) => d.id === eDoc2);
-    const archivedInQueue = queue.body.documents?.some((d: Json) => d.id === eDoc);
     const pOpen = await call("GET", `/platform/establishment-documents/${eDoc2}/download`, platform.token);
-    const noReason = await call("PATCH", `/platform/establishment-documents/${eDoc2}/review`, platform.token, { status: "rejected" });
     const approve = await call("PATCH", `/platform/establishment-documents/${eDoc2}/review`, platform.token, { status: "approved" });
+    const reject = await call("PATCH", `/platform/establishment-documents/${eDoc2}/review`, platform.token, { status: "rejected", reason: "prueba" });
     const nonPlatform = await call("GET", "/platform/establishment-documents/verification-queue", A.admin.token);
-    check("E6 ETNARA central reviews establishment documents: queue lists the current one (not archived ones), opens it, approves it; non-platform users 403",
-      queue.status === 200 && !!inQueue && !archivedInQueue && pOpen.status === 200 && !!pOpen.body.url && noReason.status === 400 && approve.status === 200 && approve.body.document?.review_status === "approved" && nonPlatform.status === 403,
-      `queue=${queue.status} found=${!!inQueue} archived=${archivedInQueue} open=${pOpen.status} review=${noReason.status}/${approve.status} nonPlatform=${nonPlatform.status}`);
+    const nonPlatformOpen = await call("GET", `/platform/establishment-documents/${eDoc2}/download`, A.admin.token);
+    const statusAfter = (await q<Json>(`SELECT review_status, reviewed_at FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
+    check("E6 140: ETNARA Central has no standing access: queue 200 with 0 documents, open 403 (no URL), approve/reject 403, document unchanged; non-platform users 403",
+      queue.status === 200 && Array.isArray(queue.body.documents) && queue.body.documents.length === 0 && queue.body.accessModel === "AGENCY_AUTHORIZATION_REQUIRED"
+        && pOpen.status === 403 && pOpen.body.error === "PLATFORM_PRIVATE_DOCUMENT_ACCESS_DENIED" && !pOpen.body.url
+        && approve.status === 403 && reject.status === 403
+        && statusAfter.review_status === statusBefore.review_status && String(statusAfter.reviewed_at) === String(statusBefore.reviewed_at)
+        && nonPlatform.status === 403 && nonPlatformOpen.status === 403,
+      `queue=${queue.status} n=${queue.body.documents?.length} open=${pOpen.status} review=${approve.status}/${reject.status} status=${statusBefore.review_status}->${statusAfter.review_status} nonPlatform=${nonPlatform.status}/${nonPlatformOpen.status}`);
+    const pSee = await rlsCount(platform.userId, "", "establishment_documents", "true", [], true);
+    const pSeeForged = await rlsCount(platform.userId, orgA, "establishment_documents", "organization_id=$1", [orgA], true);
+    const pReview = await rt(platform.userId, "", `UPDATE establishment_documents SET review_status='approved', reviewed_by_user_id=$2, reviewed_at=now() WHERE id=$1`, [eDoc2, platform.userId], true);
     const pArchive = await rt(platform.userId, "", `UPDATE establishment_documents SET archived_at=now() WHERE id=$1`, [eDoc2], true);
-    const pTitle = await rt(platform.userId, "", `UPDATE establishment_documents SET title='x' WHERE id=$1`, [eDoc2], true);
+    const pTitle = await rt(platform.userId, orgA, `UPDATE establishment_documents SET title='x' WHERE id=$1`, [eDoc2], true);
     const pIns = await rt(platform.userId, "", `INSERT INTO establishment_documents (organization_id,establishment_id,document_type,title,file_name,content_type,size_bytes,storage_key) VALUES ($1,$2,'x','x','x.pdf','application/pdf',1,$3)`, [orgA, estA, `probe/${randomUUID()}`], true);
-    const pOldRow = await rlsCount(platform.userId, "", "establishment_documents", "id=$1", [eDoc], true);
-    check("E7 ETNARA central cannot archive, edit other fields or insert establishment documents, and does not see archived ones",
-      pArchive.code === "42501" && pTitle.code === "42501" && pIns.code === "42501" && pOldRow === 0, `${pArchive.code}/${pTitle.code}/${pIns.code} archivedVisible=${pOldRow}`);
+    const agencyStill = await rlsCount(A.admin.userId, orgA, "establishment_documents", "id=$1", [eDoc2]);
+    const blocked = (r: Json) => r.code === "42501" || (r.rowCount === 0 && !r.error);
+    check("E7 140 at the database: Central sees 0 establishment documents (no org and forged org A), cannot review, archive, edit or insert; positive control: agency A still sees it",
+      pSee === 0 && pSeeForged === 0 && blocked(pReview) && blocked(pArchive) && blocked(pTitle) && pIns.code === "42501" && agencyStill === 1,
+      `see=${pSee}/${pSeeForged} review=${pReview.code ?? pReview.rowCount} archive=${pArchive.code ?? pArchive.rowCount} title=${pTitle.code ?? pTitle.rowCount} ins=${pIns.code} agency=${agencyStill}`);
 
     // ------------------------------------------------------------ establishment documents: failure + archive
     const eBeforeFail = await objectCount(edPrefix);
@@ -354,6 +367,43 @@ async function main() {
     const eArch = await call("DELETE", `${ED(orgA, estA)}/${eDoc2}`, A.admin.token);
     const eArchRow = (await q<Json>(`SELECT archived_at, storage_key FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
     check("E9 agency archives an establishment document: 204, row archived, file kept", eArch.status === 204 && !!eArchRow.archived_at && (await head(eArchRow.storage_key)) === pdf.byteLength, `${eArch.status}`);
+
+    // ------------------------------------------------------------ file validation (PR 1 / 140)
+    const html = Buffer.from("<!doctype html><script>alert(1)</script>");
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const docx = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from("....[Content_Types].xml....word/document.xml....")]);
+    const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const vEst0 = await objectCount(edPrefix), vRes0 = await objectCount(rdPrefix);
+    const vEmpty = await call("POST", ED(orgA, estA) + qs(`V1-Vacío ${tag}`, "other_permit", "vacio.pdf"), A.admin.token, Buffer.alloc(0));
+    const vEmptyR = await call("POST", RD(orgA, estA, rA) + qs(`V1-Vacío ${tag}`, "other", "vacio.pdf"), A.admin.token, Buffer.alloc(0));
+    const vHtmlPdf = await call("POST", ED(orgA, estA) + qs(`V1-Html ${tag}`, "other_permit", "permiso.pdf"), A.admin.token, html);
+    const vSvg = await call("POST", RD(orgA, estA, rA) + qs(`V1-Svg ${tag}`, "other", "logo.svg"), A.admin.token, svg, "image/svg+xml");
+    const vHtml = await call("POST", RD(orgA, estA, rA) + qs(`V1-Html ${tag}`, "other", "pagina.html"), A.admin.token, html, "text/html");
+    const vExe = await call("POST", RD(orgA, estA, rA) + qs(`V1-Exe ${tag}`, "other", "instalar.exe"), A.admin.token, Buffer.concat([Buffer.from("MZ"), Buffer.alloc(64)]), "application/octet-stream");
+    const vMime = await call("POST", RD(orgA, estA, rA) + qs(`V1-Mime ${tag}`, "other", "orden.pdf"), A.admin.token, pdf, "text/html");
+    const vDocxEst = await call("POST", ED(orgA, estA) + qs(`V1-Docx ${tag}`, "other_permit", "permiso.docx"), A.admin.token, docx, "application/octet-stream");
+    const vPath = await call("POST", RD(orgA, estA, rA) + qs(`V1-Ruta ${tag}`, "other", "../../x.pdf"), A.admin.token, pdf);
+    const vBig = await call("POST", RD(orgA, estA, rA) + qs(`V1-Grande ${tag}`, "other", "grande.pdf"), A.admin.token, Buffer.concat([pdf, Buffer.alloc(10 * 1024 * 1024)]));
+    const vRows = Number((await q(`SELECT (SELECT count(*) FROM establishment_documents WHERE title LIKE $1) + (SELECT count(*) FROM resident_documents WHERE title LIKE $1) AS n`, [`V1-%`])).rows[0].n);
+    const vEst1 = await objectCount(edPrefix), vRes1 = await objectCount(rdPrefix);
+    const want = (r: Json, status: number, code?: string) => r.status === status && (!code || r.body.error === code);
+    check("V1 rejected before storing: empty (400 EMPTY_FILE), HTML disguised as PDF, SVG, HTML, EXE, PDF declared as text/html, Word for an institutional document, path in the name, >10 MB (413); 0 rows, 0 new files",
+      want(vEmpty, 400, "EMPTY_FILE") && want(vEmptyR, 400, "EMPTY_FILE") && want(vHtmlPdf, 400, "FILE_CONTENT_MISMATCH") && want(vSvg, 400, "FILE_TYPE_NOT_ALLOWED")
+        && want(vHtml, 400, "FILE_TYPE_NOT_ALLOWED") && want(vExe, 400, "FILE_TYPE_NOT_ALLOWED") && want(vMime, 400, "FILE_CONTENT_MISMATCH")
+        && want(vDocxEst, 400, "FILE_TYPE_NOT_ALLOWED") && want(vPath, 400, "INVALID_FILE_NAME") && vBig.status === 413
+        && vRows === 0 && vEst1 === vEst0 && vRes1 === vRes0,
+      `empty=${vEmpty.status}/${vEmpty.body.error},${vEmptyR.status} htmlpdf=${vHtmlPdf.body.error} svg=${vSvg.body.error} html=${vHtml.body.error} exe=${vExe.body.error} mime=${vMime.body.error} docxEst=${vDocxEst.body.error} path=${vPath.body.error} big=${vBig.status} rows=${vRows} files=${vEst0}->${vEst1}/${vRes0}->${vRes1}`);
+    const vDocx = await call("POST", RD(orgA, estA, rA) + qs(`Plan ${tag} ok`, "other", "plan.docx"), A.admin.token, docx, "application/octet-stream");
+    const vPdfParams = await call("POST", ED(orgA, estA) + qs(`Seguro ${tag} ok`, "insurance", "seguro.PDF"), A.admin.token, pdf, "application/pdf; charset=binary");
+    const vDocxRow = vDocx.body.document?.id ? (await q<Json>(`SELECT content_type FROM resident_documents WHERE id=$1`, [vDocx.body.document.id])).rows[0] : undefined;
+    const vPdfRow = vPdfParams.body.document?.id ? (await q<Json>(`SELECT content_type FROM establishment_documents WHERE id=$1`, [vPdfParams.body.document.id])).rows[0] : undefined;
+    check("V2 accepted formats keep working and the stored type is the server's canonical one (Word with octet-stream for a resident; PDF with parameters for an establishment)",
+      vDocx.status === 201 && vDocxRow?.content_type === DOCX && vPdfParams.status === 201 && vPdfRow?.content_type === "application/pdf",
+      `docx=${vDocx.status}/${vDocxRow?.content_type} pdf=${vPdfParams.status}/${vPdfRow?.content_type}`);
+    const vCg = await call("POST", RD(orgA, estA, rA) + qs("x", "other", "x.svg"), A.cg.token, svg, "image/svg+xml");
+    const vB = await call("POST", ED(orgA, estA) + qs("x", "other_permit", "x.pdf"), B.admin.token, Buffer.alloc(0));
+    check("V3 permission is checked before validation: caregiver and agency B get 403/404 even with an invalid file (validation reveals nothing)",
+      (vCg.status === 403 || vCg.status === 404) && vB.status >= 403 && vB.status !== 400, `cg=${vCg.status} B=${vB.status}`);
 
     // ------------------------------------------------------------ leaks
     // Signed download URLs embed the key by design; every other body must not.
