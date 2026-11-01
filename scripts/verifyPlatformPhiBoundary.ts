@@ -17,11 +17,13 @@ const tables = [
   "assignment_history", "verification_events", "verification_overrides",
   // Informe de Turno (126): report content and its history.
   "shift_reports", "shift_report_events", "shift_report_reviewers",
+  // 140: documentos institucionales del establecimiento. Central ya no tiene acceso permanente.
+  "establishment_documents",
 ] as const;
 
 // Tables the runtime IS granted SELECT on (the feature reads them). For these a
 // 42501 is a broken grant, not a pass: the probe must reach RLS and get 0 rows.
-const runtimeReadable = new Set<string>(["resident_documents"]);
+const runtimeReadable = new Set<string>(["resident_documents", "establishment_documents"]);
 
 const client = new pg.Client({ connectionString: url });
 async function main() {
@@ -52,6 +54,13 @@ async function main() {
       `INSERT INTO resident_documents (organization_id, establishment_id, care_recipient_id, document_type, title, file_name, content_type, size_bytes, storage_key)
        VALUES ($1,$2,$3,'other','Synthetic','synthetic.pdf','application/pdf',1,'phi-boundary-ci/' || gen_random_uuid())`,
       [org.rows[0].id, establishment.rows[0].id, resident.rows[0].id]
+    );
+
+    // 140: a current (not archived) establishment document, the kind 125 let Central read.
+    await client.query(
+      `INSERT INTO establishment_documents (organization_id, establishment_id, document_type, title, file_name, content_type, size_bytes, storage_key)
+       VALUES ($1,$2,'operating_license','Synthetic','synthetic.pdf','application/pdf',1,'phi-boundary-ci/' || gen_random_uuid())`,
+      [org.rows[0].id, establishment.rows[0].id]
     );
 
     // Prove the synthetic target exists before testing its invisibility.
