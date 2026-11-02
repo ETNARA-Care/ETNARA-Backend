@@ -305,8 +305,8 @@ async function main() {
     const seen = { fam1: await familySees(A.fam1, orgA), fam1NoPhotos: await familySees(A.fam1NoPhotos, orgA), fam2: await familySees(A.fam2, orgA), famB: await familySees(B.fam, orgA) };
     check("A4 sent with the sharing consent active it is shared at once, and only the authorised relative of THAT resident with photo permission sees it",
       !sent.error && p2status === "approved" && seen.fam1 === 1 && seen.fam1NoPhotos === 0 && seen.fam2 === 0 && seen.famB === 0, `${sent.error} ${p2status} ${JSON.stringify(seen)}`);
-    const famOwnFile = await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files f JOIN care_event_photos p ON p.file_id = f.id WHERE p.id=$1`, [p2id])
-      + await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files WHERE id=$1`, [fR1]);
+    const famOwnFile = Number(await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files f JOIN care_event_photos p ON p.file_id = f.id WHERE p.id=$1`, [p2id]))
+      + Number(await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files WHERE id=$1`, [fR1]));
     check("A5 even for a shared photo the relative never gets the storage reference (PR 2 streams it)", famOwnFile === 0, String(famOwnFile));
     const withdraw = await review(A.admin, orgA, p2id, "WITHDRAW", "Retirada por la agencia");
     const afterWithdraw = await familySees(A.fam1, orgA);

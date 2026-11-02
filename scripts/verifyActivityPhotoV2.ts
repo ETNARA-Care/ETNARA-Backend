@@ -197,7 +197,7 @@ async function main() {
         && decline.status === 200 && (await call("GET", `${O}/care-recipients/${r1}/photo-receipt`, A.famYes.token)).body.receipt?.textVersion === "autorizacion-v1",
       `${start.body.receipt?.decision} ${accept.status} ${decline.status}`);
     const after = await send(A.cg1, orgA, sA, r1);
-    const a2 = { beforeAcceptance: (await image(A.famYes, before.photo.id)).status, afterAcceptance: (await image(A.famYes, after.photo.id)).status,
+    const a2: Record<string, number> = { beforeAcceptance: (await image(A.famYes, before.photo.id)).status, afterAcceptance: (await image(A.famYes, after.photo.id)).status,
       declined: (await image(A.famNo, after.photo.id)).status, notAnswered: (await image(A.famLate, after.photo.id)).status };
     await receipt(A.famLate, r1, "accepted");
     a2.lateAcceptsOld = (await image(A.famLate, after.photo.id)).status;
