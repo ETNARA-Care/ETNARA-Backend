@@ -2,6 +2,18 @@
 
 ## Current Status
 
+## 2026-11-02 — Fotos v2: retención legal (migración 143, rama local claude/activity-photos-v2-legal-hold, sobre #249)
+- **Solo local:** sin push ni despliegue. Producción sin cambios. `PHOTO_RETENTION_JOB` en `off` por defecto; política de 30 días `PROVISIONAL`.
+- **Retención legal** para fotos sujetas a una obligación vigente:
+  - solo ORGANIZATION_ADMIN;
+  - base 10–300 caracteres, referencia opcional, revisión ≤ 90 días;
+  - **sin límite ordinario y nunca caduca sola** (la revisión vencida solo genera la alerta `PHOTO_LEGAL_HOLD_REVIEW_OVERDUE`);
+  - bloquea toda eliminación (manual, de la cuidadora, por vencimiento y por conciliación), incluso para el dueño de la tabla;
+  - se puede colocar después del vencimiento mientras no esté eliminada.
+- `POST /organizations/:org/activity-photos/:id/legal-hold` (PLACE, REVIEW, RELEASE). Historial `LEGAL_HOLD_*` y auditoría.
+- La reversión `ops/143…rollback.sql` restaura 141/142 y aborta si alguna vez hubo una retención legal.
+- Pruebas: unitarias 684/684; verificador de conservación 24/24; reversión y reaplicación idénticas.
+
 ## 2026-10-26 — Seguridad: comprobación del rol de base de datos al arrancar (claude/runtime-role-hardening, PR #226, sin migraciones)
 
 - Hallazgo crítico: producción conecta como `postgres` (superusuario: `DATABASE_URL` → `etnara-care-staging-db.DATABASE_URL`, `POSTGRES_USER=postgres`; `MIGRATIONS_DATABASE_URL` referencia al propio `DATABASE_URL`). RLS no se aplica en producción; el aislamiento depende solo del código.
