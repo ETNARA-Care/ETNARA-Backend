@@ -288,6 +288,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoV2.ts
 
+      - name: PostgreSQL activity photos v2 — V2 expiry/purge job (off by default, simulation, provisional policy blocks deletion, holds, retries, verification, reconciliation, run log)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoRetention.ts
+
       - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

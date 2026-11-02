@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import crypto from "node:crypto";
 import { env } from "../../config/env.js";
 
@@ -76,6 +76,16 @@ export async function photoObjectExists(key: string): Promise<boolean> {
     if (status === 404 || (err as Error)?.name === "NotFound") return false;
     throw err;
   }
+}
+
+/** One page of keys under a prefix (reconciliation). Keys never leave the backend. */
+export async function listPhotoObjects(prefix: string, continuationToken?: string): Promise<{ items: { key: string; lastModified: Date | null }[]; next?: string }> {
+  const { s3, bucket } = photoClient();
+  const r = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken, MaxKeys: 1000 }));
+  return {
+    items: (r.Contents ?? []).filter((o) => o.Key).map((o) => ({ key: o.Key!, lastModified: o.LastModified ?? null })),
+    next: r.IsTruncated ? r.NextContinuationToken : undefined,
+  };
 }
 
 export async function deletePhotoObject(key: string): Promise<void> {
