@@ -5,10 +5,13 @@ import {
   smartMatchOpportunitySummarySchema,
 } from '../src/modules/smartmatch/smartmatch.schemas.js';
 
+// Fixed dates went stale on 2-nov-2026 (publications must be in the future): one week from today at 12:00–20:00 UTC.
+const futureDay = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+const at = (hhmmss: string) => `${futureDay}T${hhmmss}Z`;
 const validOpportunity = {
   visibility: 'INTERNAL',
-  startsAt: '2026-11-01T12:00:00Z',
-  endsAt: '2026-11-01T20:00:00Z',
+  startsAt: at("12:00:00"),
+  endsAt: at("20:00:00"),
   roleLabel: 'Caregiver',
   regionLabel: 'Carolina',
 };
@@ -20,7 +23,7 @@ describe('SmartMatch publication input guardrails', () => {
 
   it('rejects an end before or equal to the start', () => {
     expect(smartMatchPublishSchema.safeParse({
-      ...validOpportunity, endsAt: '2026-11-01T11:59:59Z',
+      ...validOpportunity, endsAt: at("11:59:59"),
     }).success).toBe(false);
     expect(smartMatchPublishSchema.safeParse({
       ...validOpportunity, endsAt: validOpportunity.startsAt,
