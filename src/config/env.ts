@@ -55,6 +55,16 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  // Activity photos v2 (142): periodic expiry/purge job. off (default): never runs.
+  // simulate: counts only (run log), never deletes or changes anything. on: records
+  // lapsed holds, retries decided removals and reconciles; deleting EXPIRED photos
+  // additionally needs the retention policy APPROVED with purge enabled (database).
+  PHOTO_RETENTION_JOB: z.enum(["off", "simulate", "on"]).default("off"),
+  PHOTO_RETENTION_INTERVAL_MINUTES: z
+    .string()
+    .default("60")
+    .transform((value) => Number.parseInt(value, 10))
+    .pipe(z.number().int().min(5).max(24 * 60)),
   PHOTO_MAX_UPLOAD_BYTES: z
     .string()
     .default("15728640")

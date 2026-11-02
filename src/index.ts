@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { startupDatabaseCheck } from "./config/dbRuntimeRole.js";
 import { photoStorageSelfCheck, photoStorageSelfCheckPassed } from "./modules/activityPhotos/photoStorage.js";
+import { startPhotoRetentionWorker } from "./modules/activityPhotos/retentionJob.js";
 import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverageEscalation.worker.js";
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
@@ -23,6 +24,9 @@ app.listen(env.PORT, () => {
   startLateArrivalWorker();
   // Informe de Turno F2 (128): drafts appear when a visit ends; counts only in logs.
   startShiftReportWorker();
+  // Activity photos v2 (142): expiry/purge job. Off unless PHOTO_RETENTION_JOB=simulate|on;
+  // deleting expired photos also needs the retention policy APPROVED (database).
+  startPhotoRetentionWorker();
   // Activity photos: once per start, only if the private photo bucket is configured.
   // Logs yes/no values only (no keys, names or URLs); never blocks the server.
   void photoStorageSelfCheck().then((r) => {
