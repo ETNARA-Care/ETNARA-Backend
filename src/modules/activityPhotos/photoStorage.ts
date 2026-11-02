@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import crypto from "node:crypto";
 import { env } from "../../config/env.js";
 
@@ -63,6 +63,19 @@ export async function getPhotoObject(key: string): Promise<Buffer> {
   const bytes = await result.Body?.transformToByteArray();
   if (!bytes) throw new Error("PHOTO_OBJECT_EMPTY");
   return Buffer.from(bytes);
+}
+
+/** true while the object exists; false only on a definite 404 (verifies a deletion). */
+export async function photoObjectExists(key: string): Promise<boolean> {
+  const { s3, bucket } = photoClient();
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 404 || (err as Error)?.name === "NotFound") return false;
+    throw err;
+  }
 }
 
 export async function deletePhotoObject(key: string): Promise<void> {

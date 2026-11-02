@@ -13,6 +13,8 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/photo-eligibility$`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
+  // v2 (141): the relative's own authorization and the agency's list of recipients.
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-(receipt|recipients)$`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
   // ETNARA Finanzas F1 (119): services, rates, clients, holidays, shift finance terms.
   { pattern: new RegExp(`^/organizations/(${UUID})/finance(/|$)`), feature: "FINANZAS" },

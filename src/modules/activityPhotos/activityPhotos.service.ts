@@ -5,7 +5,7 @@ import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { logInternalError } from "../../observability/internalError.js";
 import { sanitizeConsentForm, sanitizeImage } from "./imageSanitizer.js";
-import { deletePhotoObject, getPhotoObject, putPhotoObject } from "./photoStorage.js";
+import { deletePhotoObject, getPhotoObject, isPhotoStorageConfigured, photoObjectExists, putPhotoObject } from "./photoStorage.js";
 
 /**
  * Activity photos (PR 2). Every decision is taken by the database functions
@@ -40,6 +40,19 @@ const DB_ERRORS: Record<string, number> = {
   PHOTO_INVALID_DECISION: 400,
   PHOTO_CONSENT_INVALID_TYPE: 400,
   PHOTO_CONSENT_FORM_REQUIRED: 400,
+  // v2 (141)
+  PHOTO_NOT_SHAREABLE: 409,
+  PHOTO_EXPIRED: 409,
+  PHOTO_ALREADY_DELETED: 409,
+  PHOTO_DELETED_TERMINAL: 409,
+  PHOTO_ON_HOLD: 409,
+  PHOTO_HOLD_EXISTS: 409,
+  PHOTO_HOLD_NOT_ACTIVE: 409,
+  PHOTO_HOLD_LIMIT: 409,
+  PHOTO_HOLD_REASON_REQUIRED: 400,
+  PHOTO_HOLD_REVIEW_INVALID: 400,
+  PHOTO_RECEIPT_INVALID: 400,
+  PHOTO_RECEIPT_SELF_ONLY: 403,
 };
 
 /** Maps the database's own error codes (first word of the message) to HTTP. */
@@ -79,9 +92,14 @@ export async function uploadActivityPhoto(userId: string, organizationId: string
   await putPhotoObject(key, image.contentType, image.body);
   // 4. Register + attach (re-checks everything, one photo per activity).
   try {
-    const photoId = await inTenant(userId, organizationId, async (trx) =>
-      (await sql<{ id: string }>`SELECT app_create_activity_photo(${careEventId}::uuid, ${fileId}::uuid, ${key}, ${image.body.byteLength}, ${image.sha256}) AS id`.execute(trx)).rows[0].id);
-    return { id: photoId, status: "pending" as const, width: image.width, height: image.height };
+    const created = await inTenant(userId, organizationId, async (trx) => {
+      const id = (await sql<{ id: string }>`SELECT app_create_activity_photo(${careEventId}::uuid, ${fileId}::uuid, ${key}, ${image.body.byteLength}, ${image.sha256}) AS id`.execute(trx)).rows[0].id;
+      const row = (await sql<{ share_status: string; retention_until: string }>`SELECT share_status, retention_until FROM care_event_photos WHERE id = ${id}`.execute(trx)).rows[0];
+      return { id, status: row.share_status, availableUntil: new Date(row.retention_until).toISOString() };
+    });
+    // Direct sending (141): "approved" = shared with the authorised family at once;
+    // "pending" = kept for the agency only (no sharing consent). Never who or how many.
+    return { ...created, sharedWithFamily: created.status === "approved", width: image.width, height: image.height };
   } catch (err) {
     await removeQuietly(key);
     throw err;
@@ -91,12 +109,13 @@ export async function uploadActivityPhoto(userId: string, organizationId: string
 export async function getActivityPhotoForEvent(userId: string, organizationId: string, careEventId: string) {
   return inTenant(userId, organizationId, async (trx) => {
     // Managers, or the caregiver who uploaded it -- checked here, not only by RLS.
-    const r = await sql<{ id: string; share_status: string }>`
-      SELECT id, share_status FROM care_event_photos
-      WHERE care_event_id = ${careEventId} AND organization_id = ${organizationId}
-        AND (app_photo_is_manager() OR uploaded_by_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid)`.execute(trx);
+    // The caregiver only inside her window (141): no permanent gallery.
+    const r = await sql<{ id: string; share_status: string; can_remove: boolean }>`
+      SELECT id, share_status, app_photo_uploader_can_view(id) AS can_remove FROM care_event_photos
+      WHERE care_event_id = ${careEventId} AND organization_id = ${organizationId} AND deleted_at IS NULL
+        AND (app_photo_is_manager() OR app_photo_uploader_can_view(id))`.execute(trx);
     if (!r.rows[0]) throw new PhotoError("NOT_FOUND", 404);
-    return { id: r.rows[0].id, status: r.rows[0].share_status };
+    return { id: r.rows[0].id, status: r.rows[0].share_status, sharedWithFamily: r.rows[0].share_status === "approved", canRemove: r.rows[0].can_remove };
   });
 }
 
@@ -149,7 +168,7 @@ async function assertManager(trx: never) {
 }
 
 export const listPhotosQuerySchema = z.object({
-  status: z.enum(["pending", "approved", "rejected", "withdrawn"]).optional(),
+  status: z.enum(["pending", "approved", "rejected", "withdrawn", "deleted"]).optional(),
   careRecipientId: z.string().uuid().optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),
 });
@@ -161,26 +180,38 @@ export async function listAgencyPhotos(userId: string, organizationId: string, q
     if (query.status) conditions.push(sql`p.share_status = ${query.status}`);
     if (query.careRecipientId) conditions.push(sql`p.care_recipient_id = ${query.careRecipientId}`);
     const r = await sql<{
-      id: string; care_event_id: string; care_recipient_id: string; share_status: string; created_at: string;
+      id: string; care_event_id: string; care_recipient_id: string; share_status: string; created_at: string; shared_at: string | null;
       reviewed_at: string | null; review_reason: string | null; occurred_at: string; type_code: string; note_text: string | null;
-      first_name: string; last_name: string; uploader_name: string | null;
+      first_name: string; last_name: string; uploader_name: string | null; retention_until: string; deleted_at: string | null;
+      deletion_kind: string | null; deletion_reason: string | null; purge_verified_at: string | null; hold_reason: string | null;
+      hold_review_at: string | null; hold_by: string | null; hold_actions: number; hold_active: boolean; expired: boolean;
     }>`
-      SELECT p.id, p.care_event_id, p.care_recipient_id, p.share_status, p.created_at, p.reviewed_at, p.review_reason,
-             ce.occurred_at, cet.code AS type_code, ce.note_text, cr.first_name, cr.last_name, w.display_name AS uploader_name
+      SELECT p.id, p.care_event_id, p.care_recipient_id, p.share_status, p.created_at, p.shared_at, p.reviewed_at, p.review_reason,
+             ce.occurred_at, cet.code AS type_code, ce.note_text, cr.first_name, cr.last_name, w.display_name AS uploader_name,
+             p.retention_until, p.deleted_at, p.deletion_kind, p.deletion_reason, p.purge_verified_at,
+             p.hold_reason, p.hold_review_at, hu.email AS hold_by, p.hold_actions,
+             (p.hold_reason IS NOT NULL AND p.hold_review_at > now()) AS hold_active, (now() >= p.retention_until) AS expired
       FROM care_event_photos p
       JOIN care_events ce ON ce.id = p.care_event_id
       JOIN care_event_types cet ON cet.id = ce.care_event_type_id
       JOIN care_recipients cr ON cr.id = p.care_recipient_id
       LEFT JOIN organization_worker_memberships owm ON owm.id = ce.organization_worker_membership_id
       LEFT JOIN workers w ON w.id = owm.worker_id
+      LEFT JOIN users hu ON hu.id = p.hold_by_user_id
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY p.created_at DESC
       LIMIT ${query.limit ?? 50}`.execute(trx);
     return r.rows.map((row) => ({
       id: row.id, careEventId: row.care_event_id, careRecipientId: row.care_recipient_id,
       careRecipientName: `${row.first_name} ${row.last_name}`.trim(), status: row.share_status,
-      uploadedAt: row.created_at, reviewedAt: row.reviewed_at, reviewReason: row.review_reason,
+      uploadedAt: row.created_at, sharedAt: row.shared_at, reviewedAt: row.reviewed_at, reviewReason: row.review_reason,
       activity: { type: row.type_code, occurredAt: row.occurred_at, note: row.note_text }, caregiverName: row.uploader_name,
+      // Provisional retention (141): after this nobody sees it (managers only under an exceptional hold).
+      availableUntil: row.retention_until, expired: row.expired,
+      // Visible to the agency only while not expired, or under a hold in force.
+      viewable: row.deleted_at === null && (!row.expired || row.hold_active),
+      deletion: row.deleted_at ? { at: row.deleted_at, kind: row.deletion_kind, reason: row.deletion_reason, purgeVerified: row.purge_verified_at !== null } : null,
+      hold: row.hold_reason ? { active: row.hold_active, reason: row.hold_reason, reviewAt: row.hold_review_at, by: row.hold_by, actionsUsed: row.hold_actions, actionsMax: 3 } : null,
     }));
   });
 }
@@ -192,16 +223,18 @@ export async function getAgencyPhotoHistory(userId: string, organizationId: stri
       SELECT e.action, e.from_status, e.to_status, e.reason, e.occurred_at, u.email AS actor_email
       FROM care_event_photo_events e LEFT JOIN users u ON u.id = e.actor_user_id
       WHERE e.photo_id = ${photoId} AND e.organization_id = ${organizationId}
-      ORDER BY e.occurred_at, e.id`.execute(trx);
+      -- UPLOADED and SHARED share the timestamp (same transaction): the upload goes first.
+      ORDER BY e.occurred_at, (e.action <> 'UPLOADED'), e.id`.execute(trx);
     if (r.rows.length === 0) throw new PhotoError("NOT_FOUND", 404);
     return r.rows.map((e) => ({ action: e.action, from: e.from_status, to: e.to_status, reason: e.reason, at: e.occurred_at, actor: e.actor_email }));
   });
 }
 
 export const reviewSchema = z.object({
+  /** 141: no manual approval. WITHDRAW hides it from the family; APPROVE shows a withdrawn photo again. REJECT is refused. */
   decision: z.enum(["APPROVE", "REJECT", "WITHDRAW"]),
   /** The status the manager was looking at (optimistic concurrency). */
-  expectedStatus: z.enum(["pending", "approved", "rejected", "withdrawn"]),
+  expectedStatus: z.enum(["pending", "approved", "rejected", "withdrawn", "deleted"]),
   reason: z.string().trim().max(300).optional(),
 });
 
@@ -209,6 +242,94 @@ export async function reviewActivityPhoto(userId: string, organizationId: string
   return inTenant(userId, organizationId, async (trx) => {
     const r = await sql<{ s: string }>`SELECT app_review_activity_photo(${photoId}::uuid, ${input.decision}, ${input.reason ?? null}, ${input.expectedStatus}) AS s`.execute(trx);
     return { id: photoId, status: r.rows[0].s };
+  });
+}
+
+// ------------------------------------------------------------------ removal (agency: reason; caregiver: her window)
+export const deleteSchema = z.object({ reason: z.string().trim().max(300).optional() });
+
+/**
+ * Removal (141): the database marks the tombstone and queues the file in one
+ * transaction (from then on nobody receives the image). The object is then
+ * removed and its absence verified (HeadObject 404); only then are the key,
+ * size and checksum dropped. If the storage fails, the queue keeps it for V2's
+ * retries: access is already cut.
+ */
+export async function deleteActivityPhoto(userId: string, organizationId: string, photoId: string, reason?: string) {
+  const kind = await inTenant(userId, organizationId, async (trx) =>
+    (await sql<{ k: string }>`SELECT app_delete_activity_photo(${photoId}::uuid, ${reason ?? null}) AS k`.execute(trx)).rows[0].k);
+  const purged = await purgeNow(userId, organizationId, photoId);
+  return { id: photoId, status: "deleted" as const, kind, purged };
+}
+
+async function purgeNow(userId: string, organizationId: string, photoId: string): Promise<boolean> {
+  if (!isPhotoStorageConfigured()) return false;
+  const key = await inTenant(userId, organizationId, async (trx) =>
+    (await sql<{ k: string | null }>`SELECT app_photo_purge_claim(${photoId}::uuid) AS k`.execute(trx)).rows[0].k);
+  if (!key) return false;
+  let verified = false; let error: string | null = null;
+  try {
+    await deletePhotoObject(key);
+    verified = !(await photoObjectExists(key));
+    if (!verified) error = "STILL_PRESENT";
+  } catch (err) {
+    error = (err as Error)?.name ?? "STORAGE_ERROR";
+    logInternalError("activity-photo-purge", err);
+  }
+  await inTenant(userId, organizationId, async (trx) => {
+    await sql`SELECT app_photo_purge_result(${photoId}::uuid, ${verified}, ${error})`.execute(trx);
+  });
+  return verified;
+}
+
+// ------------------------------------------------------------------ exceptional holds (agency managers)
+export const holdSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("PLACE"), reason: z.string().trim().min(10).max(300), reviewAt: z.string().datetime({ offset: true }) }),
+  z.object({ action: z.literal("RENEW"), reason: z.string().trim().min(10).max(300), reviewAt: z.string().datetime({ offset: true }) }),
+  z.object({ action: z.literal("RELEASE"), reason: z.string().trim().min(10).max(300) }),
+]);
+
+export async function holdActivityPhoto(userId: string, organizationId: string, photoId: string, input: z.infer<typeof holdSchema>) {
+  return inTenant(userId, organizationId, async (trx) => {
+    const reviewAt = "reviewAt" in input ? input.reviewAt : null;
+    const r = await sql<{ at: string | null }>`SELECT app_photo_hold_write(${photoId}::uuid, ${input.action}, ${input.reason}, ${reviewAt}::timestamptz) AS at`.execute(trx);
+    return { id: photoId, holdActive: input.action !== "RELEASE", reviewAt: r.rows[0].at };
+  });
+}
+
+// ------------------------------------------------------------------ the relative's own authorization (141)
+/** Version of the authorization text the relative accepted (the frontend sends the one it showed). */
+export const receiptSchema = z.object({
+  decision: z.enum(["accepted", "declined"]),
+  textVersion: z.string().regex(/^[A-Za-z0-9._-]{1,40}$/),
+});
+
+export async function getFamilyPhotoReceipt(userId: string, organizationId: string, careRecipientId: string) {
+  return inTenant(userId, organizationId, async (trx) => {
+    const r = await sql<{ decision: string; decided_at: string | null; text_version: string | null }>`
+      SELECT decision, decided_at, text_version FROM app_family_photo_receipt(${careRecipientId}::uuid)`.execute(trx);
+    if (!r.rows[0]) throw new PhotoError("NOT_FOUND", 404);
+    return { decision: r.rows[0].decision, decidedAt: r.rows[0].decided_at, textVersion: r.rows[0].text_version };
+  });
+}
+
+export async function setFamilyPhotoReceipt(userId: string, organizationId: string, careRecipientId: string, input: z.infer<typeof receiptSchema>) {
+  return inTenant(userId, organizationId, async (trx) => {
+    const r = await sql<{ at: string }>`SELECT app_set_family_photo_receipt(${careRecipientId}::uuid, ${input.decision}, ${input.textVersion}) AS at`.execute(trx);
+    // A2: only photos sent from this moment on (never earlier ones).
+    return { decision: input.decision, decidedAt: r.rows[0].at, textVersion: input.textVersion };
+  });
+}
+
+export async function listPhotoRecipients(userId: string, organizationId: string, careRecipientId: string) {
+  return inTenant(userId, organizationId, async (trx) => {
+    const r = await sql<{ relationship_id: string; email: string; relationship_type: string; photo_receipt: string; photo_receipt_at: string | null; can_view_photos: boolean }>`
+      SELECT * FROM app_photo_recipients(${careRecipientId}::uuid)`.execute(trx);
+    return r.rows.map((x) => ({
+      relationshipId: x.relationship_id, email: x.email, relationshipType: x.relationship_type,
+      receipt: x.photo_receipt, decidedAt: x.photo_receipt_at, allowedByAgency: x.can_view_photos,
+      receives: x.photo_receipt === "accepted" && x.can_view_photos,
+    }));
   });
 }
 

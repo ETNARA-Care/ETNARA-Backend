@@ -6,7 +6,8 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { respondInternalError } from "../../observability/internalError.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
-  consentQuerySchema, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
+  consentQuerySchema, deleteActivityPhoto, deleteSchema, getFamilyPhotoReceipt, holdActivityPhoto, holdSchema, listPhotoRecipients,
+  receiptSchema, setFamilyPhotoReceipt, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
   PhotoError, readActivityPhoto, sendPrivateImage, readPhotoConsentForm, recordPhotoConsent, reviewActivityPhoto, reviewSchema, revokePhotoConsent, revokeSchema,
   uploadActivityPhoto,
 } from "./activityPhotos.service.js";
@@ -107,6 +108,47 @@ router.post("/organizations/:organizationId/activity-photos/:photoId/review", re
 router.get("/organizations/:organizationId/activity-photos/:photoId/image", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
   try { sendPrivateImage(res, await readActivityPhoto(req.auth!.userId, p[0], p[1]), "actividad.jpg"); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: removal. Agency managers (reason required) or the caregiver inside her window.
+router.post("/organizations/:organizationId/activity-photos/:photoId/delete", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = deleteSchema.safeParse(req.body ?? {});
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ photo: await deleteActivityPhoto(req.auth!.userId, p[0], p[1], body.data.reason) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: exceptional hold (place / renew / release). Agency managers only.
+router.post("/organizations/:organizationId/activity-photos/:photoId/hold", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = holdSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ hold: await holdActivityPhoto(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: the relative's own authorization to receive photos of this resident (starts at "not answered").
+router.get("/organizations/:organizationId/care-recipients/:careRecipientId/photo-receipt", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.status(200).json({ receipt: await getFamilyPhotoReceipt(req.auth!.userId, p[0], p[1]) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+router.put("/organizations/:organizationId/care-recipients/:careRecipientId/photo-receipt", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  const body = receiptSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "PHOTO_RECEIPT_INVALID" }); return; }
+  try { res.status(200).json({ receipt: await setFamilyPhotoReceipt(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: agency managers — which relatives receive photos of a resident.
+router.get("/organizations/:organizationId/care-recipients/:careRecipientId/photo-recipients", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  try { res.status(200).json({ recipients: await listPhotoRecipients(req.auth!.userId, p[0], p[1]) }); }
   catch (err) { fail(err, req, res); }
 });
 
