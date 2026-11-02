@@ -146,7 +146,8 @@ BEGIN
                || CASE WHEN p_action <> 'RELEASE' THEN ' (revisión: ' || to_char(p_review_at AT TIME ZONE 'America/Puerto_Rico', 'YYYY-MM-DD') || ')' ELSE '' END, 500));
   INSERT INTO public.audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
   VALUES (v_user, v_org, v_org, 'ACTIVITY_PHOTO_LEGAL_HOLD_' || p_action, 'care_event_photo', p_photo_id,
-          jsonb_build_object('reviewAt', p_review_at, 'reference', v_ref));
+          -- Never the basis or the reference: ETNARA central can read audit_log (platform policy).
+          jsonb_build_object('reviewAt', p_review_at, 'hasReference', v_ref IS NOT NULL));
   RETURN p_review_at;
 END $$;
 REVOKE ALL ON FUNCTION public.app_photo_legal_hold_write(uuid, text, text, text, timestamptz) FROM PUBLIC;

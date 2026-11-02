@@ -336,6 +336,32 @@ async function main() {
       overdue.legalReviewOverdue >= 1 && stillHeld !== null && (await exists(lp.key)) && logged.some((l) => l.includes("PHOTO_LEGAL_HOLD_REVIEW_OVERDUE"))
         && ((await call("GET", `/organizations/${orgA}/activity-photos`, A.admin.token)).body.photos as Json[]).find((x) => x.id === lp.id)?.legalHold?.reviewOverdue === true,
       `overdue=${overdue.legalReviewOverdue} held=${stillHeld !== null}`);
+    // Alerts and audit never reveal the photo to ETNARA central: counts only in the log; no basis/reference in audit_log;
+    // central reads no photo, file or history row even with the platform flag.
+    const alertLines = logged.filter((l) => l.includes("PHOTO_LEGAL_HOLD_REVIEW_OVERDUE"));
+    const alertLeak = alertLines.some((l) => [lp.id, lp.key, orgA, rA, "SINT-001", "Requerimiento"].some((x) => l.includes(x)));
+    const auditRows = (await q(`SELECT new_value::text v FROM audit_log WHERE entity_id=$1 AND action LIKE 'ACTIVITY_PHOTO_LEGAL_HOLD_%'`, [lp.id])).rows.map((r) => String(r.v));
+    const auditLeak = auditRows.some((v) => v.includes("SINT-001") || v.includes("Requerimiento"));
+    const central = {
+      photos: (await rt(platformUser, orgA, `SELECT count(*)::int n FROM care_event_photos`, [], true)).rows[0]?.n,
+      files: (await rt(platformUser, orgA, `SELECT count(*)::int n FROM stored_files WHERE purpose='ACTIVITY_PHOTO'`, [], true)).rows[0]?.n,
+      history: (await rt(platformUser, orgA, `SELECT count(*)::int n FROM care_event_photo_events`, [], true)).rows[0]?.n,
+    };
+    check("L7 the overdue alert and the audit never reveal the photo to ETNARA central: the alert carries a count only (no ids, agency, key, basis or reference); audit_log has no basis/reference; central reads 0 photos, files and history rows",
+      alertLines.length > 0 && !alertLeak && auditRows.length >= 6 && !auditLeak && central.photos === 0 && central.files === 0 && central.history === 0,
+      `alerts=${alertLines.length} leak=${alertLeak} audit=${auditRows.length} auditLeak=${auditLeak} central=${JSON.stringify(central)}`);
+    // The caregiver's own «Quitar foto» (inside her visit) also respects a legal hold; once released it works and is audited.
+    const lc = await send(A.cg, sA, rA);
+    await legal(A.admin, lc.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) });
+    const cgUndoHeld = await call("POST", `/organizations/${orgA}/activity-photos/${lc.id}/delete`, A.cg.token, {});
+    await legal(A.admin, lc.id, { action: "RELEASE", basis: "La obligacion termino segun el abogado" });
+    const cgUndo = await call("POST", `/organizations/${orgA}/activity-photos/${lc.id}/delete`, A.cg.token, {});
+    const undoAudit = (await q(`SELECT actor_user_id, new_value->>'kind' AS kind FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_DELETED'`, [lc.id])).rows;
+    const undoHist = (await q(`SELECT action FROM care_event_photo_events WHERE photo_id=$1 ORDER BY occurred_at, id`, [lc.id])).rows.map((r) => r.action);
+    check("L8 the caregiver cannot remove her own photo while it is under a legal hold (409); after release she can, and it is audited (CAREGIVER_UNDO by her) and in the history",
+      cgUndoHeld.status === 409 && cgUndoHeld.body.error === "PHOTO_ON_LEGAL_HOLD" && cgUndo.status === 200 && cgUndo.body.photo?.kind === "CAREGIVER_UNDO"
+        && undoAudit.length === 1 && undoAudit[0].actor_user_id === A.cg.userId && undoAudit[0].kind === "CAREGIVER_UNDO" && undoHist.includes("DELETED") && !(await exists(lc.key)),
+      `held=${cgUndoHeld.status} ${cgUndoHeld.body.error} undo=${cgUndo.status} audit=${JSON.stringify(undoAudit)} hist=${undoHist.join(",")}`);
     const lm = await send(A.cg, sA, rA);
     await legal(A.admin, lm.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) });
     await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: lm.key }));
