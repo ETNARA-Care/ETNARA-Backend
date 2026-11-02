@@ -53,6 +53,13 @@ const DB_ERRORS: Record<string, number> = {
   PHOTO_HOLD_REVIEW_INVALID: 400,
   PHOTO_RECEIPT_INVALID: 400,
   PHOTO_RECEIPT_SELF_ONLY: 403,
+  // 143: legal hold
+  PHOTO_ON_LEGAL_HOLD: 409,
+  PHOTO_LEGAL_HOLD_ADMIN_ONLY: 403,
+  PHOTO_LEGAL_HOLD_EXISTS: 409,
+  PHOTO_LEGAL_HOLD_NOT_ACTIVE: 409,
+  PHOTO_LEGAL_HOLD_BASIS_REQUIRED: 400,
+  PHOTO_LEGAL_HOLD_REVIEW_INVALID: 400,
 };
 
 /** Maps the database's own error codes (first word of the message) to HTTP. */
@@ -185,12 +192,14 @@ export async function listAgencyPhotos(userId: string, organizationId: string, q
       first_name: string; last_name: string; uploader_name: string | null; retention_until: string; deleted_at: string | null;
       deletion_kind: string | null; deletion_reason: string | null; purge_verified_at: string | null; hold_reason: string | null;
       hold_review_at: string | null; hold_by: string | null; hold_actions: number; hold_active: boolean; expired: boolean;
+      legal_hold_basis: string | null; legal_hold_reference: string | null; legal_hold_review_at: string | null; legal_hold_placed_at: string | null; legal_hold_by: string | null;
     }>`
       SELECT p.id, p.care_event_id, p.care_recipient_id, p.share_status, p.created_at, p.shared_at, p.reviewed_at, p.review_reason,
              ce.occurred_at, cet.code AS type_code, ce.note_text, cr.first_name, cr.last_name, w.display_name AS uploader_name,
              p.retention_until, p.deleted_at, p.deletion_kind, p.deletion_reason, p.purge_verified_at,
              p.hold_reason, p.hold_review_at, hu.email AS hold_by, p.hold_actions,
-             (p.hold_reason IS NOT NULL AND p.hold_review_at > now()) AS hold_active, (now() >= p.retention_until) AS expired
+             (p.hold_reason IS NOT NULL AND p.hold_review_at > now()) AS hold_active, (now() >= p.retention_until) AS expired,
+             p.legal_hold_basis, p.legal_hold_reference, p.legal_hold_review_at, p.legal_hold_placed_at, lu.email AS legal_hold_by
       FROM care_event_photos p
       JOIN care_events ce ON ce.id = p.care_event_id
       JOIN care_event_types cet ON cet.id = ce.care_event_type_id
@@ -198,6 +207,7 @@ export async function listAgencyPhotos(userId: string, organizationId: string, q
       LEFT JOIN organization_worker_memberships owm ON owm.id = ce.organization_worker_membership_id
       LEFT JOIN workers w ON w.id = owm.worker_id
       LEFT JOIN users hu ON hu.id = p.hold_by_user_id
+      LEFT JOIN users lu ON lu.id = p.legal_hold_by_user_id
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY p.created_at DESC
       LIMIT ${query.limit ?? 50}`.execute(trx);
@@ -209,8 +219,11 @@ export async function listAgencyPhotos(userId: string, organizationId: string, q
       // Provisional retention (141): after this nobody sees it (managers only under an exceptional hold).
       availableUntil: row.retention_until, expired: row.expired,
       // Visible to the agency only while not expired, or under a hold in force.
-      viewable: row.deleted_at === null && (!row.expired || row.hold_active),
+      viewable: row.deleted_at === null && (!row.expired || row.hold_active || row.legal_hold_basis !== null),
       deletion: row.deleted_at ? { at: row.deleted_at, kind: row.deletion_kind, reason: row.deletion_reason, purgeVerified: row.purge_verified_at !== null } : null,
+      // 143: never deleted while in force, no time limit; an overdue review is flagged, not released.
+      legalHold: row.legal_hold_basis ? { basis: row.legal_hold_basis, reference: row.legal_hold_reference, placedAt: row.legal_hold_placed_at,
+        reviewAt: row.legal_hold_review_at, reviewOverdue: row.legal_hold_review_at !== null && Date.parse(row.legal_hold_review_at) <= Date.now(), by: row.legal_hold_by } : null,
       hold: row.hold_reason ? { active: row.hold_active, reason: row.hold_reason, reviewAt: row.hold_review_at, by: row.hold_by, actionsUsed: row.hold_actions, actionsMax: 3 } : null,
     }));
   });
@@ -294,6 +307,22 @@ export async function holdActivityPhoto(userId: string, organizationId: string, 
     const reviewAt = "reviewAt" in input ? input.reviewAt : null;
     const r = await sql<{ at: string | null }>`SELECT app_photo_hold_write(${photoId}::uuid, ${input.action}, ${input.reason}, ${reviewAt}::timestamptz) AS at`.execute(trx);
     return { id: photoId, holdActive: input.action !== "RELEASE", reviewAt: r.rows[0].at };
+  });
+}
+
+// ------------------------------------------------------------------ legal hold (143, administrators only)
+export const legalHoldSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("PLACE"), basis: z.string().trim().min(10).max(300), reference: z.string().trim().max(120).optional(), reviewAt: z.string().datetime({ offset: true }) }),
+  z.object({ action: z.literal("REVIEW"), basis: z.string().trim().min(10).max(300), reference: z.string().trim().max(120).optional(), reviewAt: z.string().datetime({ offset: true }) }),
+  z.object({ action: z.literal("RELEASE"), basis: z.string().trim().min(10).max(300) }),
+]);
+
+export async function legalHoldActivityPhoto(userId: string, organizationId: string, photoId: string, input: z.infer<typeof legalHoldSchema>) {
+  return inTenant(userId, organizationId, async (trx) => {
+    const reviewAt = "reviewAt" in input ? input.reviewAt : null;
+    const reference = "reference" in input ? input.reference ?? null : null;
+    const r = await sql<{ at: string | null }>`SELECT app_photo_legal_hold_write(${photoId}::uuid, ${input.action}, ${input.basis}, ${reference}, ${reviewAt}::timestamptz) AS at`.execute(trx);
+    return { id: photoId, legalHoldActive: input.action !== "RELEASE", reviewAt: r.rows[0].at };
   });
 }
 

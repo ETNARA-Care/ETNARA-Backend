@@ -534,6 +534,7 @@
     "app_photo_hold_write",
     "app_photo_is_manager",
     "app_photo_last_reconciliation",
+    "app_photo_legal_hold_write",
     "app_photo_live_keys",
     "app_photo_mark_expired",
     "app_photo_mark_missing",

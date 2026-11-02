@@ -1,5 +1,5 @@
 /**
- * Activity photos v2 — V2 (migration 142): the expiry / purge job.
+ * Activity photos v2 — V2 (migration 142): the expiry / purge job, and the legal hold (143).
  *
  * Real app over HTTP as app_runtime, the job's own code (runRetentionCycle) as
  * app_runtime without a tenant context, a local private S3 (moto) behind a small
@@ -119,7 +119,7 @@ async function main() {
     }
     return { email, userId, token: "", owm, org: orgId };
   }
-  const A = { admin: await person("a-admin", orgA, ["ORGANIZATION_ADMIN"]), cg: await person("a-cg", orgA, ["WORKER"], true), fam: await person("a-fam", orgA, ["FAMILY"]) };
+  const A = { admin: await person("a-admin", orgA, ["ORGANIZATION_ADMIN"]), sup: await person("a-sup", orgA, ["SUPERVISOR"]), cg: await person("a-cg", orgA, ["WORKER"], true), fam: await person("a-fam", orgA, ["FAMILY"]) };
   const B = { admin: await person("b-admin", orgB, ["ORGANIZATION_ADMIN"]), cg: await person("b-cg", orgB, ["WORKER"], true) };
   const platformUser = (await q<{ id: string }>(`INSERT INTO users (email,password_hash,status) VALUES ($1,$2,'active') RETURNING id`, [`phr-platform-${tag}@example.invalid`, hash])).rows[0].id;
   await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [platformUser]);
@@ -294,6 +294,66 @@ async function main() {
       apprRec.orphansDeleted === 1 && !(await exists(orphanKey)) && downRec.missingMarked === 0 && (await state(keep.id)).share_status !== "deleted" && (await exists(keep.key)) && downRec.errorCodes.length > 0,
       `${apprRec.orphansDeleted} down=${downRec.missingMarked} ${downRec.errorCodes.join(",")}`);
 
+    // ---------------------------------------------------------------- 5b. legal hold (143): obligation in force, no ordinary limits
+    const legal = (who: P, id: string, body: Json, o = orgA) => call("POST", `/organizations/${o}/activity-photos/${id}/legal-hold`, who.token, body);
+    const lp = await send(A.cg, sA, rA);
+    const lq = await send(A.cg, sA, rA);
+    const lBasis = "Requerimiento judicial sintetico de conservacion";
+    const notAllowed = {
+      supervisor: (await legal(A.sup, lp.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) })).status,
+      caregiver: (await legal(A.cg, lp.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) })).status,
+      otherAgency: (await legal(B.admin, lp.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) }, orgB)).status,
+      platform: (await rt(platformUser, orgA, `SELECT app_photo_legal_hold_write($1,'PLACE',$2,NULL,now()+interval '10 days')`, [lp.id, lBasis], true)).error,
+      shortBasis: (await legal(A.admin, lp.id, { action: "PLACE", basis: "corto", reviewAt: inDays(30) })).status,
+      reviewTooFar: (await legal(A.admin, lp.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(91) })).body.error,
+    };
+    await expire(lp.id);
+    const placedAfterExpiry = await legal(A.admin, lp.id, { action: "PLACE", basis: lBasis, reference: "Caso SINT-001", reviewAt: inDays(60) });
+    check("L1 only the agency's ADMINISTRATOR places a legal hold (supervisor, caregiver, another agency, ETNARA central refused); it needs the obligation and a review ≤ 90 days; it can be placed after expiry while the file still exists",
+      notAllowed.supervisor === 403 && notAllowed.caregiver === 403 && notAllowed.otherAgency === 404 && /PHOTO_LEGAL_HOLD_ADMIN_ONLY/.test(String(notAllowed.platform))
+        && notAllowed.shortBasis === 400 && notAllowed.reviewTooFar === "PHOTO_LEGAL_HOLD_REVIEW_INVALID" && placedAfterExpiry.status === 200,
+      `${JSON.stringify(notAllowed)} place=${placedAfterExpiry.status}`);
+    const blocks = {
+      manager: (await image(A.admin, lp.id)).status, supervisorView: (await image(A.sup, lp.id)).status,
+      manualDelete: (await call("POST", `/organizations/${orgA}/activity-photos/${lp.id}/delete`, A.admin.token, { reason: "Intento de eliminar" })).body.error,
+      ownerDelete: await q(`UPDATE care_event_photos SET share_status='deleted', deleted_at=now(), deletion_kind='MANUAL' WHERE id=$1`, [lp.id]).then(() => "ALLOWED", (e) => (e as Error).message),
+    };
+    check("L2 while in force: administration and supervision still see the expired photo; no manual deletion (409), not even the database owner (trigger)",
+      blocks.manager === 200 && blocks.supervisorView === 200 && blocks.manualDelete === "PHOTO_ON_LEGAL_HOLD" && /PHOTO_ON_LEGAL_HOLD/.test(blocks.ownerDelete), JSON.stringify(blocks));
+    // Beyond the ordinary limits of exceptional holds: 5 reviews, and as if it had been in force for 400 days.
+    let reviews = 0;
+    for (let i = 0; i < 5; i++) if ((await legal(A.admin, lp.id, { action: "REVIEW", basis: `${lBasis} (revision ${i + 1})`, reviewAt: inDays(80) })).status === 200) reviews++;
+    await shift("care_event_photos", "legal_hold_placed_at = now() - interval '400 days'", "id=$1", [lp.id]);
+    await expire(lq.id);
+    const legalRun = await run("on");
+    check("L3 no ordinary limit: 5 reviews and 400 days in force are accepted; the job (policy APPROVED) never deletes it while it is in force, and counts it",
+      reviews === 5 && (await state(lp.id)).share_status !== "deleted" && (await exists(lp.key)) && legalRun.legalHeld >= 1
+        && (await state(lq.id)).deletion_kind === "RETENTION", `reviews=${reviews} legalHeld=${legalRun.legalHeld} lq=${(await state(lq.id)).deletion_kind}`);
+    await shift("care_event_photos", "legal_hold_review_at = now() - interval '1 day'", "id=$1", [lp.id]);
+    const overdue = await run("on");
+    const stillHeld = (await q(`SELECT legal_hold_basis FROM care_event_photos WHERE id=$1`, [lp.id])).rows[0].legal_hold_basis;
+    check("L4 an overdue review NEVER releases it: the photo stays, the job raises an alert (counts only) and the agency sees «review overdue»",
+      overdue.legalReviewOverdue >= 1 && stillHeld !== null && (await exists(lp.key)) && logged.some((l) => l.includes("PHOTO_LEGAL_HOLD_REVIEW_OVERDUE"))
+        && ((await call("GET", `/organizations/${orgA}/activity-photos`, A.admin.token)).body.photos as Json[]).find((x) => x.id === lp.id)?.legalHold?.reviewOverdue === true,
+      `overdue=${overdue.legalReviewOverdue} held=${stillHeld !== null}`);
+    const lm = await send(A.cg, sA, rA);
+    await legal(A.admin, lm.id, { action: "PLACE", basis: lBasis, reviewAt: inDays(30) });
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: lm.key }));
+    const lostRun = await run("on", true, { orphanMinAgeMs: 0, orphanDeleteMinAgeMs: 0 });
+    check("L5 if the file of a legally held photo is gone, reconciliation does NOT tombstone it: it reports the lost evidence (alert)",
+      lostRun.legalHeldMissing >= 1 && (await state(lm.id)).share_status !== "deleted" && logged.some((l) => l.includes("PHOTO_LEGAL_HOLD_FILE_MISSING")), `${lostRun.legalHeldMissing}`);
+    const relSup = await legal(A.sup, lp.id, { action: "RELEASE", basis: "La obligacion termino segun el abogado" });
+    const relShort = await legal(A.admin, lp.id, { action: "RELEASE", basis: "fin" });
+    const rel = await legal(A.admin, lp.id, { action: "RELEASE", basis: "La obligacion termino segun el abogado" });
+    const afterRelease = await run("on");
+    const lHist = (await q(`SELECT action, actor_user_id FROM care_event_photo_events WHERE photo_id=$1 AND action LIKE 'LEGAL_HOLD_%' ORDER BY occurred_at`, [lp.id])).rows;
+    const lAudit = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action LIKE 'ACTIVITY_PHOTO_LEGAL_HOLD_%'`, [lp.id])).rows[0].n);
+    check("L6 only an administrator releases it, with a reason; after release the expired photo follows the ordinary rules (deleted and verified); every action in the history and the audit log",
+      relSup.status === 403 && relShort.status === 400 && rel.status === 200 && afterRelease.expiredMarked >= 1 && (await state(lp.id)).deletion_kind === "RETENTION" && !(await exists(lp.key))
+        && lHist.filter((x) => x.action === "LEGAL_HOLD_PLACED").length === 1 && lHist.filter((x) => x.action === "LEGAL_HOLD_REVIEWED").length === 5
+        && lHist.filter((x) => x.action === "LEGAL_HOLD_RELEASED").length === 1 && lHist.every((x) => x.actor_user_id === A.admin.userId) && lAudit === 7,
+      `${relSup.status} ${relShort.status} ${rel.status} marked=${afterRelease.expiredMarked} hist=${lHist.length} audit=${lAudit}`);
+
     // ---------------------------------------------------------------- 6. concurrency, audit, isolation, rollback guard
     const both = await Promise.all([run("simulate"), run("simulate")]);
     check("C1 two cycles at once (two replicas): one runs, the other is skipped (advisory lock)", both.filter((r) => r.skipped === "LOCKED").length === 1, both.map((r) => r.skipped ?? "ran").join(","));
@@ -312,6 +372,9 @@ async function main() {
     const rollback = readFileSync(new URL("../ops/142_activity_photos_retention_purge.rollback.sql", import.meta.url), "utf8");
     const rb = await q(rollback).then(() => "APPLIED", async (e) => { await q("ROLLBACK").catch(() => undefined); return (e as Error).message; });
     check("R4 the 142 rollback refuses to run once the job has left a trace (run log), and changes nothing", /rollback 142 aborted/.test(rb), rb.slice(0, 100));
+    const rollback143 = readFileSync(new URL("../ops/143_activity_photos_legal_hold.rollback.sql", import.meta.url), "utf8");
+    const rb143 = await q(rollback143).then(() => "APPLIED", async (e) => { await q("ROLLBACK").catch(() => undefined); return (e as Error).message; });
+    check("R5 the 143 rollback refuses to run once a legal hold has ever been placed (the evidence of an obligation is never lost)", /rollback 143 aborted/.test(rb143), rb143.slice(0, 100));
     await approvePolicy(false);
   } finally {
     console.error = origError; console.log = origLog;
