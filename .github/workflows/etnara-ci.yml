@@ -294,6 +294,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoRetention.ts
 
+      - name: PostgreSQL activity photos v2 — D1 caregiver removal window and holds, D2 daily legal-review notice (144; job off, admins only, count only, no duplicates, agencies separated, rollback)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoLegalNotice.ts
+
       - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

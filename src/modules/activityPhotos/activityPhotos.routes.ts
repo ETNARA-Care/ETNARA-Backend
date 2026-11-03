@@ -6,7 +6,7 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { respondInternalError } from "../../observability/internalError.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
-  consentQuerySchema, deleteActivityPhoto, deleteSchema, getFamilyPhotoReceipt, holdActivityPhoto, holdSchema, listPhotoRecipients,
+  consentQuerySchema, legalHoldActivityPhoto, legalHoldSchema, deleteActivityPhoto, deleteSchema, getFamilyPhotoReceipt, holdActivityPhoto, holdSchema, listPhotoRecipients,
   receiptSchema, setFamilyPhotoReceipt, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
   PhotoError, readActivityPhoto, sendPrivateImage, readPhotoConsentForm, recordPhotoConsent, reviewActivityPhoto, reviewSchema, revokePhotoConsent, revokeSchema,
   uploadActivityPhoto,
@@ -126,6 +126,15 @@ router.post("/organizations/:organizationId/activity-photos/:photoId/hold", requ
   const body = holdSchema.safeParse(req.body);
   if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
   try { res.status(200).json({ hold: await holdActivityPhoto(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 143: legal hold (obligation in force). Agency administrators only; never lapses, never deleted while in force.
+router.post("/organizations/:organizationId/activity-photos/:photoId/legal-hold", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = legalHoldSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ legalHold: await legalHoldActivityPhoto(req.auth!.userId, p[0], p[1], body.data) }); }
   catch (err) { fail(err, req, res); }
 });
 

@@ -38,10 +38,16 @@ interface NotificationRow {
   status: string;
   created_at: string;
   read_at: string | null;
+  item_count?: number | null;
 }
 
-function summarizeType(notificationType: string): string {
+function summarizeType(notificationType: string, itemCount?: number | null): string {
   switch (notificationType) {
+    // Activity photos v2 (144): the count and nothing else (no photo, resident, basis or reference).
+    case "PHOTO_LEGAL_HOLD_REVIEW_OVERDUE":
+      return itemCount === 1
+        ? "1 fotografía con retención legal tiene la revisión vencida"
+        : `${itemCount ?? 0} fotografías con retención legal tienen la revisión vencida`;
     case "NEW_MESSAGE":
       return "Nuevo mensaje";
     case "NEW_CARE_EVENT":
@@ -146,7 +152,7 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
                  THEN app_notification_credential_membership_id(id)
                ELSE NULL
              END AS worker_membership_id,
-             status, created_at, read_at
+             status, created_at, read_at, item_count
       FROM notifications
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY created_at DESC, id DESC
@@ -162,7 +168,8 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
     const items = pageRows.map((r) => ({
       id: r.id,
       type: r.notification_type,
-      summary: summarizeType(r.notification_type),
+      summary: summarizeType(r.notification_type, r.item_count),
+      itemCount: r.item_count ?? null,
       relatedEntityType: r.related_entity_type,
       relatedEntityId: r.related_entity_id,
       careRecipientId: r.care_recipient_id,

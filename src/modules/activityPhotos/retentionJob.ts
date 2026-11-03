@@ -27,6 +27,8 @@ export interface RetentionRunResult {
   expiredDue: number; expiredMarked: number; heldSkipped: number; holdsLapsed: number;
   queuePending: number; purgedVerified: number; purgeFailed: number; pendingOver24h: number;
   reconciled: boolean; orphansFound: number; orphansDeleted: number; missingMarked: number;
+  /** 143: photos under a legal hold (never deleted), overdue reviews (alert, never released) and held photos whose file is gone. */
+  legalHeld: number; legalReviewOverdue: number; legalHeldMissing: number;
   errorCodes: string[];
 }
 
@@ -48,7 +50,8 @@ export async function runRetentionCycle(opts: { mode: RetentionJobMode; reconcil
   const started = new Date();
   const out: RetentionRunResult = {
     mode: opts.mode, policy: null, expiredDue: 0, expiredMarked: 0, heldSkipped: 0, holdsLapsed: 0, queuePending: 0,
-    purgedVerified: 0, purgeFailed: 0, pendingOver24h: 0, reconciled: false, orphansFound: 0, orphansDeleted: 0, missingMarked: 0, errorCodes: [],
+    purgedVerified: 0, purgeFailed: 0, pendingOver24h: 0, reconciled: false, orphansFound: 0, orphansDeleted: 0, missingMarked: 0,
+    legalHeld: 0, legalReviewOverdue: 0, legalHeldMissing: 0, errorCodes: [],
   };
   const client = await pool.connect();
   const db = client as unknown as Q;
@@ -59,9 +62,10 @@ export async function runRetentionCycle(opts: { mode: RetentionJobMode; reconcil
     try {
       const pol = (await db.query<{ status: string; retention_days: number; purge_enabled: boolean }>(`SELECT * FROM app_photo_retention_policy_state()`)).rows[0];
       out.policy = pol ? { status: pol.status, days: pol.retention_days, purgeEnabled: pol.purge_enabled } : null;
-      const before = (await db.query<{ expired_due: number; held: number; holds_lapsed: number; queue_pending: number; pending_over_24h: number }>(
-        `SELECT * FROM app_photo_retention_counts()`)).rows[0];
+      const before = (await db.query<{ expired_due: number; held: number; holds_lapsed: number; queue_pending: number; pending_over_24h: number;
+        legal_held: number; legal_review_overdue: number }>(`SELECT * FROM app_photo_retention_counts()`)).rows[0];
       out.expiredDue = before.expired_due; out.heldSkipped = before.held; out.queuePending = before.queue_pending;
+      out.legalHeld = before.legal_held; out.legalReviewOverdue = before.legal_review_overdue;
 
       if (opts.mode === "simulate") {
         out.holdsLapsed = before.holds_lapsed; out.pendingOver24h = before.pending_over_24h;
@@ -114,8 +118,12 @@ export async function runRetentionCycle(opts: { mode: RetentionJobMode; reconcil
   console.log(`PHOTO_RETENTION_RUN ${JSON.stringify({ mode: out.mode, policy: out.policy, expiredDue: out.expiredDue, expiredMarked: out.expiredMarked,
     heldSkipped: out.heldSkipped, holdsLapsed: out.holdsLapsed, purgedVerified: out.purgedVerified, purgeFailed: out.purgeFailed,
     pendingOver24h: out.pendingOver24h, reconciled: out.reconciled, orphansFound: out.orphansFound, orphansDeleted: out.orphansDeleted,
-    missingMarked: out.missingMarked, errorCodes: out.errorCodes })}`);
+    missingMarked: out.missingMarked, legalHeld: out.legalHeld, legalReviewOverdue: out.legalReviewOverdue, legalHeldMissing: out.legalHeldMissing,
+    errorCodes: out.errorCodes })}`);
   if (out.pendingOver24h > 0) console.error("PHOTO_PURGE_ALERT", { pendingOver24h: out.pendingOver24h });
+  // A legal hold never lapses: an overdue review only raises an alert; the photo is kept.
+  if (out.legalReviewOverdue > 0) console.error("PHOTO_LEGAL_HOLD_REVIEW_OVERDUE", { count: out.legalReviewOverdue });
+  if (out.legalHeldMissing > 0) console.error("PHOTO_LEGAL_HOLD_FILE_MISSING", { count: out.legalHeldMissing });
   return out;
 }
 
@@ -159,8 +167,11 @@ async function reconcile(db: Q, mode: RetentionJobMode, out: RetentionRunResult,
       let present: boolean;
       try { present = await photoObjectExists(r.storage_key); } catch { continue; } // storage error: never a false "missing"
       if (present) continue;
-      if (mode === "on") { if ((await db.query<{ ok: boolean }>(`SELECT app_photo_mark_missing($1::uuid) AS ok`, [r.photo_id])).rows[0].ok) out.missingMarked++; }
-      else out.missingMarked++;
+      if (mode === "on") {
+        const result = (await db.query<{ r: string }>(`SELECT app_photo_mark_missing($1::uuid) AS r`, [r.photo_id])).rows[0].r;
+        if (result === "marked") out.missingMarked++;
+        else if (result === "legal_hold") out.legalHeldMissing++; // evidence lost: reported, never tombstoned
+      } else out.missingMarked++;
     }
   }
 }

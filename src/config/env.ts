@@ -65,6 +65,10 @@ const envSchema = z.object({
     .default("60")
     .transform((value) => Number.parseInt(value, 10))
     .pipe(z.number().int().min(5).max(24 * 60)),
+  // Activity photos v2 (144, D2): daily in-app notice to each agency's administration when
+  // photos under a LEGAL HOLD have an overdue review (count + link only). Independent of
+  // PHOTO_RETENTION_JOB: it keeps working with the expiry job off. "off" only stops the notice.
+  PHOTO_LEGAL_HOLD_NOTICE: z.enum(["on", "off"]).default("on"),
   PHOTO_MAX_UPLOAD_BYTES: z
     .string()
     .default("15728640")
