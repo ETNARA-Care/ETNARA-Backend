@@ -591,7 +591,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.id = p_org) THEN RAISE EXCEPTION 'ORGANIZATION_NOT_FOUND' USING ERRCODE = '42501'; END IF;
   v := EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.organization_id = p_org AND p.deleted_at IS NULL AND p.legal_hold_basis IS NOT NULL);
   INSERT INTO public.audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
-  VALUES (NULLIF(current_setting('app.current_user_id', true), '')::uuid, NULL, p_org, 'PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED', 'organization', p_org, NULL);
+  -- The agency's own row, readable only by its administration (legal-hold prefix, audit_log_photo_scope):
+  -- the agency can see that central asked; caregivers, other agencies and central itself cannot.
+  VALUES (NULLIF(current_setting('app.current_user_id', true), '')::uuid, p_org, p_org, 'ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED', 'organization', p_org, NULL);
   RETURN v;
 END $$;
 REVOKE ALL ON FUNCTION public.app_platform_org_has_legal_holds(uuid) FROM PUBLIC;

@@ -157,9 +157,17 @@ export async function getActivityPhotoEligibility(userId: string, organizationId
 }
 
 // ------------------------------------------------------------------ viewing (agency, uploader, family)
-export async function readActivityPhoto(userId: string, organizationId: string, photoId: string) {
-  const target = await inTenant(userId, organizationId, async (trx) =>
-    (await sql<{ storage_key: string; content_type: string }>`SELECT storage_key, content_type FROM app_activity_photo_for_view(${photoId}::uuid)`.execute(trx)).rows[0]);
+export async function readActivityPhoto(userId: string, organizationId: string, photoId: string, opts: { legalReview?: boolean } = {}) {
+  const target = await inTenant(userId, organizationId, async (trx) => {
+    // 145 (§5): switch off → only an explicit legal-review request reaches the database function (which
+    // then requires an administrator and a photo under a legal hold, and audits the view). Anything that
+    // merely renders the page (stale screens, prefetch) never opens a held image.
+    if (!opts.legalReview) {
+      const on = (await sql<{ on: boolean }>`SELECT app_org_feature_enabled(${organizationId}::uuid, 'ACTIVITY_PHOTOS') AS on`.execute(trx)).rows[0]?.on === true;
+      if (!on) return undefined;
+    }
+    return (await sql<{ storage_key: string; content_type: string }>`SELECT storage_key, content_type FROM app_activity_photo_for_view(${photoId}::uuid)`.execute(trx)).rows[0];
+  });
   if (!target) throw new PhotoError("NOT_FOUND", 404);
   try {
     return { body: await getPhotoObject(target.storage_key), contentType: target.content_type };

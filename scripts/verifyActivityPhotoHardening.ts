@@ -538,15 +538,21 @@ async function main() {
     await shift("care_event_photos", "legal_hold_review_at = now() - interval '1 day'", "id=$1", [fOver.id]);
     const notHeld = ph[2]; // m3: ordinary hold only
     const centralList = await call("GET", `/platform/organizations/${orgH}/features`, central.token);
-    const auditBefore = Number((await q(`SELECT count(*) n FROM audit_log WHERE action='PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1`, [orgH])).rows[0].n);
+    const auditBefore = Number((await q(`SELECT count(*) n FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1`, [orgH])).rows[0].n);
     const centralBefore = await call("POST", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS/legal-hold-check`, central.token, {});
     const kFeatures = await call("POST", `/platform/organizations/${orgK}/features/ACTIVITY_PHOTOS/legal-hold-check`, central.token, {});
     const agencyCheck = (await call("POST", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS/legal-hold-check`, H.admin.token, {})).status;
-    const checkAudit = (await q(`SELECT actor_user_id FROM audit_log WHERE action='PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1 ORDER BY occurred_at DESC LIMIT 1`, [orgH])).rows[0];
+    const checkAudit = (await q(`SELECT actor_user_id FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1 ORDER BY occurred_at DESC LIMIT 1`, [orgH])).rows[0];
+    const seenBy = {
+      admin: Number((await rt(H.admin.userId, orgH, `SELECT count(*) n FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED'`)).rows[0]?.n),
+      sup: Number((await rt(H.sup.userId, orgH, `SELECT count(*) n FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED'`)).rows[0]?.n),
+      cg: Number((await rt(H.cg.userId, orgH, `SELECT count(*) n FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED'`)).rows[0]?.n),
+      central: Number((await rt(central.userId, "", `SELECT count(*) n FROM audit_log WHERE action='ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED'`, [], true)).rows[0]?.n),
+    };
     const turnOff = await call("PUT", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS`, central.token, { enabled: false, reason: "Prueba sintetica de apagado" });
-    check("F01 ETNARA central is WARNED (one boolean) that the agency has photos under a legal hold, only when it asks before switching off (each question audited with who asked; not in the ordinary features list; agencies cannot ask) and when switching off; the switch-off is NOT blocked; an agency without holds: false; never how many or which",
+    check("F01 ETNARA central is WARNED (one boolean) that the agency has photos under a legal hold, only when it asks before switching off (each question audited with who asked, visible only to the agency's administration; not in the ordinary features list; agencies cannot ask) and when switching off; the switch-off is NOT blocked; an agency without holds: false; never how many or which",
       centralList.status === 200 && !("activityPhotosLegalHolds" in centralList.body) && centralBefore.status === 200 && centralBefore.body.legalHolds === true && kFeatures.body.legalHolds === false
-        && agencyCheck === 403 && checkAudit?.actor_user_id === central.userId && auditBefore === 0
+        && agencyCheck === 403 && checkAudit?.actor_user_id === central.userId && auditBefore === 0 && seenBy.admin >= 1 && seenBy.sup === 0 && seenBy.cg === 0 && seenBy.central === 0
         && turnOff.status === 200 && turnOff.body.feature?.enabled === false && turnOff.body.feature?.legalHoldsKept === true
         && !JSON.stringify(centralBefore.body).includes(pp.id) && !JSON.stringify(turnOff.body).includes(reference),
       `before=${centralBefore.body.legalHolds} k=${kFeatures.body.legalHolds} agency=${agencyCheck} audit=${JSON.stringify(checkAudit)} off=${turnOff.status} kept=${turnOff.body.feature?.legalHoldsKept}`);
@@ -580,15 +586,17 @@ async function main() {
       Object.entries(blocked).every(([k, s]) => (k === "supLegal" ? [403, 404].includes(s) : s === 404)), JSON.stringify(blocked));
 
     const auditViewsBefore = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED'`, [fOver.id])).rows[0].n);
-    const viewHeld = await image(H.admin, fOver.id);
+    const viewImplicit = await image(H.admin, fOver.id); // no explicit purpose: a stale screen, a prefetch
+    const viewsAfterImplicit = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED'`, [fOver.id])).rows[0].n);
+    const viewHeld = await call("GET", `/organizations/${orgH}/activity-photos/${fOver.id}/image?purpose=legal-review`, H.admin.token);
     const viewAudit = (await q(`SELECT new_value->>'mode' m, actor_user_id FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED' ORDER BY occurred_at DESC LIMIT 1`, [fOver.id])).rows[0];
-    const viewOther = (await image(H.admin, notHeld.id)).status;
-    const viewSup = (await image(H.sup, fOver.id)).status;
+    const viewOther = (await call("GET", `/organizations/${orgH}/activity-photos/${notHeld.id}/image?purpose=legal-review`, H.admin.token)).status;
+    const viewSup = (await call("GET", `/organizations/${orgH}/activity-photos/${fOver.id}/image?purpose=legal-review`, H.sup.token)).status;
     const viewFam = (await image(H.fam, pp.id)).status;
     const histHeld = (await call("GET", `/organizations/${orgH}/activity-photos/${fOver.id}/history`, H.admin.token)).status;
     const histOther = (await call("GET", `/organizations/${orgH}/activity-photos/${notHeld.id}/history`, H.admin.token)).status;
-    check("F04 the administration may view a photo under a legal hold when needed for the review — every view is audited (mode legal-review, her as actor); any other photo, supervision and family: 404; history only for held photos",
-      viewHeld.status === 200 && viewAudit?.m === "legal-review" && viewAudit?.actor_user_id === H.admin.userId && auditViewsBefore === 0
+    check("F04 the administration may view a photo under a legal hold when needed for the review — only with an explicit legal-review request (a plain image request with the switch off: 404, nothing audited) — every view is audited (mode legal-review, her as actor); any other photo, supervision and family: 404; history only for held photos",
+      viewImplicit.status === 404 && viewsAfterImplicit === 0 && viewHeld.status === 200 && viewAudit?.m === "legal-review" && viewAudit?.actor_user_id === H.admin.userId && auditViewsBefore === 0
         && viewOther === 404 && viewSup === 404 && viewFam === 404 && histHeld === 200 && histOther === 404,
       `held=${viewHeld.status} audit=${JSON.stringify(viewAudit)} other=${viewOther} sup=${viewSup} fam=${viewFam} hist=${histHeld}/${histOther}`);
 

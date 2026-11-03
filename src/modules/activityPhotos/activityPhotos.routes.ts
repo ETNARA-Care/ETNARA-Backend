@@ -115,7 +115,9 @@ router.post("/organizations/:organizationId/activity-photos/:photoId/review", re
 // Agency, uploader or authorised relative: the image itself, streamed.
 router.get("/organizations/:organizationId/activity-photos/:photoId/image", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
-  try { sendPrivateImage(res, await readActivityPhoto(req.auth!.userId, p[0], p[1]), "actividad.jpg"); }
+  // 145 (§5): with the switch off a held image is served only for an explicit legal review («Ver imagen»).
+  const legalReview = req.query.purpose === "legal-review";
+  try { sendPrivateImage(res, await readActivityPhoto(req.auth!.userId, p[0], p[1], { legalReview }), "actividad.jpg"); }
   catch (err) { fail(err, req, res); }
 });
 

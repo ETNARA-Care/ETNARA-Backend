@@ -48,7 +48,7 @@ async function platformOrgHasLegalHolds(trx: Parameters<Parameters<typeof withPl
 
 /**
  * 145 (§5): asked only when central is about to switch photos off. One boolean (never how many or
- * which), and every question is audited in the database (PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED).
+ * which), and every question is audited in the database (ACTIVITY_PHOTO_LEGAL_HOLD_PRESENCE_CHECKED, readable only by the agency administration).
  */
 export async function checkActivityPhotosLegalHolds(userId: string, organizationId: string) {
   return withPlatformContext(userId, async (trx) => {
