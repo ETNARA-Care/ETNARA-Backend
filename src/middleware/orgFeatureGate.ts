@@ -40,6 +40,7 @@ export async function orgFeatureGate(req: Request, res: Response, next: NextFunc
     next(); return; // malformed ids: the route answers its own 400
   }
   // Read-only mode (Facturación): reads continue; billing.view decides in the service and the database.
+  // Legal-review mode (fotos, 145): the service and the database decide.
   if (gated.readOnlyPass) { next(); return; }
   try {
     if (await isOrgFeatureEnabled(gated.organizationId, gated.feature)) { next(); return; }

@@ -55,6 +55,22 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  // Activity photos v2 (142): periodic expiry/purge job. off (default): never runs.
+  // simulate: counts only (run log), never deletes or changes anything. on: records
+  // lapsed holds, retries decided removals and reconciles; deleting EXPIRED photos
+  // additionally needs the retention policy APPROVED with purge enabled (database).
+  PHOTO_RETENTION_JOB: z.enum(["off", "simulate", "on"]).default("off"),
+  PHOTO_RETENTION_INTERVAL_MINUTES: z
+    .string()
+    .default("60")
+    .transform((value) => Number.parseInt(value, 10))
+    .pipe(z.number().int().min(5).max(24 * 60)),
+  // Activity photos v2 (144, D2): daily in-app notice to each agency's administration when
+  // photos under a LEGAL HOLD have an overdue review (count + link only). Independent of
+  // PHOTO_RETENTION_JOB: it keeps working with the expiry job off. "off" only stops the notice.
+  PHOTO_LEGAL_HOLD_NOTICE: z.enum(["on", "off"]).default("on"),
+  // 145 (§4): notice when an agency has no active administrator (supervisors + ETNARA central). "off" stops it.
+  AGENCY_ADMIN_GAP_NOTICE: z.enum(["on", "off"]).default("on"),
   PHOTO_MAX_UPLOAD_BYTES: z
     .string()
     .default("15728640")

@@ -6,7 +6,8 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { respondInternalError } from "../../observability/internalError.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
-  consentQuerySchema, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
+  consentQuerySchema, legalHoldActivityPhoto, legalHoldSchema, deleteActivityPhoto, deleteSchema, getFamilyPhotoReceipt, holdActivityPhoto, holdSchema, listPhotoRecipients,
+  receiptSchema, setFamilyPhotoReceipt, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, getAgencyPhotoMode, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
   PhotoError, readActivityPhoto, sendPrivateImage, readPhotoConsentForm, recordPhotoConsent, reviewActivityPhoto, reviewSchema, revokePhotoConsent, revokeSchema,
   uploadActivityPhoto,
 } from "./activityPhotos.service.js";
@@ -81,6 +82,14 @@ router.get("/organizations/:organizationId/care-events/:careEventId/photo", requ
 });
 
 // Agency: review queue and decisions.
+// 145: which photo screen this person gets here ("full", "legal-review" with the switch off, or "off").
+router.get("/organizations/:organizationId/activity-photos/mode", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.json(await getAgencyPhotoMode(req.auth!.userId, p[0])); }
+  catch (err) { fail(err, req, res); }
+});
+
 router.get("/organizations/:organizationId/activity-photos", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const p = ids(req, res, "organizationId"); if (!p) return;
   const q = listPhotosQuerySchema.safeParse(req.query);
@@ -106,7 +115,59 @@ router.post("/organizations/:organizationId/activity-photos/:photoId/review", re
 // Agency, uploader or authorised relative: the image itself, streamed.
 router.get("/organizations/:organizationId/activity-photos/:photoId/image", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
-  try { sendPrivateImage(res, await readActivityPhoto(req.auth!.userId, p[0], p[1]), "actividad.jpg"); }
+  // 145 (§5): with the switch off a held image is served only for an explicit legal review («Ver imagen»).
+  const legalReview = req.query.purpose === "legal-review";
+  try { sendPrivateImage(res, await readActivityPhoto(req.auth!.userId, p[0], p[1], { legalReview }), "actividad.jpg"); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: removal. Agency managers (reason required) or the caregiver inside her window.
+router.post("/organizations/:organizationId/activity-photos/:photoId/delete", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = deleteSchema.safeParse(req.body ?? {});
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ photo: await deleteActivityPhoto(req.auth!.userId, p[0], p[1], body.data.reason) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: exceptional hold (place / renew / release). Agency managers only.
+router.post("/organizations/:organizationId/activity-photos/:photoId/hold", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = holdSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ hold: await holdActivityPhoto(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 143: legal hold (obligation in force). Agency administrators only; never lapses, never deleted while in force.
+router.post("/organizations/:organizationId/activity-photos/:photoId/legal-hold", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "photoId"); if (!p) return;
+  const body = legalHoldSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(200).json({ legalHold: await legalHoldActivityPhoto(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: the relative's own authorization to receive photos of this resident (starts at "not answered").
+router.get("/organizations/:organizationId/care-recipients/:careRecipientId/photo-receipt", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.status(200).json({ receipt: await getFamilyPhotoReceipt(req.auth!.userId, p[0], p[1]) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+router.put("/organizations/:organizationId/care-recipients/:careRecipientId/photo-receipt", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  const body = receiptSchema.safeParse(req.body);
+  if (!body.success) { res.status(400).json({ error: "PHOTO_RECEIPT_INVALID" }); return; }
+  try { res.status(200).json({ receipt: await setFamilyPhotoReceipt(req.auth!.userId, p[0], p[1], body.data) }); }
+  catch (err) { fail(err, req, res); }
+});
+
+// 141: agency managers — which relatives receive photos of a resident.
+router.get("/organizations/:organizationId/care-recipients/:careRecipientId/photo-recipients", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId", "careRecipientId"); if (!p) return;
+  try { res.status(200).json({ recipients: await listPhotoRecipients(req.auth!.userId, p[0], p[1]) }); }
   catch (err) { fail(err, req, res); }
 });
 

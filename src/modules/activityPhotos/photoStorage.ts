@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import crypto from "node:crypto";
 import { env } from "../../config/env.js";
 
@@ -63,6 +63,49 @@ export async function getPhotoObject(key: string): Promise<Buffer> {
   const bytes = await result.Body?.transformToByteArray();
   if (!bytes) throw new Error("PHOTO_OBJECT_EMPTY");
   return Buffer.from(bytes);
+}
+
+/** true while the object exists; false only on a definite 404 (verifies a deletion). */
+export async function photoObjectExists(key: string): Promise<boolean> {
+  const { s3, bucket } = photoClient();
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    if (status === 404 || (err as Error)?.name === "NotFound") return false;
+    throw err;
+  }
+}
+
+/** One page of keys under a prefix (reconciliation). Keys never leave the backend. */
+export async function listPhotoObjects(prefix: string, continuationToken?: string): Promise<{ items: { key: string; lastModified: Date | null }[]; next?: string }> {
+  const { s3, bucket } = photoClient();
+  const r = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken, MaxKeys: 1000 }));
+  return {
+    items: (r.Contents ?? []).filter((o) => o.Key).map((o) => ({ key: o.Key!, lastModified: o.LastModified ?? null })),
+    next: r.IsTruncated ? r.NextContinuationToken : undefined,
+  };
+}
+
+/** Small private text object (the storage identity marker). */
+export async function putPhotoText(key: string, text: string): Promise<void> {
+  const { s3, bucket } = photoClient();
+  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: Buffer.from(text, "utf8"), ContentType: "application/json", CacheControl: "private, no-store" }));
+}
+
+/** The text of an object, or null on a definite 404. Other errors are thrown. */
+export async function getPhotoText(key: string): Promise<string | null> {
+  const { s3, bucket } = photoClient();
+  try {
+    const r = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    return Buffer.from((await r.Body?.transformToByteArray()) ?? []).toString("utf8");
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    const name = (err as Error)?.name;
+    if (name === "NoSuchKey" || (status === 404 && name !== "NoSuchBucket")) return null;
+    throw err;
+  }
 }
 
 export async function deletePhotoObject(key: string): Promise<void> {

@@ -38,10 +38,41 @@ interface NotificationRow {
   status: string;
   created_at: string;
   read_at: string | null;
+  item_count?: number | null;
+  org_name?: string | null;
 }
 
-function summarizeType(notificationType: string): string {
+/**
+ * 145 (M5): this code must also work against a database where 144 / 145 are not
+ * applied yet (a deployment in the wrong order must not break every user's
+ * notifications). The optional columns / functions are probed once and cached.
+ */
+let schemaProbe: { at: number; itemCount: boolean; orgName: boolean } | null = null;
+async function notificationSchema(trx: Parameters<Parameters<typeof withUserContext>[1]>[0]) {
+  if (schemaProbe && (schemaProbe.itemCount && schemaProbe.orgName || Date.now() - schemaProbe.at < 60_000)) return schemaProbe;
+  const r = await sql<{ item_count: boolean; org_name: boolean }>`
+    SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.notifications'::regclass AND attname = 'item_count' AND NOT attisdropped) AS item_count,
+           to_regprocedure('public.app_notification_org_name(uuid)') IS NOT NULL AS org_name`.execute(trx);
+  schemaProbe = { at: Date.now(), itemCount: r.rows[0]?.item_count === true, orgName: r.rows[0]?.org_name === true };
+  return schemaProbe;
+}
+/** Test hook. */
+export function resetNotificationSchemaProbeForTests(): void { schemaProbe = null; }
+
+function summarizeType(notificationType: string, itemCount?: number | null, orgName?: string | null): string {
   switch (notificationType) {
+    // 145 (§4): never a word about photos or legal holds.
+    case "AGENCY_NO_ACTIVE_ADMIN":
+      return orgName
+        ? `Tu agencia ${orgName} no tiene administración activa. Pide a ETNARA que restablezca una administradora.`
+        : "Tu agencia no tiene administración activa. Pide a ETNARA que restablezca una administradora.";
+    case "PLATFORM_AGENCY_NO_ACTIVE_ADMIN":
+      return orgName ? `La agencia ${orgName} no tiene administración activa` : "Una agencia no tiene administración activa";
+    // Activity photos v2 (144): the count and nothing else (no photo, resident, basis or reference).
+    case "PHOTO_LEGAL_HOLD_REVIEW_OVERDUE":
+      return itemCount === 1
+        ? "1 fotografía con retención legal tiene la revisión vencida"
+        : `${itemCount ?? 0} fotografías con retención legal tienen la revisión vencida`;
     case "NEW_MESSAGE":
       return "Nuevo mensaje";
     case "NEW_CARE_EVENT":
@@ -125,6 +156,7 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
   return withUserContext(userId, async (trx) => {
     const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const conditions = [sql`user_id = ${userId}`];
+    const schema = await notificationSchema(trx);
     if (query.cursor) {
       const [ts, id] = query.cursor.split("_");
       if (ts && id && uuidSchema.safeParse(id).success) {
@@ -146,7 +178,9 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
                  THEN app_notification_credential_membership_id(id)
                ELSE NULL
              END AS worker_membership_id,
-             status, created_at, read_at
+             status, created_at, read_at,
+             ${schema.itemCount ? sql`item_count` : sql`NULL::int AS item_count`},
+             ${schema.orgName ? sql`CASE WHEN notification_type IN ('PLATFORM_AGENCY_NO_ACTIVE_ADMIN', 'AGENCY_NO_ACTIVE_ADMIN') THEN app_notification_org_name(id) END` : sql`NULL::text`} AS org_name
       FROM notifications
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY created_at DESC, id DESC
@@ -162,7 +196,8 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
     const items = pageRows.map((r) => ({
       id: r.id,
       type: r.notification_type,
-      summary: summarizeType(r.notification_type),
+      summary: summarizeType(r.notification_type, r.item_count, r.org_name),
+      itemCount: r.item_count ?? null,
       relatedEntityType: r.related_entity_type,
       relatedEntityId: r.related_entity_id,
       careRecipientId: r.care_recipient_id,

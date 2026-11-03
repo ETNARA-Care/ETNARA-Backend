@@ -2,6 +2,51 @@
 
 ## Current Status
 
+## 2026-11-03 — Fotos v2: endurecimiento tras la auditoría (migración 145) — solo local
+- **Solo local, rama `claude/activity-photos-v2-hardening`** (sobre #250 `442811c`, sin publicar). Producción sin cambios. `PHOTO_RETENTION_JOB` sigue en `off`; política de 30 días `PROVISIONAL`.
+- **H1, eliminación masiva:**
+  - El bucket debe probar su identidad antes de cualquier purga o conciliación: marcador `_etnara/storage-identity.json` igual al de `photo_storage_identity`. Procedimiento en `ops/145_photo_storage_identity.md`.
+  - Un archivo ausente es solo un hallazgo (`photo_missing_findings`). Se marca como eliminado solo con la política APPROVED, tras una segunda conciliación ≥ 24 h después y sin retenciones.
+  - Frenos: `MISSING_ANOMALY`, `STORAGE_ERRORS`, `ORPHAN_ANOMALY` y `PURGE_HALTED`. Una imagen sin archivo responde 404, no 500.
+- **M1:** la cuidadora recibe `PHOTO_KEPT_BY_AGENCY` para cualquier retención.
+- **M2:** `audit_log_photo_scope`: ETNARA central no lee acciones de fotos, consentimientos ni autorizaciones; las de retención legal solo las lee ORGANIZATION_ADMIN.
+- **M3:** `app_runtime` sin INSERT ni UPDATE en `family_relationships.photo_receipt(_at)` (privilegio por columna).
+- **M4 / §6:** `app_runtime` sin SELECT en `hold_reason`, `legal_hold_basis`, `legal_hold_reference`, `legal_hold_by_user_id`, `review_reason`, `deletion_reason` ni `care_event_photo_events.reason`.
+  - Se leen con `app_photo_confidential()` y `app_photo_history()`; la base y la referencia legales solo las recibe la administración.
+- **M5:** las notificaciones y el aviso funcionan contra una base sin 144/145. Regla de despliegue: migraciones antes que el código.
+- **L1:** la subida tardía ya no da 500. **I2:** `app_photo_hold_active` comprueba la agencia.
+- **§4:** `app_org_admin_gap_notify()`: un aviso por episodio, tras 24 h, a la supervisión (`AGENCY_NO_ACTIVE_ADMIN`) y a ETNARA central (`PLATFORM_AGENCY_NO_ACTIVE_ADMIN`). `AGENCY_ADMIN_GAP_NOTICE=off` lo detiene.
+- **§5:** con `ACTIVITY_PHOTOS` apagado, modo `legal-review` para ORGANIZATION_ADMIN.
+  - Lista de retenciones legales, revisar y levantar; ver la imagen queda auditado.
+  - Se mantiene el aviso diario.
+  - Central recibe un sí/no al apagar, sin bloqueo. Endpoint `GET …/activity-photos/mode`.
+- Pruebas: `verifyActivityPhotoHardening.ts` (paso nuevo en CI); suites de fotos 041–045b actualizadas donde el comportamiento cambió a propósito; reversión probada.
+
+## 2026-11-02 — Fotos v2: D1 (ventana de «Quitar foto») y D2 (aviso diario de retenciones legales vencidas, migración 144) — solo local
+- **Solo local, rama `claude/activity-photos-v2-legal-hold`** (sobre #250, sin publicar). Producción sin cambios.
+- **D1 (aprobado):** la cuidadora puede quitar su foto solo hasta 1 h después de cerrar la visita, con confirmación y auditoría, y nunca mientras haya una retención vigente (ordinaria o legal).
+  - `GET …/care-events/:id/photo` ahora devuelve `canRemove=false` y `keptByAgency=true` en ese caso, nunca el motivo.
+  - El backend responde 409 `PHOTO_ON_HOLD` o `PHOTO_ON_LEGAL_HOLD`.
+- **D2 (aprobado), migración 144:** `app_photo_legal_review_notify()` crea un aviso en la app (`PHOTO_LEGAL_HOLD_REVIEW_OVERDUE`) para cada ORGANIZATION_ADMIN activo de cada agencia con `ACTIVITY_PHOTOS` encendido y revisiones legales vencidas.
+  - Lleva solo la cifra (`item_count`) y apunta a la agencia.
+  - Un aviso por persona, agencia y día de Puerto Rico (índice único). No hay correo ni SMS.
+  - Worker `startLegalReviewNoticeWorker` (cada hora; la base lo limita a una vez al día). Es independiente de `PHOTO_RETENTION_JOB`; `PHOTO_LEGAL_HOLD_NOTICE=off` lo detiene.
+  - Filtro `GET …/activity-photos?legalReview=overdue`.
+  - La reversión `ops/144…rollback.sql` borra solo esos recordatorios y deja intactas las retenciones.
+- Pruebas: `verifyActivityPhotoLegalNotice.ts` 16/16 (paso nuevo en CI); unitarias 684/684; reversión y reaplicación de 144 idénticas.
+
+## 2026-11-02 — Fotos v2: retención legal (migración 143, rama local claude/activity-photos-v2-legal-hold, sobre #249)
+- **Solo local:** sin push ni despliegue. Producción sin cambios. `PHOTO_RETENTION_JOB` en `off` por defecto; política de 30 días `PROVISIONAL`.
+- **Retención legal** para fotos sujetas a una obligación vigente:
+  - solo ORGANIZATION_ADMIN;
+  - base 10–300 caracteres, referencia opcional, revisión ≤ 90 días;
+  - **sin límite ordinario y nunca caduca sola** (la revisión vencida solo genera la alerta `PHOTO_LEGAL_HOLD_REVIEW_OVERDUE`);
+  - bloquea toda eliminación (manual, de la cuidadora, por vencimiento y por conciliación), incluso para el dueño de la tabla;
+  - se puede colocar después del vencimiento mientras no esté eliminada.
+- `POST /organizations/:org/activity-photos/:id/legal-hold` (PLACE, REVIEW, RELEASE). Historial `LEGAL_HOLD_*` y auditoría.
+- La reversión `ops/143…rollback.sql` restaura 141/142 y aborta si alguna vez hubo una retención legal.
+- Pruebas: unitarias 684/684; verificador de conservación 24/24; reversión y reaplicación idénticas.
+
 ## 2026-10-26 — Seguridad: comprobación del rol de base de datos al arrancar (claude/runtime-role-hardening, PR #226, sin migraciones)
 
 - Hallazgo crítico: producción conecta como `postgres` (superusuario: `DATABASE_URL` → `etnara-care-staging-db.DATABASE_URL`, `POSTGRES_USER=postgres`; `MIGRATIONS_DATABASE_URL` referencia al propio `DATABASE_URL`). RLS no se aplica en producción; el aislamiento depende solo del código.

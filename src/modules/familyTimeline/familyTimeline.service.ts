@@ -42,7 +42,8 @@ interface TimelineItem {
   title: string;
   summary: string;
   caregiver: { displayName: string | null; role: string | null };
-  photo?: { visible: boolean; reference?: string };
+  /** availableUntil: end of the (provisional) retention period, after which nobody sees it. */
+  photo?: { visible: boolean; reference?: string; availableUntil?: string };
 }
 
 export interface TimelineResult {
@@ -173,18 +174,19 @@ export async function getFamilyTimeline(
       }
     }
 
-    // Any activity may carry one photo (116). RLS (115) returns only the photos
-    // this relative may see right now: approved, consents active, switch on.
+    // Any activity may carry one photo (116). Only the photos this relative may
+    // see right now (141): shared, not expired or removed, their own authorization
+    // (and sent after it), consents active, switch on.
     const photoEventIds = pageRows.map((r) => r.id);
-    const photoRefMap = new Map<string, string>();
+    const photoRefMap = new Map<string, { id: string; until: string }>();
     if (canViewPhotos && photoEventIds.length > 0) {
-      const photos = await sql<{ care_event_id: string; id: string }>`
-        SELECT id, care_event_id FROM care_event_photos
+      const photos = await sql<{ care_event_id: string; id: string; retention_until: string }>`
+        SELECT id, care_event_id, retention_until FROM care_event_photos
         WHERE care_event_id = ANY(${photoEventIds})
           AND organization_id = ${organizationId}
           AND public.app_family_can_view_activity_photo(id)
       `.execute(trx);
-      for (const p of photos.rows) photoRefMap.set(p.care_event_id, p.id);
+      for (const p of photos.rows) photoRefMap.set(p.care_event_id, { id: p.id, until: new Date(p.retention_until).toISOString() });
     }
 
     const items: TimelineItem[] = pageRows.map((row) => {
@@ -192,7 +194,7 @@ export async function getFamilyTimeline(
       const caregiver = caregiverMap.get(row.membership_id) ?? { displayName: null, role: null };
       const item: TimelineItem = { id: row.id, type: row.type_code, occurredAt: row.occurred_at, title, summary, caregiver };
       const ref = photoRefMap.get(row.id);
-      if (ref) item.photo = { visible: true, reference: ref };
+      if (ref) item.photo = { visible: true, reference: ref.id, availableUntil: ref.until };
       else if (row.type_code === "PHOTO") item.photo = { visible: false };
       return item;
     });

@@ -2,33 +2,41 @@
 export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }[] = [
-  { pattern: new RegExp(`^/organizations/(${UUID})/smartmatch(/|$)`), feature: "SMARTMATCH" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/private-instructions$`), feature: "SMARTMATCH" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/(journey|arrival)(/|$)`), feature: "EN_CAMINO" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/operations/journeys$`), feature: "EN_CAMINO" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/me/location-consent$`), feature: "EN_CAMINO" },
+// 145: case-insensitive, like Express routing (a path with other capitals must not skip the gate).
+const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; passWhenOff?: string[] }[] = [
+  { pattern: new RegExp(`^/organizations/(${UUID})/smartmatch(/|$)`, "i"), feature: "SMARTMATCH" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/private-instructions$`, "i"), feature: "SMARTMATCH" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/(journey|arrival)(/|$)`, "i"), feature: "EN_CAMINO" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/operations/journeys$`, "i"), feature: "EN_CAMINO" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/me/location-consent$`, "i"), feature: "EN_CAMINO" },
   // Activity photos (115/116): upload, review, image, consents.
-  { pattern: new RegExp(`^/organizations/(${UUID})/care-events/${UUID}/photo(-eligibility)?$`), feature: "ACTIVITY_PHOTOS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/photo-eligibility$`), feature: "ACTIVITY_PHOTOS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`), feature: "ACTIVITY_PHOTOS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-events/${UUID}/photo(-eligibility)?$`, "i"), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/photo-eligibility$`, "i"), feature: "ACTIVITY_PHOTOS" },
+  // 145 (§5): with the switch off, an ORGANIZATION_ADMIN keeps reviewing legal holds. These routes
+  // pass the gate and the service + database decide (mode "legal-review": held photos only, no new holds).
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/mode)?$`, "i"), feature: "ACTIVITY_PHOTOS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos/${UUID}/(history|image)$`, "i"), feature: "ACTIVITY_PHOTOS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos/${UUID}/legal-hold$`, "i"), feature: "ACTIVITY_PHOTOS", passWhenOff: ["POST"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`, "i"), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`, "i"), feature: "ACTIVITY_PHOTOS" },
+  // v2 (141): the relative's own authorization and the agency's list of recipients.
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-(receipt|recipients)$`, "i"), feature: "ACTIVITY_PHOTOS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/photo-consents(/|$)`, "i"), feature: "ACTIVITY_PHOTOS" },
   // ETNARA Finanzas F1 (119): services, rates, clients, holidays, shift finance terms.
-  { pattern: new RegExp(`^/organizations/(${UUID})/finance(/|$)`), feature: "FINANZAS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/finance$`), feature: "FINANZAS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/finance(/|$)`, "i"), feature: "FINANZAS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/finance$`, "i"), feature: "FINANZAS" },
   // Facturación Premium F2 (123): writes need FACTURACION (and FINANZAS, checked by the
   // service and the database). Reads pass the gate so issued history stays available in
   // read-only mode; who may read is decided by billing.view (service + RLS).
-  { pattern: new RegExp(`^/organizations/(${UUID})/billing(/|$)`), feature: "FACTURACION", readableWhenOff: true },
+  { pattern: new RegExp(`^/organizations/(${UUID})/billing(/|$)`, "i"), feature: "FACTURACION", readableWhenOff: true },
   // Informe de Turno F1 (126): agency review and approval of shift reports.
-  { pattern: new RegExp(`^/organizations/(${UUID})/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/shift-reports$`), feature: "SHIFT_REPORTS" },
-  { pattern: new RegExp(`^/organizations/(${UUID})/shift-report-(access|reviewers)(/|$)`), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/shift-reports$`, "i"), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/shift-report-(access|reviewers)(/|$)`, "i"), feature: "SHIFT_REPORTS" },
   // F2 (128): the caregiver reviews her own reports.
-  { pattern: new RegExp(`^/organizations/(${UUID})/me/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/me/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
   // F3 (129): the family's approved reports of her resident.
-  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`), feature: "SHIFT_REPORTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {
@@ -36,7 +44,8 @@ export function gatedFeatureFor(path: string, method = "GET"): { organizationId:
     const m = rule.pattern.exec(path);
     if (m) {
       const read = method === "GET" || method === "HEAD";
-      return { organizationId: m[1].toLowerCase(), feature: rule.feature, ...(rule.readableWhenOff && read ? { readOnlyPass: true } : {}) };
+      const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method) ?? false);
+      return { organizationId: m[1].toLowerCase(), feature: rule.feature, ...(pass ? { readOnlyPass: true } : {}) };
     }
   }
   return null;

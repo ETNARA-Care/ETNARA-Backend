@@ -59,8 +59,8 @@ describe("ETNARA Finanzas F1 — services and rates (119)", () => {
 
   it("puts every finance route behind FINANZAS and the write limit", () => {
     const rules = read("src/middleware/orgFeatureRules.ts");
-    expect(rules).toContain("finance(/|$)`), feature: \"FINANZAS\"");
-    expect(rules).toContain("/finance$`), feature: \"FINANZAS\"");
+    expect(rules).toContain("finance(/|$)`, \"i\"), feature: \"FINANZAS\""); // 145: case-insensitive
+    expect(rules).toContain("/finance$`, \"i\"), feature: \"FINANZAS\"");
     expect(read("src/middleware/featureWriteLimit.ts")).toContain("|finance)");
   });
 

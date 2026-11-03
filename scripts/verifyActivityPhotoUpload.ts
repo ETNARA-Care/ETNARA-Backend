@@ -73,7 +73,9 @@ async function main() {
     PHOTO_MAX_UPLOAD_BYTES: String(6 * 1024 * 1024),
   });
   delete process.env.STORAGE_ENDPOINT; delete process.env.STORAGE_BUCKET;
-  const objects = async (prefix: string) => (await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }))).KeyCount ?? 0;
+  // 145: the bucket's identity marker (_etnara/) is not a photo.
+  const objects = async (prefix: string) => ((await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }))).Contents ?? [])
+    .filter((o) => !(o.Key ?? "").startsWith("_etnara/")).length;
 
   const db = new pg.Client({ connectionString: adminUrl });
   await db.connect();
@@ -89,6 +91,8 @@ async function main() {
   console.error = (...args: unknown[]) => { logged.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")); };
 
   const { hashPassword } = await import("../src/security/password.js");
+  // 145 (H1): this verifier's own bucket is bound as the photos' storage (operator procedure, test DB only).
+  await (await import("./lib/photoStorageTestIdentity.js")).bindTestPhotoBucket(db, s3, bucket);
   const { createApp } = await import("../src/app.js");
   const { pool } = await import("../src/config/db.js");
   const server = createApp().listen(0);
@@ -197,6 +201,9 @@ async function main() {
         && (await objects("_selfcheck/")) === 0,
       `good=${JSON.stringify(good)} publicPassed=${photoStorageSelfCheckPassed(pub)} probes=${anon.length}`);
     await enable(orgA, true); await enable(orgB, true);
+    // 141: each relative decides expressly (starts at «not answered»); only photos sent afterwards (A2).
+    for (const f of [A.fam1, A.famNoPhotos]) await call("PUT", `${O}/care-recipients/${r1}/photo-receipt`, f.token, { decision: "accepted", textVersion: "test-v1" });
+    await call("PUT", `${O}/care-recipients/${r2}/photo-receipt`, A.fam2.token, { decision: "accepted", textVersion: "test-v1" });
 
     // ---------------------------------------------------------------- consent
     const noConsent = await upload(A.cg1, ev.a, jpeg);
@@ -227,8 +234,8 @@ async function main() {
     const inMeta = await sharp(jpeg).metadata();
     const up = await upload(A.cg1, ev.a, jpeg);
     const photoId = up.body.photo?.id as string;
-    check("U1 the caregiver uploads one photo for her activity: 201, «pending», resized to ≤ 2048 px",
-      up.status === 201 && up.body.photo?.status === "pending" && Math.max(up.body.photo?.width ?? 0, up.body.photo?.height ?? 0) <= 2048, JSON.stringify(up.body));
+    check("U1 the caregiver uploads one photo for her activity: 201, shared at once (sharing consent active, no manual approval), resized to ≤ 2048 px",
+      up.status === 201 && up.body.photo?.status === "approved" && up.body.photo?.sharedWithFamily === true && Math.max(up.body.photo?.width ?? 0, up.body.photo?.height ?? 0) <= 2048, JSON.stringify(up.body));
     const own = await image(A.cg1, photoId);
     const outMeta = own.status === 200 ? await sharp(own.bytes).metadata() : null;
     const raw = own.bytes.toString("latin1");
@@ -284,11 +291,11 @@ async function main() {
         && tamper.otherAgencyPath.status === 403 && tamper.relative.status === 404 && tamper.manager.status === 404 && tamper.unknownId.status === 404,
       Object.entries(tamper).map(([k, v]) => `${k}=${v.status}:${v.body.error}`).join(" "));
     const views = {
-      cg2: await image(A.cg2, photoId), fam1Pending: await image(A.fam1, photoId), admin: await image(A.admin, photoId),
+      cg2: await image(A.cg2, photoId), fam1Shared: await image(A.fam1, photoId), admin: await image(A.admin, photoId),
       adminBpath: await image(B.admin, photoId, orgB), adminBforeign: await image(B.admin, photoId), random: await image(A.admin, randomUUID()),
     };
-    check("T2 pending photo: the agency sees it, another caregiver and the relative do not (404), another agency neither through its own path nor ours",
-      views.admin.status === 200 && views.cg2.status === 404 && views.fam1Pending.status === 404 && views.adminBpath.status === 404
+    check("T2 sent photo: the agency and the authorised relative see it; another caregiver does not (404), another agency neither through its own path nor ours",
+      views.admin.status === 200 && views.cg2.status === 404 && views.fam1Shared.status === 200 && views.adminBpath.status === 404
         && views.adminBforeign.status === 403 && views.random.status === 404,
       Object.entries(views).map(([k, v]) => `${k}=${v.status}`).join(" "));
     const listByCg = await call("GET", `${O}/activity-photos`, A.cg1.token);
@@ -298,16 +305,18 @@ async function main() {
       listByCg.status === 403 && listByFam.status === 403 && listB.status === 200 && listB.body.photos.length === 0, `${listByCg.status} ${listByFam.status} B=${listB.body.photos?.length}`);
 
     // ---------------------------------------------------------------- review → family
-    const queue = await call("GET", `${O}/activity-photos?status=pending`, A.admin.token);
-    check("R1 the agency queue lists the 5 pending photos with resident, activity and caregiver", queue.status === 200 && queue.body.photos.length === 5,
+    const queue = await call("GET", `${O}/activity-photos?status=approved`, A.admin.token);
+    check("R1 the agency history lists the 5 photos shared on sending, with resident, activity, caregiver and provisional expiry (30 days)",
+      queue.status === 200 && queue.body.photos.length === 5 && queue.body.photos.every((p: Json) => p.sharedAt && p.viewable === true
+        && Math.round((Date.parse(p.availableUntil) - Date.parse(p.uploadedAt)) / 86_400_000) === 30),
       `${queue.status} ${queue.body.photos?.length}`);
-    const byCg = await review(A.cg1, photoId, "APPROVE");
-    const noReason = await review(A.admin, photoId, "REJECT");
+    const byCg = await review(A.cg1, photoId, "WITHDRAW", "Intento de cuidadora");
+    const noReason = await review(A.admin, photoId, "REJECT", "Rechazo manual");
     const approve = await review(A.sup, photoId, "APPROVE");
     const famSees = await image(A.fam1, photoId);
     const others = { noPhotos: await image(A.famNoPhotos, photoId), fam2: await image(A.fam2, photoId) };
-    check("R2 only managers review (caregiver 403), a reason is needed to reject; once approved the relative of THAT resident gets the image, nobody else",
-      byCg.status === 403 && noReason.status === 400 && approve.status === 200 && famSees.status === 200 && others.noPhotos.status === 404 && others.fam2.status === 404,
+    check("R2 no manual approval: the caregiver cannot act (403), REJECT is refused (400) and an already shared photo cannot be «approved» (409); the relative of THAT resident gets the image, nobody else",
+      byCg.status === 403 && noReason.status === 400 && approve.status === 409 && famSees.status === 200 && others.noPhotos.status === 404 && others.fam2.status === 404,
       `${byCg.status} ${noReason.status} ${approve.status} fam=${famSees.status} noPhotos=${others.noPhotos.status} fam2=${others.fam2.status}`);
     check("R3 the image response is private: no-store, nosniff, sandboxed, JPEG, no storage path in headers",
       famSees.headers.get("cache-control")?.includes("no-store") === true && famSees.headers.get("x-content-type-options") === "nosniff"
@@ -316,7 +325,8 @@ async function main() {
       `${famSees.headers.get("cache-control")} ${famSees.headers.get("content-type")}`);
     const tl = await call("GET", `${O}/care-recipients/${r1}/timeline`, A.fam1.token);
     const withPhoto = (tl.body.items as Json[] ?? []).filter((i) => i.photo?.visible);
-    check("R4 the family timeline marks only the approved photo (on a NOTE activity) with its reference", tl.status === 200 && withPhoto.length === 1 && withPhoto[0].photo.reference === photoId,
+    check("R4 the family timeline marks the 5 shared photos (on NOTE activities) with their reference and «available until»",
+      tl.status === 200 && withPhoto.length === 5 && withPhoto.some((i) => i.photo.reference === photoId) && withPhoto.every((i) => typeof i.photo.availableUntil === "string"),
       `${tl.status} ${withPhoto.length}`);
 
     // ---------------------------------------------------------------- immediate blocking
@@ -326,6 +336,14 @@ async function main() {
     await q(`UPDATE family_relationships SET can_view_photos=false WHERE user_id=$1`, [A.fam1.userId]); block.noPermission = (await image(A.fam1, photoId)).status;
     await q(`UPDATE family_relationships SET can_view_photos=true, status='revoked' WHERE user_id=$1`, [A.fam1.userId]); block.relationshipRevoked = (await image(A.fam1, photoId)).status;
     await q(`UPDATE family_relationships SET status='active' WHERE user_id=$1`, [A.fam1.userId]);
+    block.reactivatedNeedsAuthorization = (await image(A.fam1, photoId)).status;
+    // Re-authorising does not bring back what was sent before (A2): only for this check, the
+    // authorisation time is placed before the photo, as if it had never been interrupted.
+    await call("PUT", `${O}/care-recipients/${r1}/photo-receipt`, A.fam1.token, { decision: "accepted", textVersion: "test-v1" });
+    block.reauthorisedOldPhoto = (await image(A.fam1, photoId)).status;
+    await q(`ALTER TABLE family_relationships DISABLE TRIGGER family_relationships_photo_receipt_guard`);
+    await q(`UPDATE family_relationships SET photo_receipt_at = now() - interval '1 day' WHERE user_id=$1 AND care_recipient_id=$2`, [A.fam1.userId, r1]);
+    await q(`ALTER TABLE family_relationships ENABLE TRIGGER family_relationships_photo_receipt_guard`);
     await enable(orgA, false); block.switchOff = (await image(A.fam1, photoId)).status; await enable(orgA, true);
     block.back = (await image(A.fam1, photoId)).status;
     const revokeByCg = await call("POST", `${O}/photo-consents/${share.body.consent.id}/revoke`, A.cg1.token, { reason: "Intento de cuidadora" });
@@ -333,12 +351,14 @@ async function main() {
     block.consentRevoked = (await image(A.fam1, photoId)).status;
     await addConsent(A.admin, r1, "PHOTO_SHARE_FAMILY");
     block.newConsentNoReapproval = (await image(A.fam1, photoId)).status;
-    check("B1 the relative is blocked at once when the approval is withdrawn, photo permission removed, relationship revoked, switch off or sharing consent revoked; a new consent needs re-approval",
-      block.withdrawn === 404 && block.reapproved === 200 && block.noPermission === 404 && block.relationshipRevoked === 404 && block.switchOff === 404
-        && block.back === 200 && revokeByCg.status === 403 && revoke.status === 200 && block.consentRevoked === 404 && block.newConsentNoReapproval === 404,
-      JSON.stringify(block) + ` revokeByCg=${revokeByCg.status}`);
     await review(A.admin, photoId, "WITHDRAW", "Revision tras nuevo consentimiento");
-    await review(A.admin, photoId, "APPROVE");
+    const reshowAfterRenew = await review(A.admin, photoId, "APPROVE");
+    check("B1 the relative is blocked at once when the agency withdraws it, photo permission is removed, the relationship ends (and must authorise again), the switch is off or the sharing consent is revoked; a new consent never brings it back, not even by showing it again",
+      block.withdrawn === 404 && block.reapproved === 200 && block.noPermission === 404 && block.relationshipRevoked === 404 && block.switchOff === 404
+        && block.reactivatedNeedsAuthorization === 404 && block.reauthorisedOldPhoto === 404
+        && block.back === 200 && revokeByCg.status === 403 && revoke.status === 200 && block.consentRevoked === 404 && block.newConsentNoReapproval === 404
+        && reshowAfterRenew.status === 409 && reshowAfterRenew.body.error === "PHOTO_CONSENT_REQUIRED",
+      JSON.stringify(block) + ` revokeByCg=${revokeByCg.status} reshow=${reshowAfterRenew.status}:${reshowAfterRenew.body.error}`);
 
     // ---------------------------------------------------------------- concurrency
     const raceImg = await syntheticJpeg({ width: 900, height: 700 });
@@ -349,14 +369,14 @@ async function main() {
       raceUp.filter((r) => r.status === 201).length === 1 && raceUp.filter((r) => r.status === 409).length === 3 && raceObjs === 6,
       `${raceUp.map((r) => r.status).join(",")} objects=${raceObjs}`);
     const racePhoto = raceUp.find((r) => r.status === 201)!.body.photo.id as string;
-    // Both managers are looking at the same «pending» photo.
-    const dual = await Promise.all([review(A.admin, racePhoto, "APPROVE", undefined, "pending"), review(A.admin2, racePhoto, "REJECT", "Rechazo simultaneo", "pending")]);
+    // Both managers are looking at the same shared photo and withdraw it at once.
+    const dual = await Promise.all([review(A.admin, racePhoto, "WITHDRAW", "Retiro simultaneo uno", "approved"), review(A.admin2, racePhoto, "WITHDRAW", "Retiro simultaneo dos", "approved")]);
     const raceState = (await q(`SELECT share_status FROM care_event_photos WHERE id=$1`, [racePhoto])).rows[0].share_status;
-    const stale = await review(A.admin, racePhoto, "WITHDRAW", "Vista desactualizada", "pending");
+    const stale = await review(A.admin, racePhoto, "WITHDRAW", "Vista desactualizada", "approved");
     const raceHist = Number((await q(`SELECT count(*) n FROM care_event_photo_events WHERE photo_id=$1`, [racePhoto])).rows[0].n);
-    check("K2 two managers decide on the same «pending» photo at once: one wins, the other gets 409 PHOTO_STATUS_CHANGED (no silent override); a decision on a stale view is refused",
+    check("K2 two managers withdraw the same shared photo at once: one wins, the other gets 409 PHOTO_STATUS_CHANGED (no silent override); a decision on a stale view is refused",
       dual.filter((r) => r.status === 200).length === 1 && dual.filter((r) => r.status === 409 && r.body.error === "PHOTO_STATUS_CHANGED").length === 1
-        && ["approved", "rejected"].includes(raceState) && raceHist === 2 && stale.status === 409,
+        && raceState === "withdrawn" && raceHist === 3 && stale.status === 409,
       `${dual.map((r) => `${r.status}:${r.body.error ?? ""}`).join(",")} ${raceState} history=${raceHist} stale=${stale.status}`);
     const viewsDuring = await Promise.all([
       ...[1, 2, 3, 4, 5].map(() => image(A.fam1, photoId)),
@@ -473,7 +493,7 @@ async function main() {
       ('ACTIVITY_PHOTO_UPLOADED','PHOTO_CONSENT_RECORDED','PHOTO_CONSENT_REVOKED') GROUP BY action`, [orgA])).rows;
     const access = (await q<{ viewer_kind: string; views: number }>(`SELECT viewer_kind, views FROM care_event_photo_access_log WHERE photo_id=$1`, [photoId])).rows;
     check("A1 audited: history (managers only), uploads, consents recorded and revoked; relatives' views logged once per day with a counter",
-      hist.status === 200 && hist.body.history.length >= 6 && histCg.status === 403 && audit.length === 3
+      hist.status === 200 && hist.body.history.length >= 5 && hist.body.history[1]?.action === "SHARED" && histCg.status === 403 && audit.length === 3
         && access.length === 1 && access[0].viewer_kind === "FAMILY" && access[0].views >= 4,
       `hist=${hist.body.history?.length} cg=${histCg.status} audit=${JSON.stringify(audit)} access=${JSON.stringify(access)}`);
     const keyLeak = bodies.some((b) => b.includes("activity-photos/") || b.includes("photo-consent-forms/") || b.includes(bucket) || b.includes("storage_key"));

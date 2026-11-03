@@ -2,6 +2,9 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { startupDatabaseCheck } from "./config/dbRuntimeRole.js";
 import { photoStorageSelfCheck, photoStorageSelfCheckPassed } from "./modules/activityPhotos/photoStorage.js";
+import { startPhotoRetentionWorker } from "./modules/activityPhotos/retentionJob.js";
+import { startLegalReviewNoticeWorker } from "./modules/activityPhotos/legalReviewNotice.js";
+import { photoStorageIdentityCached } from "./modules/activityPhotos/storageIdentity.js";
 import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverageEscalation.worker.js";
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
@@ -23,11 +26,22 @@ app.listen(env.PORT, () => {
   startLateArrivalWorker();
   // Informe de Turno F2 (128): drafts appear when a visit ends; counts only in logs.
   startShiftReportWorker();
+  // Activity photos v2 (142): expiry/purge job. Off unless PHOTO_RETENTION_JOB=simulate|on;
+  // deleting expired photos also needs the retention policy APPROVED (database).
+  startPhotoRetentionWorker();
+  // Activity photos v2 (144): daily notice of overdue legal-hold reviews to each agency's
+  // administration (count only). Runs even with the expiry job off.
+  startLegalReviewNoticeWorker();
   // Activity photos: once per start, only if the private photo bucket is configured.
   // Logs yes/no values only (no keys, names or URLs); never blocks the server.
   void photoStorageSelfCheck().then((r) => {
     if (!r.configured) return;
     // eslint-disable-next-line no-console
     console.log(`PHOTO_STORAGE_SELF_CHECK ${photoStorageSelfCheckPassed(r) ? "PASS" : "FAIL"} ${JSON.stringify(r)}`);
+    // 145 (H1): bind / verify the bucket's identity marker (a fixed code only).
+    if (photoStorageSelfCheckPassed(r)) {
+      // eslint-disable-next-line no-console
+      void photoStorageIdentityCached().then((c) => console.log(`PHOTO_STORAGE_IDENTITY ${c}`)).catch(() => undefined);
+    }
   }).catch(() => undefined);
 });

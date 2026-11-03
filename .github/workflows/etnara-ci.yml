@@ -282,6 +282,30 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoUpload.ts
 
+      - name: PostgreSQL activity photos v2 (relative's authorization, direct sending, caregiver window, provisional expiry, holds, verified removal, storage errors)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoV2.ts
+
+      - name: PostgreSQL activity photos v2 — V2 expiry/purge job (off by default, simulation, provisional policy blocks deletion, holds, retries, verification, reconciliation, run log)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoRetention.ts
+
+      - name: PostgreSQL activity photos v2 — D1 caregiver removal window and holds, D2 daily legal-review notice (144; job off, admins only, count only, no duplicates, agencies separated, rollback)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoLegalNotice.ts
+
+      - name: PostgreSQL activity photos hardening (145) — storage identity, missing files and circuit breakers, partial deletions, confidential columns, audit scope, relative's authorization vs app_runtime, legal review with the switch off, agencies without administration, code before migrations
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyActivityPhotoHardening.ts
+
       - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

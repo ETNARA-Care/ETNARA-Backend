@@ -138,6 +138,8 @@ async function main() {
   const evR1 = await activity(orgA, sA1, r1, A.cg1.owm!);
   const evR1b = await activity(orgA, sA1, r1, A.cg1.owm!);
   const evR1old = await activity(orgA, sA1, r1, A.cg1.owm!, 13);
+  const evR1c = await activity(orgA, sA1, r1, A.cg1.owm!);
+  const evR1d = await activity(orgA, sA1, r1, A.cg1.owm!);
   const evR2 = await activity(orgA, sA2, r2, A.cg2.owm!);
   const evB = await activity(orgB, sB, rB, B.cg.owm!);
   const file = async (o: string, uploader: string, purpose: "ACTIVITY_PHOTO" | "PHOTO_CONSENT_FORM", key = randomUUID()) =>
@@ -160,12 +162,20 @@ async function main() {
   const consent = (who: P, o: string, rec: string, type: string, form: string) =>
     rt(who.userId, o, `SELECT app_record_photo_consent($1,$2,'LEGAL_REPRESENTATIVE',$3) AS id`, [rec, type, form], { commit: true });
   const familySees = (who: P, o: string) => count(who.userId, o, `SELECT count(*) n FROM care_event_photos`);
+  // 141: sending through the real function (stores the file row, shares at once if the sharing consent is active).
+  const send = (who: P, o: string, ev: string, rec: string) => {
+    const fileId = randomUUID();
+    return rt(who.userId, o, `SELECT app_create_activity_photo($1,$2,$3,1234,$4) AS id`, [ev, fileId, `activity-photos/${o}/${rec}/${fileId}.jpg`, "a".repeat(64)], { commit: true });
+  };
+  const acceptPhotos = (who: P, o: string, rec: string) => rt(who.userId, o, `SELECT app_set_family_photo_receipt($1,'accepted','test-v1') AS at`, [rec], { commit: true });
 
   try {
     // ------------------------------------------------ 0. switch off by default
     const off = await attach(A.cg1, orgA, evR1, fR1);
     check("F1 the switch ACTIVITY_PHOTOS is off by default: attaching is refused", denied(off, /FEATURE_NOT_ENABLED/), String(off.error));
     await enable(orgA, true); await enable(orgB, true);
+    // 141: each relative authorises receiving photos (starts at «not answered»); only photos sent afterwards count (A2).
+    for (const [who, o, rec] of [[A.fam1, orgA, r1], [A.fam1NoPhotos, orgA, r1], [A.fam2, orgA, r2], [B.fam, orgB, rB]] as const) await acceptPhotos(who, o, rec);
 
     // ------------------------------------------------ 1. consent before capture
     const noConsent = await attach(A.cg1, orgA, evR1, fR1);
@@ -279,29 +289,34 @@ async function main() {
     check("A1 only the agency's administrator or supervisor reviews (caregiver, relative, other agency, ETNARA central refused)",
       [asCg, asFam, asB, asPlatform].every((r) => denied(r, /PHOTO_REVIEW_MANAGER_ONLY/)), [asCg, asFam, asB, asPlatform].map((r) => r.error).join(" | "));
     const noShare = await review(A.admin, orgA, p1id, "APPROVE");
-    check("A2 approval needs the family-sharing consent", denied(noShare, /PHOTO_CONSENT_REQUIRED/), String(noShare.error));
+    check("A2 without the sharing consent the photo stays for the agency only; nobody can share it by hand (no manual approval)", denied(noShare, /PHOTO_NOT_SHAREABLE/), String(noShare.error));
     const share = await consent(A.admin, orgA, r1, "PHOTO_SHARE_FAMILY", formA);
     const shareId = share.rows[0]?.id as string;
-    const rejectNoReason = await review(A.admin, orgA, p1id, "REJECT", " ");
+    const rejectNoReason = await review(A.admin, orgA, p1id, "REJECT", "Rechazo manual");
     const pendingWithdraw = await review(A.admin, orgA, p1id, "WITHDRAW", "Retiro de prueba");
     const fakeId = await review(A.admin, orgA, randomUUID(), "APPROVE");
     const otherAgencyPhoto = await review(A.admin, orgA, (await attach(B.cg, orgB, evB, fB)).rows[0]?.id as string, "APPROVE");
-    check("A3 a reason is required to reject; invalid transitions, unknown ids and another agency's photo are refused",
-      denied(rejectNoReason, /PHOTO_REASON_REQUIRED/) && denied(pendingWithdraw, /PHOTO_INVALID_TRANSITION/) && denied(fakeId, /PHOTO_NOT_FOUND/) && denied(otherAgencyPhoto, /PHOTO_NOT_FOUND/),
+    check("A3 REJECT no longer exists (no manual approval); withdrawing an unshared photo, unknown ids and another agency's photo are refused",
+      denied(rejectNoReason, /PHOTO_INVALID_DECISION/) && denied(pendingWithdraw, /PHOTO_INVALID_TRANSITION/) && denied(fakeId, /PHOTO_NOT_FOUND/) && denied(otherAgencyPhoto, /PHOTO_NOT_FOUND/),
       [rejectNoReason, pendingWithdraw, fakeId, otherAgencyPhoto].map((r) => r.error).join(" | "));
-    const approve = await review(A.sup, orgA, p1id, "APPROVE");
+    const sent = await send(A.cg1, orgA, evR1c, r1);
+    const p2id = sent.rows[0]?.id as string;
+    const p2status = (await q(`SELECT share_status FROM care_event_photos WHERE id=$1`, [p2id])).rows[0]?.share_status;
     const seen = { fam1: await familySees(A.fam1, orgA), fam1NoPhotos: await familySees(A.fam1NoPhotos, orgA), fam2: await familySees(A.fam2, orgA), famB: await familySees(B.fam, orgA) };
-    check("A4 once approved, only the relative of THAT resident with photo permission sees it",
-      !approve.error && seen.fam1 === 1 && seen.fam1NoPhotos === 0 && seen.fam2 === 0 && seen.famB === 0, `${approve.error} ${JSON.stringify(seen)}`);
-    const famOwnFile = await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files WHERE id=$1`, [fR1]);
-    check("A5 even for an approved photo the relative never gets the storage reference (PR 2 streams it)", famOwnFile === 0, String(famOwnFile));
-    const withdraw = await review(A.admin, orgA, p1id, "WITHDRAW", "Retirada por la agencia");
+    check("A4 sent with the sharing consent active it is shared at once, and only the authorised relative of THAT resident with photo permission sees it",
+      !sent.error && p2status === "approved" && seen.fam1 === 1 && seen.fam1NoPhotos === 0 && seen.fam2 === 0 && seen.famB === 0, `${sent.error} ${p2status} ${JSON.stringify(seen)}`);
+    const famOwnFile = Number(await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files f JOIN care_event_photos p ON p.file_id = f.id WHERE p.id=$1`, [p2id]))
+      + Number(await count(A.fam1.userId, orgA, `SELECT count(*) n FROM stored_files WHERE id=$1`, [fR1]));
+    check("A5 even for a shared photo the relative never gets the storage reference (PR 2 streams it)", famOwnFile === 0, String(famOwnFile));
+    const withdraw = await review(A.admin, orgA, p2id, "WITHDRAW", "Retirada por la agencia");
     const afterWithdraw = await familySees(A.fam1, orgA);
-    await review(A.admin, orgA, p1id, "APPROVE");
-    const history = (await rt(A.admin.userId, orgA, `SELECT action, from_status, to_status, actor_user_id, reason FROM care_event_photo_events WHERE photo_id=$1 ORDER BY occurred_at, action`, [p1id])).rows;
-    const histOk = history.map((h) => h.action).join(",") === "UPLOADED,APPROVED,WITHDRAWN,APPROVED"
-      && history[0].actor_user_id === A.cg1.userId && history[1].actor_user_id === A.sup.userId && history[2].reason === "Retirada por la agencia";
-    check("A6 withdrawing hides it at once; every change is in the history with actor and reason",
+    const reshow = await review(A.sup, orgA, p2id, "APPROVE");
+    // 145 (M4): the history's free text is read through app_photo_history (the column itself is not readable by app_runtime).
+    const history = (await rt(A.admin.userId, orgA, `SELECT action, from_status, to_status, actor_user_id, reason FROM app_photo_history($1::uuid) ORDER BY occurred_at, (action <> 'UPLOADED'), action`, [p2id])).rows;
+    const histOk = !reshow.error && history.map((h) => h.action).join(",") === "UPLOADED,SHARED,WITHDRAWN,RESHOWN"
+      && history[0].actor_user_id === A.cg1.userId && history[1].actor_user_id === A.cg1.userId && history[2].actor_user_id === A.admin.userId
+      && history[2].reason === "Retirada por la agencia" && history[3].actor_user_id === A.sup.userId;
+    check("A6 the agency can withdraw it (hidden at once) and show it again; every change is in the history with actor and reason (sent, shared automatically, withdrawn, shown again)",
       !withdraw.error && afterWithdraw === 0 && histOk, `${afterWithdraw} ${history.map((h) => `${h.action}:${h.from_status}->${h.to_status}`).join(" ")}`);
     const histReads = {
       cg1: await count(A.cg1.userId, orgA, `SELECT count(*) n FROM care_event_photo_events`),
@@ -325,16 +340,18 @@ async function main() {
     check("V2 revoking the sharing consent blocks the relative immediately", beforeRevoke === 1 && !revoke.error && afterRevoke === 0, `${beforeRevoke} -> ${afterRevoke} ${revoke.error}`);
     const share2 = await consent(A.admin, orgA, r1, "PHOTO_SHARE_FAMILY", formA2);
     const afterRenew = await familySees(A.fam1, orgA);
-    await review(A.admin, orgA, p1id, "WITHDRAW", "Revision tras nuevo consentimiento");
-    await review(A.admin, orgA, p1id, "APPROVE");
+    await review(A.admin, orgA, p2id, "WITHDRAW", "Revision tras nuevo consentimiento");
+    const reshowOld = await review(A.admin, orgA, p2id, "APPROVE");
     const afterReapprove = await familySees(A.fam1, orgA);
-    check("V3 a new consent does not bring old photos back by itself: the agency must approve them again",
-      !share2.error && afterRenew === 0 && afterReapprove === 1, `renew=${afterRenew} reapprove=${afterReapprove}`);
+    check("V3 a new sharing consent never brings back photos shared before it: neither by itself nor by showing them again",
+      !share2.error && afterRenew === 0 && denied(reshowOld, /PHOTO_CONSENT_REQUIRED/) && afterReapprove === 0, `renew=${afterRenew} reshow=${reshowOld.error} after=${afterReapprove}`);
+    const p4 = await send(A.cg1, orgA, evR1d, r1);
+    const beforeCapRevoke = await familySees(A.fam1, orgA);
     await rt(A.admin.userId, orgA, `SELECT app_revoke_photo_consent($1,'Revoca la captura')`, [capId], { commit: true });
     const afterCapRevoke = await familySees(A.fam1, orgA);
     const attachAfterRevoke = await attach(A.cg1, orgA, evR1b, fR1b);
-    check("V4 revoking the capture consent hides the photos taken under it and blocks new ones", afterCapRevoke === 0 && denied(attachAfterRevoke, /PHOTO_CONSENT_REQUIRED/),
-      `${afterCapRevoke} ${attachAfterRevoke.error}`);
+    check("V4 revoking the capture consent hides the photos taken under it and blocks new ones", !p4.error && beforeCapRevoke === 1 && afterCapRevoke === 0 && denied(attachAfterRevoke, /PHOTO_CONSENT_REQUIRED/),
+      `${beforeCapRevoke} -> ${afterCapRevoke} ${attachAfterRevoke.error}`);
     const capAgain = await consent(A.admin, orgA, r1, "PHOTO_CAPTURE", formA);
     const sameAfterNewCapture = await familySees(A.fam1, orgA);
     const consentEdit = await rt(A.admin.userId, orgA, `UPDATE consent_records SET signer_role='PATIENT' WHERE id=$1`, [capAgain.rows[0]?.id], { commit: true });
@@ -344,9 +361,7 @@ async function main() {
       sameAfterNewCapture === 0 && denied(consentEdit, /PHOTO_CONSENT_ONLY_REVOCABLE/) && denied(consentDelete, /PHOTO_CONSENT_APPEND_ONLY/) && denied(consentUnrevoke, /PHOTO_CONSENT_ONLY_REVOCABLE/),
       `${sameAfterNewCapture} | ${consentEdit.error} | ${consentDelete.error} | ${consentUnrevoke.error}`);
     // Fresh approved photo for the switch / relationship checks.
-    const fR1d = await file(orgA, A.cg1.userId, "ACTIVITY_PHOTO");
-    const p3 = await attach(A.cg1, orgA, evR1b, fR1d);
-    await review(A.admin, orgA, p3.rows[0]?.id as string, "APPROVE");
+    const p3 = await send(A.cg1, orgA, evR1b, r1);
     const visible = await familySees(A.fam1, orgA);
     await enable(orgA, false);
     const switchedOff = await familySees(A.fam1, orgA);
@@ -355,16 +370,19 @@ async function main() {
     await q(`UPDATE family_relationships SET status='revoked' WHERE user_id=$1`, [A.fam1.userId]);
     const relRevoked = await familySees(A.fam1, orgA);
     await q(`UPDATE family_relationships SET status='active', can_view_photos=false WHERE user_id=$1`, [A.fam1.userId]);
+    const receiptReset = (await q(`SELECT photo_receipt FROM family_relationships WHERE user_id=$1`, [A.fam1.userId])).rows[0]?.photo_receipt;
     const noPermission = await familySees(A.fam1, orgA);
     await q(`UPDATE family_relationships SET can_view_photos=true WHERE user_id=$1`, [A.fam1.userId]);
-    check("V6 switching the feature off, revoking the relationship or removing photo permission hides photos immediately",
-      visible === 1 && switchedOff === 0 && denied(reviewOff, /FEATURE_NOT_ENABLED/) && relRevoked === 0 && noPermission === 0,
-      `${visible} off=${switchedOff} rel=${relRevoked} perm=${noPermission} ${reviewOff.error}`);
+    check("V6 switching the feature off, revoking the relationship or removing photo permission hides photos immediately; a relationship made active again must authorise again",
+      !p3.error && visible === 1 && switchedOff === 0 && denied(reviewOff, /FEATURE_NOT_ENABLED/) && relRevoked === 0 && noPermission === 0 && receiptReset === "not_answered",
+      `${visible} off=${switchedOff} rel=${relRevoked} perm=${noPermission} receipt=${receiptReset} ${reviewOff.error}`);
     const famOrgB = await count(A.fam1.userId, orgB, `SELECT count(*) n FROM care_event_photos`);
     check("V7 a relative who switches the agency context sees nothing of the other agency", famOrgB === 0, String(famOrgB));
     const retention = await q(`SELECT round(extract(epoch FROM (retention_until - created_at))/86400) d FROM care_event_photos WHERE id=$1`, [p3.rows[0]?.id])
       .then((r) => r.rows[0]?.d, (e) => `ERR ${(e as Error).message}`);
-    check("T1 retention date recorded at 180 days; nothing is deleted automatically", Number(retention) === 180, String(retention));
+    const policy = (await q(`SELECT retention_days, status, purge_enabled FROM photo_retention_policies WHERE purpose='ACTIVITY_PHOTO'`)).rows[0];
+    check("T1 provisional retention (30 days, policy PROVISIONAL, purge disabled) recorded when sent; nothing is deleted automatically",
+      Number(retention) === 30 && policy?.status === "PROVISIONAL" && policy?.purge_enabled === false, `${retention} ${JSON.stringify(policy)}`);
 
     // ------------------------------------------------ 7. HTTP paths that exist today
     for (const p of [A.admin, A.cg1, A.fam1, A.fam2]) {
