@@ -76,6 +76,8 @@ async function main() {
   const origError = console.error;
   console.error = (...args: unknown[]) => { logged.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")); };
   const { hashPassword } = await import("../src/security/password.js");
+  // 145 (H1): this verifier's own bucket is bound as the photos' storage (operator procedure, test DB only).
+  await (await import("./lib/photoStorageTestIdentity.js")).bindTestPhotoBucket(db, s3, bucket);
   const { createApp } = await import("../src/app.js");
   const { pool } = await import("../src/config/db.js");
   const server = createApp().listen(0);
@@ -216,7 +218,8 @@ async function main() {
       foreignResident: (await receipt(A.famYes, rB, "accepted")).status,
     };
     check("G3 nobody but the relative sets it: manager (SQL or API), owner without the function, caregiver, another agency's relative, ETNARA central refused; bad input 400",
-      /PHOTO_RECEIPT_SELF_ONLY/.test(String(otherSets.managerDirect)) && /PHOTO_RECEIPT_SELF_ONLY/.test(otherSets.ownerDirect) && otherSets.managerApi === 404 && otherSets.caregiverApi === 404
+      // 145 (M3): app_runtime no longer holds UPDATE on those columns (permission denied before any trigger).
+      /permission denied/.test(String(otherSets.managerDirect)) && /PHOTO_RECEIPT_SELF_ONLY/.test(otherSets.ownerDirect) && otherSets.managerApi === 404 && otherSets.caregiverApi === 404
         && otherSets.otherAgencyRelative === 403 && [403, 404].includes(otherSets.platform)
         && (await q(`SELECT photo_receipt FROM family_relationships WHERE user_id=$1 AND care_recipient_id=$2`, [A.famNo.userId, r1])).rows[0].photo_receipt === "declined"
         && otherSets.badDecision === 400 && otherSets.badVersion === 400 && otherSets.foreignResident === 404,

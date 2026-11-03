@@ -73,7 +73,9 @@ async function main() {
     PHOTO_MAX_UPLOAD_BYTES: String(6 * 1024 * 1024),
   });
   delete process.env.STORAGE_ENDPOINT; delete process.env.STORAGE_BUCKET;
-  const objects = async (prefix: string) => (await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }))).KeyCount ?? 0;
+  // 145: the bucket's identity marker (_etnara/) is not a photo.
+  const objects = async (prefix: string) => ((await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }))).Contents ?? [])
+    .filter((o) => !(o.Key ?? "").startsWith("_etnara/")).length;
 
   const db = new pg.Client({ connectionString: adminUrl });
   await db.connect();
@@ -89,6 +91,8 @@ async function main() {
   console.error = (...args: unknown[]) => { logged.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")); };
 
   const { hashPassword } = await import("../src/security/password.js");
+  // 145 (H1): this verifier's own bucket is bound as the photos' storage (operator procedure, test DB only).
+  await (await import("./lib/photoStorageTestIdentity.js")).bindTestPhotoBucket(db, s3, bucket);
   const { createApp } = await import("../src/app.js");
   const { pool } = await import("../src/config/db.js");
   const server = createApp().listen(0);

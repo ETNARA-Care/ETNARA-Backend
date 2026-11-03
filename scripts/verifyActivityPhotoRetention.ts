@@ -72,6 +72,10 @@ async function main() {
   console.error = (...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
   console.log = (...a: unknown[]) => { const line = a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" "); logged.push(line); if (!line.startsWith("PHOTO_RETENTION_RUN")) origLog(...a); };
   const { hashPassword } = await import("../src/security/password.js");
+  // 145 (H1): this verifier's own bucket is bound as the photos' storage (operator procedure, test DB only).
+  await (await import("./lib/photoStorageTestIdentity.js")).bindTestPhotoBucket(db, s3, bucket);
+  // 145: a removal re-checks the bucket's identity (cached briefly, failures 60 s): the test clears it when the storage comes back.
+  const { resetPhotoStorageIdentityCacheForTests: resetIdentityCache } = await import("../src/modules/activityPhotos/storageIdentity.js");
   const { createApp } = await import("../src/app.js");
   const { pool } = await import("../src/config/db.js");
   const { runRetentionCycle, startPhotoRetentionWorker } = await import("../src/modules/activityPhotos/retentionJob.js");
@@ -188,7 +192,7 @@ async function main() {
     await shift("care_event_photos", "hold_review_at = now() - interval '1 minute'", "id=$1", [lapsed.id]);
     const revoked = await send(A.cg, sA, rA);                    // relationship ended + consent revoked later (not expired)
     const qd = await send(A.cg, sA, rA);                         // a manual removal whose purge failed
-    storage.mode = "down"; await call("POST", `/organizations/${orgA}/activity-photos/${qd.id}/delete`, A.admin.token, { reason: "Eliminada por la agencia" }); storage.mode = "off";
+    storage.mode = "down"; await call("POST", `/organizations/${orgA}/activity-photos/${qd.id}/delete`, A.admin.token, { reason: "Eliminada por la agencia" }); storage.mode = "off"; resetIdentityCache();
     const eB = await send(B.cg, sB, rB); await expire(eB.id);    // other agency, expired
     const formsBefore = await countObjects("photo-consent-forms/");
 
@@ -238,36 +242,42 @@ async function main() {
     const f = await send(A.cg, sA, rA); await expire(f.id);
     storage.mode = "down";
     const down = await run("on");
-    storage.mode = "off";
+    storage.mode = "off"; resetIdentityCache();
     const fq1 = (await q(`SELECT attempts, last_error_code, purged_at FROM photo_purge_queue WHERE photo_id=$1`, [f.id])).rows[0];
     const blocked = await image(A.admin, f.id);
     const fAfterDown = { exists: await exists(f.key), status: (await state(f.id)).share_status };
-    const tooSoon = await run("on");
-    const fq2 = (await q(`SELECT attempts FROM photo_purge_queue WHERE photo_id=$1`, [f.id])).rows[0];
-    const stillThereBeforeRetry = await exists(f.key);
-    await shift("photo_purge_queue", "last_attempt_at = now() - interval '3 minutes'", "photo_id=$1", [f.id]);
+    // 145 (H1): with the storage unreachable the job does not even try (identity check first): nothing attempted, nothing marked done.
     const retry = await run("on");
-    check("S1 storage down: access is cut at once, the purge is NOT marked done and the error is kept; no retry before the back-off; after it, the retry deletes and verifies",
-      down.expiredMarked >= 1 && down.purgeFailed >= 1 && fAfterDown.status === "deleted" && fq1.attempts === 1 && fq1.last_error_code && fq1.purged_at === null && blocked.status === 404 && fAfterDown.exists
-        && fq2.attempts === 1 && stillThereBeforeRetry && retry.purgedVerified >= 1 && !(await exists(f.key)) && (await state(f.id)).purge_verified_at !== null,
-      `${JSON.stringify(fq1)} soon=${tooSoon.purgedVerified}/${fq2.attempts} retry=${retry.purgedVerified} marked=${down.expiredMarked} failed=${down.purgeFailed} blocked=${blocked.status} before=${stillThereBeforeRetry} after=${await exists(f.key)} st=${JSON.stringify(await state(f.id))}`);
+    check("S1 storage down: access is cut at once (tombstone), the job does not touch the bucket (STORAGE_UNREACHABLE, 0 attempts, no false «deleted»); when it is back, the next run deletes and verifies",
+      down.expiredMarked >= 1 && down.purgeFailed === 0 && down.storageCheck === "STORAGE_UNREACHABLE" && down.errorCodes.includes("STORAGE_UNREACHABLE")
+        && fAfterDown.status === "deleted" && fq1.attempts === 0 && fq1.purged_at === null && blocked.status === 404 && fAfterDown.exists
+        && retry.storageCheck === "OK" && retry.purgedVerified >= 1 && !(await exists(f.key)) && (await state(f.id)).purge_verified_at !== null,
+      `${JSON.stringify(fq1)} check=${down.storageCheck} retry=${retry.purgedVerified} marked=${down.expiredMarked} failed=${down.purgeFailed} blocked=${blocked.status} after=${await exists(f.key)}`);
     const g = await send(A.cg, sA, rA); await expire(g.id);
     storage.mode = "fake-delete";
     const fake = await run("on");
-    storage.mode = "off";
-    const gq = (await q(`SELECT last_error_code, purged_at FROM photo_purge_queue WHERE photo_id=$1`, [g.id])).rows[0];
-    check("S2 a delete that does not delete is caught by the verification (STILL_PRESENT): never a false «deleted»", fake.purgeFailed >= 1 && gq.last_error_code === "STILL_PRESENT" && gq.purged_at === null && (await exists(g.key)),
-      JSON.stringify(gq));
+    storage.mode = "off"; resetIdentityCache();
+    const gq = (await q(`SELECT last_error_code, purged_at, attempts FROM photo_purge_queue WHERE photo_id=$1`, [g.id])).rows[0];
+    const gSoon = await run("on");
+    const gq2 = (await q(`SELECT attempts FROM photo_purge_queue WHERE photo_id=$1`, [g.id])).rows[0];
+    check("S2 a delete that does not delete is caught by the verification (STILL_PRESENT): never a false «deleted»; no retry before the back-off",
+      fake.purgeFailed >= 1 && gq.last_error_code === "STILL_PRESENT" && gq.purged_at === null && (await exists(g.key)) && gq.attempts === 1 && gq2.attempts === 1 && gSoon.purgedVerified === 0,
+      `${JSON.stringify(gq)} soon=${gSoon.purgedVerified}/${gq2.attempts}`);
     await shift("photo_purge_queue", "enqueued_at = now() - interval '25 hours', last_attempt_at = now() - interval '7 hours'", "photo_id=$1", [g.id]);
     storage.mode = "down";
     const old = await run("on");
-    storage.mode = "off";
+    storage.mode = "off"; resetIdentityCache();
     check("S3 a removal pending for more than 24 h raises an alert (counts only) and is counted in the run log", old.pendingOver24h >= 1 && logged.some((l) => l.includes("PHOTO_PURGE_ALERT")),
       `pendingOver24h=${old.pendingOver24h}`);
     await shift("photo_purge_queue", "last_attempt_at = now() - interval '7 hours'", "photo_id=$1", [g.id]);
     await run("on");
 
     // ---------------------------------------------------------------- 5. reconciliation (weekly)
+    // The CI database keeps the photos of earlier suites, whose files live in THEIR buckets: here they would all
+    // be «missing» and (145 H1) halt the reconciliation as an anomaly. Placeholders make this bucket complete.
+    const foreign = (await q<{ k: string }>(`SELECT f.storage_key k FROM care_event_photos p JOIN stored_files f ON f.id = p.file_id
+      WHERE p.deleted_at IS NULL AND p.organization_id <> ALL($1::uuid[])`, [[orgA, orgB]])).rows;
+    for (const r of foreign) await s3.send(new PutObjectCommand({ Bucket: bucket, Key: r.k, Body: Buffer.from("placeholder"), ContentType: "image/jpeg" }));
     const orphanKey = `activity-photos/${orgA}/${rA}/${randomUUID()}.jpg`;
     await s3.send(new PutObjectCommand({ Bucket: bucket, Key: orphanKey, Body: await jpeg(9), ContentType: "image/jpeg" }));
     const m = await send(A.cg, sA, rA);
@@ -276,11 +286,12 @@ async function main() {
     const simRec = await run("simulate", true, { orphanMinAgeMs: 0, orphanDeleteMinAgeMs: 0 });
     const mAfterSim = (await state(m.id)).share_status;
     const provRec = await run("on", true, { orphanMinAgeMs: 0, orphanDeleteMinAgeMs: 0 });
-    check("R1 reconciliation with the PROVISIONAL policy: the orphan file is found but NOT deleted; the photo whose file is gone is reported (simulate) and tombstoned RECONCILED (on); nobody sees it",
-      simRec.reconciled && simRec.orphansFound === 1 && simRec.missingMarked >= 1 && mAfterSim !== "deleted" // simulate changed nothing
-        && provRec.orphansFound === 1 && provRec.orphansDeleted === 0 && (await exists(orphanKey)) && provRec.missingMarked >= 1
-        && (await state(m.id)).deletion_kind === "RECONCILED" && (await image(A.admin, m.id)).status === 404,
-      JSON.stringify({ sim: [simRec.orphansFound, simRec.missingMarked], on: [provRec.orphansFound, provRec.orphansDeleted, provRec.missingMarked], orphan: await exists(orphanKey), m: await state(m.id), img: (await image(A.admin, m.id)).status }));
+    const mFinding = (await q(`SELECT status, last_outcome FROM photo_missing_findings WHERE photo_id=$1`, [m.id])).rows[0];
+    check("R1 reconciliation with the PROVISIONAL policy: the orphan file is found but NOT deleted; the photo whose file is gone is reported (simulate and on) as a FINDING and NOT tombstoned (145 H1: never with a provisional policy); its image answers 404, not 500",
+      simRec.reconciled && simRec.orphansFound === 1 && simRec.missingFound >= 1 && mAfterSim !== "deleted" // simulate changed nothing
+        && provRec.orphansFound === 1 && provRec.orphansDeleted === 0 && (await exists(orphanKey)) && provRec.missingFound >= 1 && provRec.missingMarked === 0
+        && (await state(m.id)).share_status !== "deleted" && mFinding?.status === "open" && mFinding?.last_outcome === "policy_provisional" && (await image(A.admin, m.id)).status === 404,
+      JSON.stringify({ sim: [simRec.orphansFound, simRec.missingFound], on: [provRec.orphansFound, provRec.orphansDeleted, provRec.missingFound, provRec.missingMarked], orphan: await exists(orphanKey), m: (await state(m.id)).share_status, finding: mFinding, img: (await image(A.admin, m.id)).status }));
     const young = await run("on", true);
     check("R2 an orphan younger than 1 h (an upload in flight) is not even counted; reconciliation is weekly (auto does not repeat it)",
       young.orphansFound === 0 && (await run("on", "auto")).reconciled === false, `${young.orphansFound}`);
@@ -289,10 +300,10 @@ async function main() {
     const keep = await send(A.cg, sA, rA);
     storage.mode = "down";
     const downRec = await run("on", true, { orphanMinAgeMs: 0, orphanDeleteMinAgeMs: 0 });
-    storage.mode = "off";
+    storage.mode = "off"; resetIdentityCache();
     check("R3 with an APPROVED policy, an orphan older than the retention period is deleted (verified); with the storage down nothing is wrongly marked missing",
       apprRec.orphansDeleted === 1 && !(await exists(orphanKey)) && downRec.missingMarked === 0 && (await state(keep.id)).share_status !== "deleted" && (await exists(keep.key)) && downRec.errorCodes.length > 0,
-      `${apprRec.orphansDeleted} down=${downRec.missingMarked} ${downRec.errorCodes.join(",")}`);
+      `${apprRec.orphansDeleted} halted=${apprRec.reconcileHalted} found=${apprRec.orphansFound} missing=${apprRec.missingFound} check=${apprRec.storageCheck} down=${downRec.missingMarked} ${downRec.errorCodes.join(",")}`);
 
     // ---------------------------------------------------------------- 5b. legal hold (143): obligation in force, no ordinary limits
     const legal = (who: P, id: string, body: Json, o = orgA) => call("POST", `/organizations/${o}/activity-photos/${id}/legal-hold`, who.token, body);
@@ -358,8 +369,8 @@ async function main() {
     const cgUndo = await call("POST", `/organizations/${orgA}/activity-photos/${lc.id}/delete`, A.cg.token, {});
     const undoAudit = (await q(`SELECT actor_user_id, new_value->>'kind' AS kind FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_DELETED'`, [lc.id])).rows;
     const undoHist = (await q(`SELECT action FROM care_event_photo_events WHERE photo_id=$1 ORDER BY occurred_at, id`, [lc.id])).rows.map((r) => r.action);
-    check("L8 the caregiver cannot remove her own photo while it is under a legal hold (409); after release she can, and it is audited (CAREGIVER_UNDO by her) and in the history",
-      cgUndoHeld.status === 409 && cgUndoHeld.body.error === "PHOTO_ON_LEGAL_HOLD" && cgUndo.status === 200 && cgUndo.body.photo?.kind === "CAREGIVER_UNDO"
+    check("L8 the caregiver cannot remove her own photo while it is under a legal hold (409 PHOTO_KEPT_BY_AGENCY, 145: never which hold); after release she can, and it is audited (CAREGIVER_UNDO by her) and in the history",
+      cgUndoHeld.status === 409 && cgUndoHeld.body.error === "PHOTO_KEPT_BY_AGENCY" && cgUndo.status === 200 && cgUndo.body.photo?.kind === "CAREGIVER_UNDO"
         && undoAudit.length === 1 && undoAudit[0].actor_user_id === A.cg.userId && undoAudit[0].kind === "CAREGIVER_UNDO" && undoHist.includes("DELETED") && !(await exists(lc.key)),
       `held=${cgUndoHeld.status} ${cgUndoHeld.body.error} undo=${cgUndo.status} audit=${JSON.stringify(undoAudit)} hist=${undoHist.join(",")}`);
     const lm = await send(A.cg, sA, rA);
@@ -373,12 +384,13 @@ async function main() {
     const rel = await legal(A.admin, lp.id, { action: "RELEASE", basis: "La obligacion termino segun el abogado" });
     const afterRelease = await run("on");
     const lHist = (await q(`SELECT action, actor_user_id FROM care_event_photo_events WHERE photo_id=$1 AND action LIKE 'LEGAL_HOLD_%' ORDER BY occurred_at`, [lp.id])).rows;
-    const lAudit = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action LIKE 'ACTIVITY_PHOTO_LEGAL_HOLD_%'`, [lp.id])).rows[0].n);
+    const lAudit = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action LIKE 'ACTIVITY_PHOTO_LEGAL_HOLD_%' AND action <> 'ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED'`, [lp.id])).rows[0].n);
     check("L6 only an administrator releases it, with a reason; after release the expired photo follows the ordinary rules (deleted and verified); every action in the history and the audit log",
       relSup.status === 403 && relShort.status === 400 && rel.status === 200 && afterRelease.expiredMarked >= 1 && (await state(lp.id)).deletion_kind === "RETENTION" && !(await exists(lp.key))
         && lHist.filter((x) => x.action === "LEGAL_HOLD_PLACED").length === 1 && lHist.filter((x) => x.action === "LEGAL_HOLD_REVIEWED").length === 5
         && lHist.filter((x) => x.action === "LEGAL_HOLD_RELEASED").length === 1 && lHist.every((x) => x.actor_user_id === A.admin.userId) && lAudit === 7,
       `${relSup.status} ${relShort.status} ${rel.status} marked=${afterRelease.expiredMarked} hist=${lHist.length} audit=${lAudit}`);
+    // (145: views of a held photo are also audited, as ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED; L6 counts the decisions only.)
 
     // ---------------------------------------------------------------- 6. concurrency, audit, isolation, rollback guard
     const both = await Promise.all([run("simulate"), run("simulate")]);

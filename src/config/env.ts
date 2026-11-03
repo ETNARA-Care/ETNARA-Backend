@@ -69,6 +69,8 @@ const envSchema = z.object({
   // photos under a LEGAL HOLD have an overdue review (count + link only). Independent of
   // PHOTO_RETENTION_JOB: it keeps working with the expiry job off. "off" only stops the notice.
   PHOTO_LEGAL_HOLD_NOTICE: z.enum(["on", "off"]).default("on"),
+  // 145 (§4): notice when an agency has no active administrator (supervisors + ETNARA central). "off" stops it.
+  AGENCY_ADMIN_GAP_NOTICE: z.enum(["on", "off"]).default("on"),
   PHOTO_MAX_UPLOAD_BYTES: z
     .string()
     .default("15728640")

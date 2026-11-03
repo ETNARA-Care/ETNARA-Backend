@@ -34,9 +34,18 @@ export async function listOrganizationFeatures(userId: string, organizationId: s
       ORDER BY e.occurred_at DESC LIMIT 50`.execute(trx);
     return {
       features: rows.rows.map((r) => ({ code: r.feature_code, enabled: r.enabled, updatedAt: r.updated_at })),
+      // 145 (§5): one boolean so central is warned before switching photos off. Never how many or which.
+      activityPhotosLegalHolds: await platformOrgHasLegalHolds(trx, organizationId),
       history: history.rows.map((h) => ({ code: h.feature_code, enabled: h.enabled, reason: h.reason, occurredAt: h.occurred_at, actorEmail: h.actor_email })),
     };
   });
+}
+
+/** false (not an error) on a database without 145. */
+async function platformOrgHasLegalHolds(trx: Parameters<Parameters<typeof withPlatformContext>[1]>[0], organizationId: string): Promise<boolean> {
+  const fn = await sql<{ ok: boolean }>`SELECT to_regprocedure('public.app_platform_org_has_legal_holds(uuid)') IS NOT NULL AS ok`.execute(trx);
+  if (!fn.rows[0]?.ok) return false;
+  return (await sql<{ h: boolean }>`SELECT app_platform_org_has_legal_holds(${organizationId}::uuid) AS h`.execute(trx)).rows[0]?.h === true;
 }
 
 export async function setOrganizationFeature(userId: string, organizationId: string, code: (typeof FEATURE_CODES)[number], enabled: boolean, reason: string) {
@@ -62,7 +71,9 @@ export async function setOrganizationFeature(userId: string, organizationId: str
     if (code === "FACTURACION" && enabled) {
       initialBillingPermissions = (await sql<{ n: number }>`SELECT app_billing_bootstrap_permissions(${organizationId}::uuid) AS n`.execute(trx)).rows[0]?.n ?? 0;
     }
-    return { code, enabled, changed, initialBillingPermissions };
+    // 145 (§5): never blocks switching photos off (an emergency must be possible); only warns.
+    const legalHoldsKept = code === "ACTIVITY_PHOTOS" && !enabled ? await platformOrgHasLegalHolds(trx, organizationId) : false;
+    return { code, enabled, changed, initialBillingPermissions, legalHoldsKept };
   });
 }
 

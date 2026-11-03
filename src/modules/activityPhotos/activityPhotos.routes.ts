@@ -7,7 +7,7 @@ import { respondInternalError } from "../../observability/internalError.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
   consentQuerySchema, legalHoldActivityPhoto, legalHoldSchema, deleteActivityPhoto, deleteSchema, getFamilyPhotoReceipt, holdActivityPhoto, holdSchema, listPhotoRecipients,
-  receiptSchema, setFamilyPhotoReceipt, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
+  receiptSchema, setFamilyPhotoReceipt, getActivityPhotoEligibility, getActivityPhotoForEvent, getShiftPhotoEligibility, getAgencyPhotoHistory, getAgencyPhotoMode, listAgencyPhotos, listPhotoConsents, listPhotosQuerySchema,
   PhotoError, readActivityPhoto, sendPrivateImage, readPhotoConsentForm, recordPhotoConsent, reviewActivityPhoto, reviewSchema, revokePhotoConsent, revokeSchema,
   uploadActivityPhoto,
 } from "./activityPhotos.service.js";
@@ -82,6 +82,14 @@ router.get("/organizations/:organizationId/care-events/:careEventId/photo", requ
 });
 
 // Agency: review queue and decisions.
+// 145: which photo screen this person gets here ("full", "legal-review" with the switch off, or "off").
+router.get("/organizations/:organizationId/activity-photos/mode", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const p = ids(req, res, "organizationId"); if (!p) return;
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.json(await getAgencyPhotoMode(req.auth!.userId, p[0])); }
+  catch (err) { fail(err, req, res); }
+});
+
 router.get("/organizations/:organizationId/activity-photos", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const p = ids(req, res, "organizationId"); if (!p) return;
   const q = listPhotosQuerySchema.safeParse(req.query);

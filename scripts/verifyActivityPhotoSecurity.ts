@@ -311,7 +311,8 @@ async function main() {
     const withdraw = await review(A.admin, orgA, p2id, "WITHDRAW", "Retirada por la agencia");
     const afterWithdraw = await familySees(A.fam1, orgA);
     const reshow = await review(A.sup, orgA, p2id, "APPROVE");
-    const history = (await rt(A.admin.userId, orgA, `SELECT action, from_status, to_status, actor_user_id, reason FROM care_event_photo_events WHERE photo_id=$1 ORDER BY occurred_at, (action <> 'UPLOADED'), action`, [p2id])).rows;
+    // 145 (M4): the history's free text is read through app_photo_history (the column itself is not readable by app_runtime).
+    const history = (await rt(A.admin.userId, orgA, `SELECT action, from_status, to_status, actor_user_id, reason FROM app_photo_history($1::uuid) ORDER BY occurred_at, (action <> 'UPLOADED'), action`, [p2id])).rows;
     const histOk = !reshow.error && history.map((h) => h.action).join(",") === "UPLOADED,SHARED,WITHDRAWN,RESHOWN"
       && history[0].actor_user_id === A.cg1.userId && history[1].actor_user_id === A.cg1.userId && history[2].actor_user_id === A.admin.userId
       && history[2].reason === "Retirada por la agencia" && history[3].actor_user_id === A.sup.userId;

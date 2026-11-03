@@ -2,6 +2,26 @@
 
 ## Current Status
 
+## 2026-11-03 — Fotos v2: endurecimiento tras la auditoría (migración 145) — solo local
+- **Solo local, rama `claude/activity-photos-v2-hardening`** (sobre #250 `442811c`, sin publicar). Producción sin cambios. `PHOTO_RETENTION_JOB` sigue en `off`; política de 30 días `PROVISIONAL`.
+- **H1, eliminación masiva:**
+  - El bucket debe probar su identidad antes de cualquier purga o conciliación: marcador `_etnara/storage-identity.json` igual al de `photo_storage_identity`. Procedimiento en `ops/145_photo_storage_identity.md`.
+  - Un archivo ausente es solo un hallazgo (`photo_missing_findings`). Se marca como eliminado solo con la política APPROVED, tras una segunda conciliación ≥ 24 h después y sin retenciones.
+  - Frenos: `MISSING_ANOMALY`, `STORAGE_ERRORS`, `ORPHAN_ANOMALY` y `PURGE_HALTED`. Una imagen sin archivo responde 404, no 500.
+- **M1:** la cuidadora recibe `PHOTO_KEPT_BY_AGENCY` para cualquier retención.
+- **M2:** `audit_log_photo_scope`: ETNARA central no lee acciones de fotos, consentimientos ni autorizaciones; las de retención legal solo las lee ORGANIZATION_ADMIN.
+- **M3:** `app_runtime` sin INSERT ni UPDATE en `family_relationships.photo_receipt(_at)` (privilegio por columna).
+- **M4 / §6:** `app_runtime` sin SELECT en `hold_reason`, `legal_hold_basis`, `legal_hold_reference`, `legal_hold_by_user_id`, `review_reason`, `deletion_reason` ni `care_event_photo_events.reason`.
+  - Se leen con `app_photo_confidential()` y `app_photo_history()`; la base y la referencia legales solo las recibe la administración.
+- **M5:** las notificaciones y el aviso funcionan contra una base sin 144/145. Regla de despliegue: migraciones antes que el código.
+- **L1:** la subida tardía ya no da 500. **I2:** `app_photo_hold_active` comprueba la agencia.
+- **§4:** `app_org_admin_gap_notify()`: un aviso por episodio, tras 24 h, a la supervisión (`AGENCY_NO_ACTIVE_ADMIN`) y a ETNARA central (`PLATFORM_AGENCY_NO_ACTIVE_ADMIN`). `AGENCY_ADMIN_GAP_NOTICE=off` lo detiene.
+- **§5:** con `ACTIVITY_PHOTOS` apagado, modo `legal-review` para ORGANIZATION_ADMIN.
+  - Lista de retenciones legales, revisar y levantar; ver la imagen queda auditado.
+  - Se mantiene el aviso diario.
+  - Central recibe un sí/no al apagar, sin bloqueo. Endpoint `GET …/activity-photos/mode`.
+- Pruebas: `verifyActivityPhotoHardening.ts` (paso nuevo en CI); suites de fotos 041–045b actualizadas donde el comportamiento cambió a propósito; reversión probada.
+
 ## 2026-11-02 — Fotos v2: D1 (ventana de «Quitar foto») y D2 (aviso diario de retenciones legales vencidas, migración 144) — solo local
 - **Solo local, rama `claude/activity-photos-v2-legal-hold`** (sobre #250, sin publicar). Producción sin cambios.
 - **D1 (aprobado):** la cuidadora puede quitar su foto solo hasta 1 h después de cerrar la visita, con confirmación y auditoría, y nunca mientras haya una retención vigente (ordinaria o legal).

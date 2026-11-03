@@ -62,6 +62,8 @@ async function main() {
   console.error = (...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
   console.log = (...a: unknown[]) => { logged.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); };
   const { hashPassword } = await import("../src/security/password.js");
+  // 145 (H1): this verifier's own bucket is bound as the photos' storage (operator procedure, test DB only).
+  await (await import("./lib/photoStorageTestIdentity.js")).bindTestPhotoBucket(db, s3, bucket);
   const { createApp } = await import("../src/app.js");
   const { pool } = await import("../src/config/db.js");
   const { env } = await import("../src/config/env.js");
@@ -171,16 +173,16 @@ async function main() {
     const hView = (await ref(A.cg, h1.ev)).body.photo as Json;
     const hDel = await remove(A.cg, h1.id);
     const hAudit = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_DELETED'`, [h1.id])).rows[0].n);
-    check("K1 under an ordinary hold in force the caregiver sees no «Quitar foto» (canRemove false, keptByAgency true) and the backend refuses it (409 PHOTO_ON_HOLD); the file stays, nothing audited as deleted",
-      hView?.canRemove === false && hView?.keptByAgency === true && hDel.status === 409 && hDel.body.error === "PHOTO_ON_HOLD" && (await exists(h1.key)) && hAudit === 0,
+    check("K1 under an ordinary hold in force the caregiver sees no «Quitar foto» (canRemove false, keptByAgency true) and the backend refuses it (145: 409 PHOTO_KEPT_BY_AGENCY, the same code for any hold); the file stays, nothing audited as deleted",
+      hView?.canRemove === false && hView?.keptByAgency === true && hDel.status === 409 && hDel.body.error === "PHOTO_KEPT_BY_AGENCY" && (await exists(h1.key)) && hAudit === 0,
       `${JSON.stringify(hView)} delete=${hDel.status} ${hDel.body.error} audit=${hAudit}`);
     const l1 = await send(A.cg, sA, rA);
     await legal(A.admin, l1.id, { action: "PLACE", basis, reference, reviewAt: inDays(30) });
     const lView = (await ref(A.cg, l1.ev)).body.photo as Json;
     const lDel = await remove(A.cg, l1.id);
     const viewText = JSON.stringify(lView);
-    check("K2 under a legal hold the same: no button, 409 PHOTO_ON_LEGAL_HOLD; she learns only that the agency keeps it (never the basis, the reference or which kind of hold)",
-      lView?.canRemove === false && lView?.keptByAgency === true && lDel.status === 409 && lDel.body.error === "PHOTO_ON_LEGAL_HOLD" && (await exists(l1.key))
+    check("K2 under a legal hold the same: no button, 409 PHOTO_KEPT_BY_AGENCY (145: identical to K1); she learns only that the agency keeps it (never the basis, the reference or which kind of hold)",
+      lView?.canRemove === false && lView?.keptByAgency === true && lDel.status === 409 && lDel.body.error === "PHOTO_KEPT_BY_AGENCY" && (await exists(l1.key))
         && Object.keys(lView ?? {}).sort().join(",") === "canRemove,id,keptByAgency,sharedWithFamily,status" && !viewText.includes("SINT") && !viewText.includes("judicial"),
       `${viewText} delete=${lDel.status} ${lDel.body.error}`);
     await hold(A.admin, h1.id, { action: "RELEASE", reason: "Queja sintetica cerrada sin conservar" });
@@ -229,17 +231,17 @@ async function main() {
     const stopJob = startPhotoRetentionWorker();
     const stopNotice = startLegalReviewNoticeWorker();
     let first: Json[] = [];
-    for (let i = 0; i < 40 && first.length < 3; i++) { await new Promise((r) => setTimeout(r, 250)); first = await notices(); }
+    for (let i = 0; i < 40 && first.length < 4; i++) { await new Promise((r) => setTimeout(r, 250)); first = await notices(); }
     stopJob(); stopNotice();
     const runsAfter = Number((await q(`SELECT count(*) n FROM photo_retention_runs`)).rows[0].n);
     check("N2 with the expiry/purge job OFF (PHOTO_RETENTION_JOB unset → off; it did not run) the notice worker still creates today's notices",
-      env.PHOTO_RETENTION_JOB === "off" && env.PHOTO_LEGAL_HOLD_NOTICE === "on" && runsAfter === runsBefore && first.length === 3,
+      env.PHOTO_RETENTION_JOB === "off" && env.PHOTO_LEGAL_HOLD_NOTICE === "on" && runsAfter === runsBefore && first.length === 4,
       `job=${env.PHOTO_RETENTION_JOB} notice=${env.PHOTO_LEGAL_HOLD_NOTICE} runs=${runsBefore}->${runsAfter} notices=${first.length}`);
 
     const byUser = Object.fromEntries(first.map((r) => [r.user_id, r]));
-    const others = [A.sup, A.cg, A.fam, A.adminGone, C.admin, B.cg].filter((p) => byUser[p.userId]).map((p) => p.email);
-    check("N3 only the ACTIVE administrators of each agency receive it, each with their own agency's count: A's two admins get 2, B's admin gets 1; nobody else (supervisor, caregiver, family, a revoked admin, agency C with the switch off, ETNARA central)",
-      byUser[A.admin.userId]?.item_count === 2 && byUser[A.admin2.userId]?.item_count === 2 && byUser[B.admin.userId]?.item_count === 1
+    const others = [A.sup, A.cg, A.fam, A.adminGone, B.cg, C.cg].filter((p) => byUser[p.userId]).map((p) => p.email);
+    check("N3 only the ACTIVE administrators of each agency receive it, each with their own agency's count: A's two admins get 2, B's admin gets 1, C's admin 1 (145 §5: also with the switch off); nobody else (supervisor, caregiver, family, a revoked admin, ETNARA central)",
+      byUser[C.admin.userId]?.item_count === 1 && byUser[C.admin.userId]?.organization_id === orgC && byUser[A.admin.userId]?.item_count === 2 && byUser[A.admin2.userId]?.item_count === 2 && byUser[B.admin.userId]?.item_count === 1
         && byUser[A.admin.userId]?.organization_id === orgA && byUser[B.admin.userId]?.organization_id === orgB && others.length === 0 && !byUser[platformUser],
       `${first.map((r) => `${r.email.split("-").slice(1, 3).join("-")}:${r.item_count}`).join(" ")} others=${others.join(",")}`);
     const rowText = JSON.stringify(first);
@@ -252,7 +254,7 @@ async function main() {
     const parallel = await Promise.all([runLegalReviewNotice(), runLegalReviewNotice(), runLegalReviewNotice()]);
     const stillThree = (await notices()).length;
     check("N5 no duplicates: running again the same day (also three at once, as several replicas or hourly ticks would) creates nothing more",
-      again === 0 && parallel.every((x) => x === 0) && stillThree === 3, `again=${again} parallel=${parallel} total=${stillThree}`);
+      again === 0 && parallel.every((x) => x === 0) && stillThree === 4, `again=${again} parallel=${parallel} total=${stillThree}`);
 
     const api = await call("GET", "/me/notifications", A.admin.token);
     const item = (api.body.items as Json[]).find((x) => x.type === NOTICE);
@@ -286,15 +288,15 @@ async function main() {
     const today = await notices(`n.notice_day = (now() AT TIME ZONE 'America/Puerto_Rico')::date`);
     const todayA = today.filter((r) => r.organization_id === orgA);
     check("N8 daily: the next day a new notice is created (one per administrator) with the CURRENT count (A: 1 after a review was done); yesterday's stays as it was",
-      nextDay === 3 && todayA.length === 2 && todayA.every((r) => r.item_count === 1) && (await notices()).length === 6, `created=${nextDay} todayA=${todayA.map((r) => r.item_count)}`);
+      nextDay === 4 && todayA.length === 2 && todayA.every((r) => r.item_count === 1) && (await notices()).length === 8, `created=${nextDay} todayA=${todayA.map((r) => r.item_count)}`);
 
     // Nothing overdue → nothing more.
     await legal(A.admin, a2.id, { action: "REVIEW", basis: `${basis} (revisado)`, reviewAt: inDays(60) });
     await legal(B.admin, b1.id, { action: "REVIEW", basis: `${basis} (revisado)`, reviewAt: inDays(60) });
     await q(`UPDATE notifications SET notice_day = notice_day - 1 WHERE notification_type='${NOTICE}'`);
     const none = await runLegalReviewNotice();
-    check("N9 when every review is up to date nothing is created; agency C (switch off) never got one although its review is overdue",
-      none === 0 && (await notices(`n.organization_id = $1`, [orgC])).length === 0, `created=${none}`);
+    check("N9 when every review of A and B is up to date they get nothing; agency C (switch off, review still overdue) keeps getting its daily notice (145 §5)",
+      none === 1 && (await notices(`n.organization_id = $1`, [orgC])).length === 3, `created=${none}`);
 
     const noticeLines = logged.filter((l) => l.includes("PHOTO_LEGAL_HOLD_NOTICE"));
     const leak = noticeLines.some((l) => [orgA, orgB, a2.id, a3.id, b1.id, reference, A.admin.email].some((x) => l.includes(x)));
@@ -316,6 +318,10 @@ async function main() {
     const after = await q(`SELECT count(*) n FROM care_event_photos WHERE legal_hold_basis IS NOT NULL`);
     await q(readFileSync(new URL("../migrations/144_activity_photos_legal_review_notice.sql", import.meta.url), "utf8"));
     await q(`INSERT INTO schema_migrations (filename) VALUES ('144_activity_photos_legal_review_notice.sql') ON CONFLICT DO NOTHING`);
+    // 145 redefines the notice function (switch-off agencies): re-applied on top when this database has it.
+    if ((await q(`SELECT 1 FROM schema_migrations WHERE filename = '145_activity_photos_hardening.sql'`)).rows.length > 0) {
+      await q(readFileSync(new URL("../migrations/145_activity_photos_hardening.sql", import.meta.url), "utf8"));
+    }
     const back = await rt("", "", `SELECT app_photo_legal_review_notify() AS n`);
     check("R1 the 144 rollback removes the notice (function, index, columns, its reminders) and leaves the legal holds untouched; applied again it works",
       goneCols === 0 && goneFn === 0 && before.rows[0].n === after.rows[0].n && back.error === null, `cols=${goneCols} fn=${goneFn} holds=${before.rows[0].n}->${after.rows[0].n} again=${back.error ?? "ok"}`);

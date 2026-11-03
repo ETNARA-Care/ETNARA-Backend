@@ -2,7 +2,7 @@
 export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }[] = [
+const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; passWhenOff?: string[] }[] = [
   { pattern: new RegExp(`^/organizations/(${UUID})/smartmatch(/|$)`), feature: "SMARTMATCH" },
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/private-instructions$`), feature: "SMARTMATCH" },
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/(journey|arrival)(/|$)`), feature: "EN_CAMINO" },
@@ -11,6 +11,11 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean }
   // Activity photos (115/116): upload, review, image, consents.
   { pattern: new RegExp(`^/organizations/(${UUID})/care-events/${UUID}/photo(-eligibility)?$`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/shifts/${UUID}/photo-eligibility$`), feature: "ACTIVITY_PHOTOS" },
+  // 145 (§5): with the switch off, an ORGANIZATION_ADMIN keeps reviewing legal holds. These routes
+  // pass the gate and the service + database decide (mode "legal-review": held photos only, no new holds).
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/mode)?$`), feature: "ACTIVITY_PHOTOS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos/${UUID}/(history|image)$`), feature: "ACTIVITY_PHOTOS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos/${UUID}/legal-hold$`), feature: "ACTIVITY_PHOTOS", passWhenOff: ["POST"] },
   { pattern: new RegExp(`^/organizations/(${UUID})/activity-photos(/|$)`), feature: "ACTIVITY_PHOTOS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/photo-consents(/|$)`), feature: "ACTIVITY_PHOTOS" },
   // v2 (141): the relative's own authorization and the agency's list of recipients.
@@ -38,7 +43,8 @@ export function gatedFeatureFor(path: string, method = "GET"): { organizationId:
     const m = rule.pattern.exec(path);
     if (m) {
       const read = method === "GET" || method === "HEAD";
-      return { organizationId: m[1].toLowerCase(), feature: rule.feature, ...(rule.readableWhenOff && read ? { readOnlyPass: true } : {}) };
+      const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method) ?? false);
+      return { organizationId: m[1].toLowerCase(), feature: rule.feature, ...(pass ? { readOnlyPass: true } : {}) };
     }
   }
   return null;

@@ -88,6 +88,26 @@ export async function listPhotoObjects(prefix: string, continuationToken?: strin
   };
 }
 
+/** Small private text object (the storage identity marker). */
+export async function putPhotoText(key: string, text: string): Promise<void> {
+  const { s3, bucket } = photoClient();
+  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: Buffer.from(text, "utf8"), ContentType: "application/json", CacheControl: "private, no-store" }));
+}
+
+/** The text of an object, or null on a definite 404. Other errors are thrown. */
+export async function getPhotoText(key: string): Promise<string | null> {
+  const { s3, bucket } = photoClient();
+  try {
+    const r = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    return Buffer.from((await r.Body?.transformToByteArray()) ?? []).toString("utf8");
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+    const name = (err as Error)?.name;
+    if (name === "NoSuchKey" || (status === 404 && name !== "NoSuchBucket")) return null;
+    throw err;
+  }
+}
+
 export async function deletePhotoObject(key: string): Promise<void> {
   const { s3, bucket } = photoClient();
   await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));

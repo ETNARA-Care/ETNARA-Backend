@@ -63,11 +63,11 @@ export async function inspectRuntimeReadiness(client: pg.ClientBase, manifest: M
        FROM pg_roles r WHERE r.rolname = 'app_runtime'`)).rows[0];
   if (!role) return { appRuntimeExists: false, appRuntimeSafe: false, checkedTablePrivileges: 0, checkedFunctions: 0, missingTablePrivileges: [], missingFunctions: [], ready: false };
   const pairs = Object.entries(manifest.tables).flatMap(([t, privs]) => privs.map((p) => [t, p] as const));
-  // INSERT/UPDATE may be granted per column (billing, SmartMatch…): any column is enough here; the CI suites
-  // exercise the exact columns.
+  // INSERT/UPDATE (billing, SmartMatch…) and SELECT (145: confidential photo columns) may be granted per
+  // column: any column is enough here; the CI suites exercise the exact columns.
   const tableRows = (await client.query<{ t: string; p: string; ok: boolean }>(
     `SELECT x.t, x.p,
-            CASE WHEN x.p IN ('INSERT','UPDATE') THEN has_any_column_privilege('app_runtime', c.oid, x.p)
+            CASE WHEN x.p IN ('INSERT','UPDATE','SELECT') THEN has_any_column_privilege('app_runtime', c.oid, x.p)
                  ELSE has_table_privilege('app_runtime', c.oid, x.p) END AS ok
        FROM unnest($1::text[], $2::text[]) AS x(t, p)
        JOIN pg_class c ON c.relname = x.t AND c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r','p','v')`,
