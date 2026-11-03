@@ -117,12 +117,18 @@ export async function getActivityPhotoForEvent(userId: string, organizationId: s
   return inTenant(userId, organizationId, async (trx) => {
     // Managers, or the caregiver who uploaded it -- checked here, not only by RLS.
     // The caregiver only inside her window (141): no permanent gallery.
-    const r = await sql<{ id: string; share_status: string; can_remove: boolean }>`
-      SELECT id, share_status, app_photo_uploader_can_view(id) AS can_remove FROM care_event_photos
+    // D1: she can remove it only inside her window (visit + 1 h) and never while the agency keeps it
+    // (a hold in force or a legal hold). Only a yes/no reaches her: never the reason, the basis or which hold.
+    const r = await sql<{ id: string; share_status: string; can_view: boolean; kept: boolean }>`
+      SELECT id, share_status, app_photo_uploader_can_view(id) AS can_view,
+             (legal_hold_basis IS NOT NULL OR (hold_reason IS NOT NULL AND hold_review_at > now())) AS kept
+      FROM care_event_photos
       WHERE care_event_id = ${careEventId} AND organization_id = ${organizationId} AND deleted_at IS NULL
         AND (app_photo_is_manager() OR app_photo_uploader_can_view(id))`.execute(trx);
     if (!r.rows[0]) throw new PhotoError("NOT_FOUND", 404);
-    return { id: r.rows[0].id, status: r.rows[0].share_status, sharedWithFamily: r.rows[0].share_status === "approved", canRemove: r.rows[0].can_remove };
+    const row = r.rows[0];
+    return { id: row.id, status: row.share_status, sharedWithFamily: row.share_status === "approved",
+      canRemove: row.can_view && !row.kept, keptByAgency: row.can_view && row.kept };
   });
 }
 
@@ -177,6 +183,8 @@ async function assertManager(trx: never) {
 export const listPhotosQuerySchema = z.object({
   status: z.enum(["pending", "approved", "rejected", "withdrawn", "deleted"]).optional(),
   careRecipientId: z.string().uuid().optional(),
+  /** 144 (D2): the photos the daily notice points to — under a legal hold whose review date has passed (any status). */
+  legalReview: z.enum(["overdue"]).optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),
 });
 
@@ -186,6 +194,9 @@ export async function listAgencyPhotos(userId: string, organizationId: string, q
     const conditions = [sql`p.organization_id = ${organizationId}`];
     if (query.status) conditions.push(sql`p.share_status = ${query.status}`);
     if (query.careRecipientId) conditions.push(sql`p.care_recipient_id = ${query.careRecipientId}`);
+    if (query.legalReview === "overdue") {
+      conditions.push(sql`p.deleted_at IS NULL AND p.legal_hold_basis IS NOT NULL AND p.legal_hold_review_at <= now()`);
+    }
     const r = await sql<{
       id: string; care_event_id: string; care_recipient_id: string; share_status: string; created_at: string; shared_at: string | null;
       reviewed_at: string | null; review_reason: string | null; occurred_at: string; type_code: string; note_text: string | null;

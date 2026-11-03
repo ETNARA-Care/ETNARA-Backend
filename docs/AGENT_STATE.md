@@ -2,6 +2,19 @@
 
 ## Current Status
 
+## 2026-11-02 — Fotos v2: D1 (ventana de «Quitar foto») y D2 (aviso diario de retenciones legales vencidas, migración 144) — solo local
+- **Solo local, rama `claude/activity-photos-v2-legal-hold`** (sobre #250, sin publicar). Producción sin cambios.
+- **D1 (aprobado):** la cuidadora puede quitar su foto solo hasta 1 h después de cerrar la visita, con confirmación y auditoría, y nunca mientras haya una retención vigente (ordinaria o legal).
+  - `GET …/care-events/:id/photo` ahora devuelve `canRemove=false` y `keptByAgency=true` en ese caso, nunca el motivo.
+  - El backend responde 409 `PHOTO_ON_HOLD` o `PHOTO_ON_LEGAL_HOLD`.
+- **D2 (aprobado), migración 144:** `app_photo_legal_review_notify()` crea un aviso en la app (`PHOTO_LEGAL_HOLD_REVIEW_OVERDUE`) para cada ORGANIZATION_ADMIN activo de cada agencia con `ACTIVITY_PHOTOS` encendido y revisiones legales vencidas.
+  - Lleva solo la cifra (`item_count`) y apunta a la agencia.
+  - Un aviso por persona, agencia y día de Puerto Rico (índice único). No hay correo ni SMS.
+  - Worker `startLegalReviewNoticeWorker` (cada hora; la base lo limita a una vez al día). Es independiente de `PHOTO_RETENTION_JOB`; `PHOTO_LEGAL_HOLD_NOTICE=off` lo detiene.
+  - Filtro `GET …/activity-photos?legalReview=overdue`.
+  - La reversión `ops/144…rollback.sql` borra solo esos recordatorios y deja intactas las retenciones.
+- Pruebas: `verifyActivityPhotoLegalNotice.ts` 16/16 (paso nuevo en CI); unitarias 684/684; reversión y reaplicación de 144 idénticas.
+
 ## 2026-11-02 — Fotos v2: retención legal (migración 143, rama local claude/activity-photos-v2-legal-hold, sobre #249)
 - **Solo local:** sin push ni despliegue. Producción sin cambios. `PHOTO_RETENTION_JOB` en `off` por defecto; política de 30 días `PROVISIONAL`.
 - **Retención legal** para fotos sujetas a una obligación vigente:
