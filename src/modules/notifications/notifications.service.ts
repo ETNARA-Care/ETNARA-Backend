@@ -63,7 +63,9 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
   switch (notificationType) {
     // 145 (§4): never a word about photos or legal holds.
     case "AGENCY_NO_ACTIVE_ADMIN":
-      return "Tu agencia no tiene administración activa. Pide a ETNARA que restablezca una administradora.";
+      return orgName
+        ? `Tu agencia ${orgName} no tiene administración activa. Pide a ETNARA que restablezca una administradora.`
+        : "Tu agencia no tiene administración activa. Pide a ETNARA que restablezca una administradora.";
     case "PLATFORM_AGENCY_NO_ACTIVE_ADMIN":
       return orgName ? `La agencia ${orgName} no tiene administración activa` : "Una agencia no tiene administración activa";
     // Activity photos v2 (144): the count and nothing else (no photo, resident, basis or reference).
@@ -178,7 +180,7 @@ export async function listMyNotifications(userId: string, query: ListNotificatio
              END AS worker_membership_id,
              status, created_at, read_at,
              ${schema.itemCount ? sql`item_count` : sql`NULL::int AS item_count`},
-             ${schema.orgName ? sql`CASE WHEN notification_type = 'PLATFORM_AGENCY_NO_ACTIVE_ADMIN' THEN app_notification_org_name(id) END` : sql`NULL::text`} AS org_name
+             ${schema.orgName ? sql`CASE WHEN notification_type IN ('PLATFORM_AGENCY_NO_ACTIVE_ADMIN', 'AGENCY_NO_ACTIVE_ADMIN') THEN app_notification_org_name(id) END` : sql`NULL::text`} AS org_name
       FROM notifications
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY created_at DESC, id DESC

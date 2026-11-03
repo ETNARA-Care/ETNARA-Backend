@@ -298,8 +298,8 @@ async function main() {
     const prov = await run("on");
     const f1 = await finding(m1.id);
     const img1 = await image(H.admin, m1.id);
-    check("H06 a missing file with the PROVISIONAL policy is only a finding (open, policy_provisional): never tombstoned; its image answers 404 (not 500); alert with the count only",
-      prov.missingFound === 1 && prov.missingMarked === 0 && (await state(m1.id)).share_status !== "deleted" && f1?.status === "open" && f1?.last_outcome === "policy_provisional"
+    check("H06 a missing file with the PROVISIONAL policy is only a finding (open, policy_provisional, NOT counted as a confirmation: times_seen 0): never tombstoned; its image answers 404 (not 500); alert with the count only",
+      prov.missingFound === 1 && prov.missingMarked === 0 && (await state(m1.id)).share_status !== "deleted" && f1?.status === "open" && f1?.last_outcome === "policy_provisional" && f1?.times_seen === 0
         && img1.status === 404 && logged.some((l) => /PHOTO_FILES_MISSING.*"count":1/.test(l)), `${JSON.stringify(f1)} img=${img1.status}`);
 
     await approvePolicy(true);
@@ -311,8 +311,9 @@ async function main() {
     const confirmed = await run("on");
     const st1 = await state(m1.id);
     const hist1 = (await q(`SELECT action FROM care_event_photo_events WHERE photo_id=$1 ORDER BY occurred_at, id`, [m1.id])).rows.map((r) => r.action);
-    check("H08 confirmed in a later run (>= 24 h, APPROVED, re-checked once more): tombstoned RECONCILED, finding closed, history PURGED",
-      confirmed.missingMarked === 1 && st1.share_status === "deleted" && st1.deletion_kind === "RECONCILED" && (await finding(m1.id))?.status === "tombstoned" && hist1.includes("DELETED") && hist1.includes("PURGED"),
+    const origKey = (await q(`SELECT original_storage_key k FROM photo_missing_findings WHERE photo_id=$1`, [m1.id])).rows[0]?.k;
+    check("H08 confirmed in a later run (>= 24 h, APPROVED, re-checked once more): tombstoned RECONCILED, finding closed, history PURGED; the finding keeps the file's original key (a wrong verdict can be traced back)",
+      origKey === m1.key && confirmed.missingMarked === 1 && st1.share_status === "deleted" && st1.deletion_kind === "RECONCILED" && (await finding(m1.id))?.status === "tombstoned" && hist1.includes("DELETED") && hist1.includes("PURGED"),
       `${JSON.stringify(st1)} ${hist1.join(",")}`);
 
     // A file that comes back.
@@ -415,6 +416,23 @@ async function main() {
         && (await state(lh.id)).share_status !== "deleted" && (await exists(lh.key)) && lhRun.expiredMarked >= 0, `${lhAdmin.body.error} ${lhCg.body.error} ${(await state(lh.id)).share_status}`);
     await approvePolicy(false);
 
+    // Binding guards in the database (owner transaction, rolled back): even with no live photo, a queued removal
+    // or an unpurged file refuses an automatic binding; only a truly fresh state allows it.
+    await q("BEGIN"); await q("SET LOCAL session_replication_role = replica");
+    await q("DELETE FROM photo_storage_identity");
+    await q(`UPDATE care_event_photos SET share_status='deleted', deleted_at=coalesce(deleted_at, now()), deletion_kind=coalesce(deletion_kind,'MANUAL'),
+      legal_hold_basis=NULL, legal_hold_reference=NULL, legal_hold_by_user_id=NULL, legal_hold_placed_at=NULL, legal_hold_review_at=NULL WHERE deleted_at IS NULL`);
+    const live0 = (await q(`SELECT count(*) n FROM care_event_photos WHERE deleted_at IS NULL`)).rows[0].n;
+    const withQueue = (await q(`SELECT app_photo_bind_storage_identity(gen_random_uuid(), 'job') ok`)).rows[0].ok;
+    await q(`UPDATE photo_purge_queue SET purged_at = now(), storage_key = NULL WHERE purged_at IS NULL`);
+    const withFiles = (await q(`SELECT app_photo_bind_storage_identity(gen_random_uuid(), 'job') ok`)).rows[0].ok;
+    await q(`UPDATE stored_files SET storage_key = 'purged/' || id WHERE purpose = 'ACTIVITY_PHOTO'`);
+    const fresh = (await q(`SELECT app_photo_bind_storage_identity(gen_random_uuid(), 'job') ok`)).rows[0].ok;
+    const second = (await q(`SELECT app_photo_bind_storage_identity(gen_random_uuid(), 'job') ok`)).rows[0].ok;
+    await q("ROLLBACK");
+    check("H19 automatic binding needs a truly fresh state: with 0 live photos but a queued removal → refused; with unpurged files → refused; fresh → bound once (a second binding refused). (The code also refuses if the bucket has a marker or any photo object: unit test.)",
+      live0 === "0" && withQueue === false && withFiles === false && fresh === true && second === false, JSON.stringify({ live0, withQueue, withFiles, fresh, second }));
+
     const runLog = JSON.stringify((await q(`SELECT * FROM photo_retention_runs WHERE started_at >= $1`, [startedAt])).rows);
     const leak = logged.some((l) => l.includes("activity-photos/") || l.includes(bucket) || l.includes(wrong));
     check("H18 run log and logs carry fixed codes and counts only (storage_check, reconcile_halted): never a key, a bucket name or a photo id",
@@ -448,12 +466,14 @@ async function main() {
     const listSup = ((await call("GET", `/organizations/${orgH}/activity-photos?legalReview=active`, H.sup.token)).body.photos as Json[]).find((x) => x.id === pp.id);
     const histAdmin = ((await call("GET", `/organizations/${orgH}/activity-photos/${pp.id}/history`, H.admin.token)).body.history as Json[]).find((x) => x.action === "LEGAL_HOLD_PLACED");
     const histSup = ((await call("GET", `/organizations/${orgH}/activity-photos/${pp.id}/history`, H.sup.token)).body.history as Json[]).find((x) => x.action === "LEGAL_HOLD_PLACED");
+    const evActor = await rt(H.sup.userId, orgH, `SELECT actor_user_id FROM care_event_photo_events WHERE photo_id=$1`, [pp.id]);
     const supFn = await rt(H.sup.userId, orgH, `SELECT * FROM app_photo_confidential($1::uuid[])`, [[pp.id]]);
     const supText = JSON.stringify(listSup) + JSON.stringify(histSup) + JSON.stringify(supFn.rows);
-    check("P03 §6: the supervisor sees THAT a legal hold exists and its dates, never the basis, the reference or its author (list, history and the database function); the administrator sees them",
+    check("P03 §6: the supervisor sees THAT a legal hold exists and its dates, never the basis, the reference or who placed it (list, history — text and actor — and the database itself); the administrator sees them",
       listAdmin?.legalHold?.basis === basis && listAdmin?.legalHold?.reference === reference && String(histAdmin?.reason).includes(reference)
         && listSup?.legalHold && !("basis" in listSup.legalHold) && !("reference" in listSup.legalHold) && !("by" in listSup.legalHold) && !!listSup.legalHold.reviewAt
-        && histSup && histSup.reason === null && supFn.rows[0]?.legal_hold_basis === null && supFn.rows[0]?.hold_reason !== undefined
+        && histSup && histSup.reason === null && histSup.actor === null && histAdmin?.actor === H.admin.email && /permission denied/.test(String(evActor.error))
+        && supFn.rows[0]?.legal_hold_basis === null && supFn.rows[0]?.hold_reason !== undefined
         && !supText.includes(reference) && !supText.includes("judicial"),
       `admin=${listAdmin?.legalHold?.basis ? "basis" : "-"} sup=${JSON.stringify(listSup?.legalHold)} histSup=${histSup?.reason}`);
 
@@ -517,14 +537,19 @@ async function main() {
     await legal(H.admin, fOver.id, { action: "PLACE", basis, reviewAt: inDays(20) });
     await shift("care_event_photos", "legal_hold_review_at = now() - interval '1 day'", "id=$1", [fOver.id]);
     const notHeld = ph[2]; // m3: ordinary hold only
-    const centralBefore = await call("GET", `/platform/organizations/${orgH}/features`, central.token);
-    const kFeatures = await call("GET", `/platform/organizations/${orgK}/features`, central.token);
+    const centralList = await call("GET", `/platform/organizations/${orgH}/features`, central.token);
+    const auditBefore = Number((await q(`SELECT count(*) n FROM audit_log WHERE action='PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1`, [orgH])).rows[0].n);
+    const centralBefore = await call("POST", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS/legal-hold-check`, central.token, {});
+    const kFeatures = await call("POST", `/platform/organizations/${orgK}/features/ACTIVITY_PHOTOS/legal-hold-check`, central.token, {});
+    const agencyCheck = (await call("POST", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS/legal-hold-check`, H.admin.token, {})).status;
+    const checkAudit = (await q(`SELECT actor_user_id FROM audit_log WHERE action='PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED' AND target_organization_id=$1 ORDER BY occurred_at DESC LIMIT 1`, [orgH])).rows[0];
     const turnOff = await call("PUT", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS`, central.token, { enabled: false, reason: "Prueba sintetica de apagado" });
-    check("F01 ETNARA central is WARNED (one boolean) that the agency has photos under a legal hold, before and when switching the module off; the switch-off is NOT blocked; an agency without holds: false; never how many or which",
-      centralBefore.status === 200 && centralBefore.body.activityPhotosLegalHolds === true && kFeatures.body.activityPhotosLegalHolds === false
+    check("F01 ETNARA central is WARNED (one boolean) that the agency has photos under a legal hold, only when it asks before switching off (each question audited with who asked; not in the ordinary features list; agencies cannot ask) and when switching off; the switch-off is NOT blocked; an agency without holds: false; never how many or which",
+      centralList.status === 200 && !("activityPhotosLegalHolds" in centralList.body) && centralBefore.status === 200 && centralBefore.body.legalHolds === true && kFeatures.body.legalHolds === false
+        && agencyCheck === 403 && checkAudit?.actor_user_id === central.userId && auditBefore === 0
         && turnOff.status === 200 && turnOff.body.feature?.enabled === false && turnOff.body.feature?.legalHoldsKept === true
         && !JSON.stringify(centralBefore.body).includes(pp.id) && !JSON.stringify(turnOff.body).includes(reference),
-      `before=${centralBefore.body.activityPhotosLegalHolds} k=${kFeatures.body.activityPhotosLegalHolds} off=${turnOff.status} kept=${turnOff.body.feature?.legalHoldsKept}`);
+      `before=${centralBefore.body.legalHolds} k=${kFeatures.body.legalHolds} agency=${agencyCheck} audit=${JSON.stringify(checkAudit)} off=${turnOff.status} kept=${turnOff.body.feature?.legalHoldsKept}`);
 
     const modes = {
       admin: (await call("GET", `/organizations/${orgH}/activity-photos/mode`, H.admin.token)).body.mode,
@@ -546,11 +571,12 @@ async function main() {
       del: (await remove(H.admin, notHeld.id)).status,
       share: (await call("POST", `/organizations/${orgH}/activity-photos/${notHeld.id}/review`, H.admin.token, { decision: "WITHDRAW", expectedStatus: "approved", reason: "x prueba" })).status,
       consent: (await call("GET", `/organizations/${orgH}/care-recipients/${rH}/photo-consents`, H.admin.token)).status,
+      consentCaps: (await call("GET", `/organizations/${orgH}/Care-Recipients/${rH}/Photo-Consents`, H.admin.token)).status,
       receipt: (await call("PUT", `/organizations/${orgH}/care-recipients/${rH}/photo-receipt`, H.fam.token, { decision: "accepted", textVersion: "v3" })).status,
       newLegal: (await legal(H.admin, notHeld.id, { action: "PLACE", basis, reviewAt: inDays(20) })).status,
       supLegal: (await legal(H.sup, fOver.id, { action: "REVIEW", basis, reviewAt: inDays(20) })).status,
     };
-    check("F03 switch off: no capture/upload, no sharing, no ordinary hold, no removal, no consents, no relative's authorization and NO NEW legal hold (all 404); supervision cannot act on legal holds",
+    check("F03 switch off: no capture/upload, no sharing, no ordinary hold, no removal, no consents (also with other capitals in the path: the gate is case-insensitive), no relative's authorization and NO NEW legal hold (all 404); supervision cannot act on legal holds",
       Object.entries(blocked).every(([k, s]) => (k === "supLegal" ? [403, 404].includes(s) : s === 404)), JSON.stringify(blocked));
 
     const auditViewsBefore = Number((await q(`SELECT count(*) n FROM audit_log WHERE entity_id=$1 AND action='ACTIVITY_PHOTO_LEGAL_HOLD_VIEWED'`, [fOver.id])).rows[0].n);
@@ -579,7 +605,7 @@ async function main() {
     const remaining = Number((await q(`SELECT count(*) n FROM care_event_photos WHERE organization_id=$1 AND deleted_at IS NULL AND legal_hold_placed_at IS NOT NULL`, [orgH])).rows[0].n);
     const modeAfter = (await call("GET", `/organizations/${orgH}/activity-photos/mode`, H.admin.token)).body.mode;
     const listAfter = (await call("GET", `/organizations/${orgH}/activity-photos`, H.admin.token)).status;
-    const centralAfter = (await call("GET", `/platform/organizations/${orgH}/features`, central.token)).body.activityPhotosLegalHolds;
+    const centralAfter = (await call("POST", `/platform/organizations/${orgH}/features/ACTIVITY_PHOTOS/legal-hold-check`, central.token, {})).body.legalHolds;
     check("F06 switch off: she can release the legal holds; with none left the photo screen closes for everyone (mode off, 404) and central's warning goes away",
       remaining === 0 && modeAfter === "off" && listAfter === 404 && centralAfter === false, `remaining=${remaining} mode=${modeAfter} list=${listAfter} central=${centralAfter}`);
     await feature(orgH, true);
@@ -627,8 +653,8 @@ async function main() {
       .filter((x) => x.type === "AGENCY_NO_ACTIVE_ADMIN");
     const cenItems = ((await call("GET", "/me/notifications?limit=100", central.token)).body.items as Json[] ?? []).filter((x) => x.type === "PLATFORM_AGENCY_NO_ACTIVE_ADMIN" && mine.includes(x.relatedEntityId));
     const allText = JSON.stringify([...supItems, ...cenItems]).toLowerCase();
-    check("G04 the texts: supervision «Tu agencia no tiene administración activa. Pide a ETNARA que restablezca una administradora.»; central «La agencia <nombre> no tiene administración activa»; no word about photos or legal holds",
-      supItems.length === 1 && supItems[0].summary === "Tu agencia no tiene administración activa. Pide a ETNARA que restablezca una administradora."
+    check("G04 the texts: supervision «Tu agencia <nombre> no tiene administración activa. Pide a ETNARA que restablezca una administradora.»; central «La agencia <nombre> no tiene administración activa»; no word about photos or legal holds",
+      supItems.length === 1 && supItems[0].summary === `Tu agencia HRD D4 ${tag} no tiene administración activa. Pide a ETNARA que restablezca una administradora.`
         && cenItems.length === 3 && cenItems.some((x) => x.summary === `La agencia HRD D4 ${tag} no tiene administración activa`)
         && !/foto|photo|retenci|legal/.test(allText), `${supItems[0]?.summary} | ${cenItems.map((x) => x.summary).join(" ; ")}`);
 
@@ -663,7 +689,7 @@ async function main() {
     stop();
     const workerLines = logged.slice(before).join(" | ");
     check("C02 M5: this code against a database WITHOUT 144/145 (wrong deployment order): notifications still answer 200 for everyone (no 500), central's features 200, and the notice worker only reports the missing migration once (no crash)",
-      oldDbNotif.status === 200 && oldDbCentral.status === 200 && oldDbFeatures.status === 200 && oldDbFeatures.body.activityPhotosLegalHolds === false
+      oldDbNotif.status === 200 && oldDbCentral.status === 200 && oldDbFeatures.status === 200
         && /PHOTO_LEGAL_HOLD_NOTICE_UNAVAILABLE/.test(workerLines) && /AGENCY_ADMIN_GAP_NOTICE_UNAVAILABLE/.test(workerLines),
       `notif=${oldDbNotif.status} central=${oldDbCentral.status} features=${oldDbFeatures.status} worker=${workerLines.slice(0, 160)}`);
 

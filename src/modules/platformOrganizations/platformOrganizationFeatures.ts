@@ -34,8 +34,6 @@ export async function listOrganizationFeatures(userId: string, organizationId: s
       ORDER BY e.occurred_at DESC LIMIT 50`.execute(trx);
     return {
       features: rows.rows.map((r) => ({ code: r.feature_code, enabled: r.enabled, updatedAt: r.updated_at })),
-      // 145 (§5): one boolean so central is warned before switching photos off. Never how many or which.
-      activityPhotosLegalHolds: await platformOrgHasLegalHolds(trx, organizationId),
       history: history.rows.map((h) => ({ code: h.feature_code, enabled: h.enabled, reason: h.reason, occurredAt: h.occurred_at, actorEmail: h.actor_email })),
     };
   });
@@ -46,6 +44,18 @@ async function platformOrgHasLegalHolds(trx: Parameters<Parameters<typeof withPl
   const fn = await sql<{ ok: boolean }>`SELECT to_regprocedure('public.app_platform_org_has_legal_holds(uuid)') IS NOT NULL AS ok`.execute(trx);
   if (!fn.rows[0]?.ok) return false;
   return (await sql<{ h: boolean }>`SELECT app_platform_org_has_legal_holds(${organizationId}::uuid) AS h`.execute(trx)).rows[0]?.h === true;
+}
+
+/**
+ * 145 (§5): asked only when central is about to switch photos off. One boolean (never how many or
+ * which), and every question is audited in the database (PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED).
+ */
+export async function checkActivityPhotosLegalHolds(userId: string, organizationId: string) {
+  return withPlatformContext(userId, async (trx) => {
+    const org = await sql<{ id: string }>`SELECT id FROM organizations WHERE id = ${organizationId}`.execute(trx);
+    if (!org.rows[0]) throw new Error("ORGANIZATION_NOT_FOUND");
+    return { legalHolds: await platformOrgHasLegalHolds(trx, organizationId) };
+  });
 }
 
 export async function setOrganizationFeature(userId: string, organizationId: string, code: (typeof FEATURE_CODES)[number], enabled: boolean, reason: string) {
@@ -128,6 +138,12 @@ router.put("/platform/organizations/:organizationId/features/:featureCode", requ
   const body = setFeatureSchema.safeParse(req.body);
   if (!org.success || !code.success || !body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
   try { res.json({ feature: await setOrganizationFeature(req.auth!.userId, org.data, code.data, body.data.enabled, body.data.reason) }); } catch (e) { handle(e, res); }
+});
+router.post("/platform/organizations/:organizationId/features/ACTIVITY_PHOTOS/legal-hold-check", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const org = uuid.safeParse(req.params.organizationId);
+  if (!org.success) return void res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  try { res.json(await checkActivityPhotosLegalHolds(req.auth!.userId, org.data)); } catch (e) { handle(e, res); }
 });
 const designateSchema = z.object({ membershipId: uuid, reason: z.string().trim().min(3).max(300) });
 router.get("/platform/organizations/:organizationId/billing-admins", requireAuth, async (req: AuthenticatedRequest, res) => {

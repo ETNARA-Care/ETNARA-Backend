@@ -63,8 +63,11 @@ END $$;
 REVOKE ALL ON FUNCTION public.app_photo_storage_identity() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_photo_storage_identity() TO app_runtime;
 
--- Binds the marker once, and only while no live photo exists (a wrong bucket
--- can never be bound over real photos). Anything else is an operator decision.
+-- Binds the marker once, and only on a truly fresh deployment: no live photo, no
+-- removal still queued and no photo file whose key has not been purged (a wrong
+-- bucket can never be bound over real photos or pending deletions). The caller
+-- also refuses if the bucket already holds a marker or any photo object.
+-- Anything else is an operator decision (ops/145_photo_storage_identity.md).
 CREATE OR REPLACE FUNCTION public.app_photo_bind_storage_identity(p_marker uuid, p_by text)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 BEGIN
@@ -73,6 +76,8 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('photo-storage-identity', 0));
   IF EXISTS (SELECT 1 FROM public.photo_storage_identity) THEN RETURN false; END IF;
   IF EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.deleted_at IS NULL) THEN RETURN false; END IF;
+  IF EXISTS (SELECT 1 FROM public.photo_purge_queue q WHERE q.purged_at IS NULL) THEN RETURN false; END IF;
+  IF EXISTS (SELECT 1 FROM public.stored_files f WHERE f.purpose = 'ACTIVITY_PHOTO' AND f.storage_key NOT LIKE 'purged/%') THEN RETURN false; END IF;
   INSERT INTO public.photo_storage_identity (marker, bound_by) VALUES (p_marker, p_by);
   RETURN true;
 END $$;
@@ -85,7 +90,10 @@ CREATE TABLE IF NOT EXISTS photo_missing_findings (
   organization_id uuid NOT NULL REFERENCES organizations(id),
   first_seen_at   timestamptz NOT NULL DEFAULT now(),
   last_seen_at    timestamptz NOT NULL DEFAULT now(),
-  times_seen      integer NOT NULL DEFAULT 1 CHECK (times_seen >= 1),
+  -- Sightings that COUNT as confirmations: only runs with the policy APPROVED that did not halt.
+  times_seen      integer NOT NULL DEFAULT 1 CHECK (times_seen >= 0),
+  -- The key the file had: kept even after a tombstone overwrites it (a wrong verdict can be traced back).
+  original_storage_key text NULL,
   status          text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'reappeared', 'tombstoned')),
   last_outcome    text NULL CHECK (last_outcome IS NULL OR last_outcome IN
                     ('policy_provisional', 'not_confirmed', 'held', 'legal_hold', 'marked', 'halted')),
@@ -99,7 +107,9 @@ CREATE POLICY photo_missing_findings_owner ON photo_missing_findings FOR ALL TO 
   USING (current_user <> 'app_runtime') WITH CHECK (current_user <> 'app_runtime');
 
 -- Records (or re-confirms) live photos whose file answered a verified 404 in this run.
--- A second sighting counts only if the previous one is >= 12 h old (separate runs).
+-- Only a clean run (policy APPROVED, not halted: outcome 'not_confirmed') counts as a
+-- confirmation, and only if the previous counted one is >= 12 h old (separate runs).
+-- Provisional or halted sightings are recorded for review but never count.
 CREATE OR REPLACE FUNCTION public.app_photo_missing_record(p_ids uuid[], p_outcome text)
 RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE n integer;
@@ -109,14 +119,18 @@ BEGIN
   IF p_outcome IS NOT NULL AND p_outcome NOT IN ('policy_provisional', 'not_confirmed', 'halted') THEN
     RAISE EXCEPTION 'PHOTO_JOB_INVALID' USING ERRCODE = '22023';
   END IF;
-  INSERT INTO public.photo_missing_findings AS f (photo_id, organization_id, last_outcome)
-  SELECT p.id, p.organization_id, p_outcome FROM public.care_event_photos p
+  INSERT INTO public.photo_missing_findings AS f (photo_id, organization_id, last_outcome, times_seen, original_storage_key)
+  SELECT p.id, p.organization_id, p_outcome, CASE WHEN p_outcome = 'not_confirmed' THEN 1 ELSE 0 END, sf.storage_key
+    FROM public.care_event_photos p JOIN public.stored_files sf ON sf.id = p.file_id
    WHERE p.id = ANY (coalesce(p_ids, '{}')) AND p.deleted_at IS NULL
   ON CONFLICT (photo_id) DO UPDATE SET
-    first_seen_at = CASE WHEN f.status = 'open' THEN f.first_seen_at ELSE now() END,
-    times_seen    = CASE WHEN f.status <> 'open' THEN 1
+    first_seen_at = CASE WHEN f.status = 'open' AND f.times_seen > 0 THEN f.first_seen_at ELSE now() END,
+    times_seen    = CASE WHEN EXCLUDED.last_outcome IS DISTINCT FROM 'not_confirmed' THEN (CASE WHEN f.status = 'open' THEN f.times_seen ELSE 0 END)
+                         WHEN f.status <> 'open' OR f.times_seen = 0 THEN 1
                          WHEN f.last_seen_at <= now() - interval '12 hours' THEN f.times_seen + 1 ELSE f.times_seen END,
-    last_seen_at  = now(), status = 'open', resolved_at = NULL, last_outcome = EXCLUDED.last_outcome;
+    last_seen_at  = CASE WHEN EXCLUDED.last_outcome = 'not_confirmed' THEN now() ELSE f.last_seen_at END,
+    status = 'open', resolved_at = NULL, last_outcome = EXCLUDED.last_outcome,
+    original_storage_key = coalesce(f.original_storage_key, EXCLUDED.original_storage_key);
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n;
 END $$;
@@ -200,6 +214,8 @@ BEGIN
          hold_reason = NULL, hold_by_user_id = NULL, hold_placed_at = NULL, hold_review_at = NULL,
          purged_at = now(), purge_verified_at = now()
    WHERE id = p_photo_id;
+  UPDATE public.photo_missing_findings SET original_storage_key = coalesce(original_storage_key, (SELECT storage_key FROM public.stored_files WHERE id = p.file_id))
+   WHERE photo_id = p_photo_id;
   UPDATE public.stored_files SET status = 'hidden' WHERE id = p.file_id;
   UPDATE public.stored_files SET storage_key = 'purged/' || id, checksum = NULL, size_bytes = 0, original_filename = 'purged' WHERE id = p.file_id;
   INSERT INTO public.care_event_photo_events (organization_id, photo_id, care_recipient_id, action, from_status, to_status)
@@ -358,7 +374,7 @@ DECLARE cols text;
 BEGIN
   SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) INTO cols
     FROM pg_attribute WHERE attrelid = 'public.care_event_photo_events'::regclass AND attnum > 0 AND NOT attisdropped
-     AND attname <> 'reason';
+     AND attname NOT IN ('reason', 'actor_user_id');
   EXECUTE format('GRANT SELECT (%s) ON public.care_event_photo_events TO app_runtime', cols);
 END $$;
 
@@ -423,7 +439,9 @@ BEGIN
   RETURN QUERY
     SELECT e.id, e.action, e.from_status, e.to_status,
            CASE WHEN e.action LIKE 'LEGAL\_HOLD\_%' AND NOT v_admin THEN NULL ELSE e.reason END,
-           e.occurred_at, e.actor_user_id
+           e.occurred_at,
+           -- §6: who placed / reviewed / released a legal hold is for the administration only.
+           CASE WHEN e.action LIKE 'LEGAL\_HOLD\_%' AND NOT v_admin THEN NULL ELSE e.actor_user_id END
       FROM public.care_event_photo_events e
      WHERE e.photo_id = p_photo_id AND e.organization_id = public.app_photo_ctx_org()
      ORDER BY e.occurred_at, (e.action <> 'UPLOADED'), e.id;
@@ -563,11 +581,18 @@ GRANT EXECUTE ON FUNCTION public.app_photo_legal_review_notify() TO app_runtime;
 
 -- ETNARA central, when switching the module: whether ANY photo of the agency is
 -- under a legal hold. One boolean: never how many, which, or why.
+-- Asked only when central is about to switch the module off; every question is audited
+-- (who asked, about which agency) so it cannot be used quietly to watch agencies.
 CREATE OR REPLACE FUNCTION public.app_platform_org_has_legal_holds(p_org uuid) RETURNS boolean
-LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+DECLARE v boolean;
 BEGIN
   IF NOT public.app_is_superadmin() THEN RAISE EXCEPTION 'PLATFORM_ADMIN_REQUIRED' USING ERRCODE = '42501'; END IF;
-  RETURN EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.organization_id = p_org AND p.deleted_at IS NULL AND p.legal_hold_basis IS NOT NULL);
+  IF NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.id = p_org) THEN RAISE EXCEPTION 'ORGANIZATION_NOT_FOUND' USING ERRCODE = '42501'; END IF;
+  v := EXISTS (SELECT 1 FROM public.care_event_photos p WHERE p.organization_id = p_org AND p.deleted_at IS NULL AND p.legal_hold_basis IS NOT NULL);
+  INSERT INTO public.audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
+  VALUES (NULLIF(current_setting('app.current_user_id', true), '')::uuid, NULL, p_org, 'PLATFORM_LEGAL_HOLD_PRESENCE_CHECKED', 'organization', p_org, NULL);
+  RETURN v;
 END $$;
 REVOKE ALL ON FUNCTION public.app_platform_org_has_legal_holds(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_platform_org_has_legal_holds(uuid) TO app_runtime;
@@ -659,7 +684,7 @@ GRANT EXECUTE ON FUNCTION public.app_org_admin_gap_notify() TO app_runtime;
 CREATE OR REPLACE FUNCTION public.app_notification_org_name(p_notification_id uuid) RETURNS text
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
   SELECT o.name FROM public.notifications n JOIN public.organizations o ON o.id = n.organization_id
-   WHERE n.id = p_notification_id AND n.notification_type = 'PLATFORM_AGENCY_NO_ACTIVE_ADMIN'
+   WHERE n.id = p_notification_id AND n.notification_type IN ('PLATFORM_AGENCY_NO_ACTIVE_ADMIN', 'AGENCY_NO_ACTIVE_ADMIN')
      AND n.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
 $$;
 REVOKE ALL ON FUNCTION public.app_notification_org_name(uuid) FROM PUBLIC;

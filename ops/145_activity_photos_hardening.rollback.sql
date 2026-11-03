@@ -2,8 +2,11 @@
 -- AFTER the backend has gone back to the 144 code (the 145 code calls functions
 -- dropped here), and BEFORE reverting 144.
 --
--- Refuses if there are OPEN missing-file findings (review data). The storage
--- identity marker object stays in the bucket (harmless; 145 re-binds to it).
+-- Refuses if there are OPEN missing-file findings (review data); the closed
+-- findings (and their original keys) are dropped with the table. The storage
+-- identity marker object stays in the bucket (harmless). Re-applying 145 later on a
+-- database with photos needs the OPERATOR binding (ops/145_photo_storage_identity.md):
+-- until then removals and the job do not touch the bucket.
 -- Run-log columns are kept if a run already wrote them.
 BEGIN;
 DO $$ BEGIN
