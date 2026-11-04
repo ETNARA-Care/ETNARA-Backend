@@ -8,6 +8,7 @@ import { photoStorageIdentityCached } from "./modules/activityPhotos/storageIden
 import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverageEscalation.worker.js";
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
+import { startPushWorker } from "./modules/push/push.worker.js";
 
 const app = createApp();
 
@@ -32,6 +33,9 @@ app.listen(env.PORT, () => {
   // Activity photos v2 (144): daily notice of overdue legal-hold reviews to each agency's
   // administration (count only). Runs even with the expiry job off.
   startLegalReviewNoticeWorker();
+  // Web Push (146): off unless PUSH_ENABLED=on with VAPID keys; per agency PUSH_NOTIFICATIONS.
+  // Counts only in logs (never an endpoint, key or notice).
+  startPushWorker();
   // Activity photos: once per start, only if the private photo bucket is configured.
   // Logs yes/no values only (no keys, names or URLs); never blocks the server.
   void photoStorageSelfCheck().then((r) => {
