@@ -71,6 +71,17 @@ const envSchema = z.object({
   PHOTO_LEGAL_HOLD_NOTICE: z.enum(["on", "off"]).default("on"),
   // 145 (§4): notice when an agency has no active administrator (supervisors + ETNARA central). "off" stops it.
   AGENCY_ADMIN_GAP_NOTICE: z.enum(["on", "off"]).default("on"),
+  // Web Push (146). off (default): no sending and /me/push/config answers enabled=false.
+  // on: needs the VAPID keys below; each agency also needs PUSH_NOTIFICATIONS enabled by Central.
+  PUSH_ENABLED: z.enum(["on", "off"]).default("off"),
+  VAPID_PUBLIC_KEY: z.string().regex(/^[A-Za-z0-9_-]{86,88}$/).optional(),
+  VAPID_PRIVATE_KEY: z.string().regex(/^[A-Za-z0-9_-]{42,44}$/).optional(),
+  // Contact the push services may use (institutional support address, decision 6).
+  VAPID_SUBJECT: z.string().regex(/^(mailto:[^@\s]+@[^@\s]+\.[a-z]{2,}|https:\/\/\S+)$/i).optional(),
+  // Where /abrir?n=… lives (the portal). https only; http://localhost only outside production (local tests).
+  PUSH_APP_BASE_URL: z.string().url().default("https://app.etnaracare.com").refine(
+    (v) => v.startsWith("https://") || (process.env.NODE_ENV !== "production" && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(v)),
+    { message: "must be https (http://localhost only outside production)" }),
   PHOTO_MAX_UPLOAD_BYTES: z
     .string()
     .default("15728640")

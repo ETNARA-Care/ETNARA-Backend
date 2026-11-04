@@ -129,6 +129,15 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "La agencia canceló uno de tus turnos";
     case "SHIFT_UNASSIGNED":
       return "Ya no tienes asignado un turno";
+    // 100: the address of a shift changed (never the address itself).
+    case "SHIFT_LOCATION_CHANGED":
+      return "Cambió la dirección de uno de tus turnos";
+    // 133 (Backend #235): schedule change (never the new times).
+    case "SHIFT_RESCHEDULED":
+      return "La agencia cambió el horario de uno de tus turnos";
+    // 146: a test the person asked for in her settings.
+    case "PUSH_TEST":
+      return "Prueba de notificaciones";
     case "FAMILY_VISIT_CANCELLED":
       return "La agencia canceló una visita";
     case "FAMILY_CAREGIVER_CHANGED":

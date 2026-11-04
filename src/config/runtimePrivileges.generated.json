@@ -313,6 +313,13 @@
     "platform_admins": [
       "SELECT"
     ],
+    "push_preferences": [
+      "INSERT",
+      "SELECT"
+    ],
+    "push_subscriptions": [
+      "SELECT"
+    ],
     "recipient_finance_defaults": [
       "INSERT",
       "SELECT"
@@ -566,6 +573,14 @@
     "app_platform_org_has_legal_holds",
     "app_precheck_activity_photo",
     "app_progress_coverage_campaign_after_response",
+    "app_push_claim",
+    "app_push_cleanup",
+    "app_push_expand",
+    "app_push_register",
+    "app_push_report",
+    "app_push_resolve",
+    "app_push_test",
+    "app_push_unregister",
     "app_recipient_room_id",
     "app_record_care_quality_agent_run",
     "app_record_compliance_agent_run",

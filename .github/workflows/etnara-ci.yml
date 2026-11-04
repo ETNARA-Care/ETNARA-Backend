@@ -306,6 +306,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyActivityPhotoHardening.ts
 
+      - name: PostgreSQL Web Push (146) — registration limited to known push services, own phones only, closed lock-screen catalogue, real encryption + VAPID decrypted on the phone side, roles and preferences, family incidents never pushed, quiet hours, logout/password/suspension/deactivation cleanup with audit, retries and 410, opening destination, rollback
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyPushNotifications.ts
+
       - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
