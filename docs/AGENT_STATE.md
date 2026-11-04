@@ -2,6 +2,15 @@
 
 ## Current Status
 
+## 2026-11-04 — 148: tipos de registro de cuidado por defecto para cada agencia (A1) — PR, sin desplegar
+- **Hallazgo A1 (validación de agencias fundadoras, 4-nov):** una agencia creada por ETNARA Central no tenía filas en `organization_care_event_types`; todo registro de cuidado respondía 409 `EVENT_TYPE_NOT_ENABLED`. Solo `seedDemo` las insertaba (por eso Casa Demo funcionaba).
+- **Migración 148:** disparador `AFTER INSERT ON organizations` (SECURITY DEFINER, solo filas de la agencia nueva, `ON CONFLICT DO NOTHING`) con los 8 tipos de Casa Demo; relleno solo de agencias **sin ninguna fila** y no archivadas; registro `care_event_type_default_grants` (sin acceso para app_runtime). Nunca UPDATE ni DELETE de configuración existente. PHOTO incluido como en Casa Demo: sigue rechazado mientras el módulo de fotos esté apagado.
+- **Fixtures:** 4 verificadores que insertaban esa configuración ahora usan `ON CONFLICT DO NOTHING` (las agencias de prueba ya nacen con los tipos).
+- **Pruebas:** `verifyDefaultCareEventTypes` 26/26 en ambos modos; `verifyDefaultCareEventTypesRollback` 19/19 (esquema idéntico a 147 tras R1 y R2); unitarias 684/684; batería de CI completa en local.
+- **Despliegue y reversión:** `ops/148_default_care_event_types_despliegue.md`. No fusionar ni desplegar sin autorización de Rafa.
+- **Siguiente paso exacto:** con autorización, D1 (consulta de solo lectura) y D2 (fusionar).
+
+
 ## 2026-11-03 — Fotos v2: endurecimiento tras la auditoría (migración 145) — solo local
 - **Solo local, rama `claude/activity-photos-v2-hardening`** (sobre #250 `442811c`, sin publicar). Producción sin cambios. `PHOTO_RETENTION_JOB` sigue en `off`; política de 30 días `PROVISIONAL`.
 - **H1, eliminación masiva:**

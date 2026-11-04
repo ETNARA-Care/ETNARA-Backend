@@ -86,7 +86,7 @@ async function main() {
   for (const o of [orgA, orgB]) {
     const rs = (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id,name) VALUES ($1,'PH') RETURNING id`, [o])).rows[0].id;
     await q(`INSERT INTO requirements (requirement_set_id,credential_type_id,is_mandatory,requires_organization_review) VALUES ($1,$2,true,false)`, [rs, bls]);
-    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id,is_enabled) VALUES ($1,$2,true),($1,$3,true)`, [o, photoType, noteType]);
+    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id,is_enabled) VALUES ($1,$2,true),($1,$3,true) ON CONFLICT (organization_id, care_event_type_id) DO NOTHING`, [o, photoType, noteType]);
   }
   type P = { email: string; userId: string; token: string; owm?: string };
   async function person(key: string, orgId: string, roles: string[], worker = false): Promise<P> {

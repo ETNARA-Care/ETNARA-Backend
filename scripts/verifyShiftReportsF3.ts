@@ -63,7 +63,7 @@ async function main() {
   const org = async (name: string, features: string[]) => {
     const id = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
     for (const f of features) await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) VALUES ($1,$2,true)`, [id, f]);
-    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id) SELECT $1,id FROM care_event_types`, [id]);
+    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id) SELECT $1,id FROM care_event_types ON CONFLICT (organization_id, care_event_type_id) DO NOTHING`, [id]);
     const bls = (await q<{ id: string }>(`SELECT id FROM credential_types WHERE code='BLS'`)).rows[0].id;
     const rs = (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id,name) VALUES ($1,'SR3') RETURNING id`, [id])).rows[0].id;
     await q(`INSERT INTO requirements (requirement_set_id,credential_type_id,is_mandatory,requires_organization_review) VALUES ($1,$2,true,false)`, [rs, bls]);
