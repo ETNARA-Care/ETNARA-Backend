@@ -421,13 +421,74 @@ async function main() {
   check("S18 logs: counts only (no endpoint, key, notice id, text)", logText.includes("PUSH_TICK") && !/fcm\.googleapis|synthetic-|aceptó|llegada registrada/i.test(logText)
     && !people.some((p) => logText.includes(p.userId)), logText.split("\n").filter((l) => l.includes("PUSH")).slice(-2).join(" | "));
 
+  // ---------------------------------------------------------------- 147: SmartMatch, actividades, fin de visita
+  // S21 SmartMatch: the applicant may belong to ANOTHER agency (B.cg applies to agency A).
+  await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) VALUES ($1,'SMARTMATCH',true)
+    ON CONFLICT (organization_id,feature_code) DO UPDATE SET enabled=true`, [orgA]);
+  await reg(B.cg); // her phone went away with agency B's suspension (S10)
+  await q(`BEGIN`); await q(`SET LOCAL session_replication_role = replica`);
+  const opp = (await q<{ id: string }>(`INSERT INTO smartmatch_opportunities (organization_id,created_by_user_id,visibility,status,region_label,role_label,starts_at,ends_at)
+    VALUES ($1,$2,'INTERNAL','PUBLISHED','Norte','Cuidadora',now()+interval '2 days',now()+interval '2 days 4 hours') RETURNING id`, [orgA, A.admin.userId])).rows[0].id;
+  const app = (await q<{ id: string }>(`INSERT INTO smartmatch_applications (opportunity_id,caregiver_user_id,organization_id,status,consented_at,consent_version) VALUES ($1,$2,$3,'PENDING',now(),'v1') RETURNING id`,
+    [opp, B.cg.userId, orgA])).rows[0].id;
+  await q(`COMMIT`);
+  const sm = { entityType: "smartmatch_application", entityId: app };
+  await notify(A.admin, "SMARTMATCH_APPLICATION_SUBMITTED", orgA, sm);
+  const nApproved = await notify(B.cg, "SMARTMATCH_APPLICATION_APPROVED", orgA, sm);
+  const nForgedSm = await notify(B.admin, "SMARTMATCH_APPLICATION_APPROVED", orgA, sm);
+  const g21 = await tick();
+  check("S21 agency: «Nueva solicitud en SmartMatch»", to(g21, A.admin).some((g) => g.payload.notification.body === "Nueva solicitud en SmartMatch"));
+  check("S21 applicant from ANOTHER agency gets «Tu solicitud de SmartMatch fue aprobada»", to(g21, B.cg).length === 1
+    && to(g21, B.cg)[0].payload.notification.body === "Tu solicitud de SmartMatch fue aprobada", JSON.stringify(await reasonOf(nApproved)));
+  check("S21 someone who is not the applicant never gets it (even with the application id)", to(g21, B.admin).length === 0
+    && (await reasonOf(nForgedSm)).reason === "NO_ACTIVE_MEMBERSHIP", JSON.stringify(await reasonOf(nForgedSm)));
+  const tSm = await call("GET", `/me/notifications/${nApproved}/target`, B.cg.token);
+  check("S21 opening it: her own applications, without switching to the publishing agency", tSm.status === 200
+    && tSm.body.path === `/caregiver/smartmatch?tab=mine&application=${app}` && tSm.body.organizationId === null && tSm.body.portal === "caregiver", JSON.stringify(tSm.body));
+  const nSubmittedA = (await q<{ id: string }>(`SELECT id FROM notifications WHERE user_id=$1 AND notification_type='SMARTMATCH_APPLICATION_SUBMITTED'`, [A.admin.userId])).rows[0].id;
+  const tSa = await call("GET", `/me/notifications/${nSubmittedA}/target`, A.admin.token);
+  check("S21 agency opens that application in its review", tSa.body.path === `/agency/smartmatch?application=${app}`, JSON.stringify(tSa.body));
+  await q(`UPDATE organization_features SET enabled=false WHERE organization_id=$1 AND feature_code='SMARTMATCH'`, [orgA]);
+  const nSmOff = await notify(B.cg, "SMARTMATCH_APPLICATION_REJECTED", orgA, sm);
+  const g21b = await tick();
+  check("S21 with SmartMatch off in the publishing agency: no push", to(g21b, B.cg).length === 0 && (await reasonOf(nSmOff)).reason === "FEATURE_OFF");
+
+  // S22 activities to the family: at most one push every 30 min per resident; the rest stay in the inbox
+  const act = () => notify(A.famOther, "NEW_CARE_EVENT", orgA, { entityType: "care_event", entityId: randomUUID(), recipient: rA2 });
+  const a1 = await act(); const g22a = await tick();
+  const a2 = await act(); const g22b = await tick();
+  check("S22 first activity: «Se registró una nueva actividad de cuidado»", to(g22a, A.fam).some((g) => g.payload.notification.body === "Se registró una nueva actividad de cuidado"), JSON.stringify(await reasonOf(a1)));
+  check("S22 a second one within 30 min does not ring (ACTIVITY_THROTTLED) but is in the inbox", to(g22b, A.fam).length === 0
+    && (await reasonOf(a2)).reason === "ACTIVITY_THROTTLED"
+    && ((await call("GET", "/me/notifications", A.famOther.token)).body.items ?? []).some((i: Json) => i.id === a2));
+  await q(`UPDATE notifications SET created_at = now() - interval '31 minutes' WHERE id = ANY($1)`, [[a1, a2]]);
+  const a3 = await act(); const g22c = await tick();
+  check("S22 after 30 min it rings again", to(g22c, A.fam).length === 1, JSON.stringify(await reasonOf(a3)));
+  const nActAdmin = await notify(A.admin, "NEW_CARE_EVENT", orgA, { entityType: "care_event", entityId: randomUUID(), recipient: rA2 });
+  await tick();
+  check("S22 activities are never pushed to the agency", (await reasonOf(nActAdmin)).reason === "NOT_FOR_THIS_ROLE");
+  const tAct = await call("GET", `/me/notifications/${a3}/target`, A.famOther.token);
+  check("S22 opening an activity: the family's activity page", tAct.body.path === "/family/activity", JSON.stringify(tAct.body));
+
+  // S23 end of visit: family and agency
+  await notify(A.famOther, "SHIFT_COMPLETED", orgA, { recipient: rA2 });
+  await notify(A.admin, "SHIFT_COMPLETED", orgA);
+  const g23 = await tick();
+  check("S23 family: «La cuidadora terminó la visita»", to(g23, A.fam).some((g) => g.payload.notification.body === "La cuidadora terminó la visita"));
+  check("S23 agency: «Una cuidadora terminó un turno»", to(g23, A.admin).some((g) => g.payload.notification.body === "Una cuidadora terminó un turno"));
+  const all147 = JSON.stringify([...g21, ...g22a, ...g22c, ...g23].map((r) => r.payload));
+  check("S23 nothing received names an agency, resident or person", !all147.includes(ORG_A_NAME) && !all147.includes(RESIDENT) && !all147.includes("@example.invalid"));
+
   // S19 switched off: no keys or PUSH_ENABLED=off → nothing sent, config disabled
   const offTick = await runPushTick(sender as never, null);
   check("S19 without VAPID configuration the sender does nothing", offTick.sent === 0 && offTick.expanded === 0);
 
   // S20 rollback, then the migration again (idempotent)
+  const rollback147 = readFileSync(new URL("../ops/147_web_push_smartmatch_activities.rollback.sql", import.meta.url), "utf8");
   const rollback = readFileSync(new URL("../ops/146_web_push_notifications.rollback.sql", import.meta.url), "utf8");
   await pool.end().catch(() => undefined); server.close();
+  await q(rollback147);
+  check("S20 147 rollback: catalogue back to the 20 rows of 146", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 20);
   await q(rollback);
   const gone = (await q<{ n: number }>(`SELECT count(*)::int n FROM pg_class WHERE relname LIKE 'push\\_%'`)).rows[0].n;
   const trig = (await q<{ n: number }>(`SELECT count(*)::int n FROM pg_trigger WHERE tgname IN ('notifications_push_enqueue','sessions_push_cleanup','organizations_push_cleanup')`)).rows[0].n;
@@ -435,9 +496,11 @@ async function main() {
   check("S20 rollback removes tables, functions, triggers and the PUSH_NOTIFICATIONS switch rows", gone === 0 && trig === 0 && featureRows === 0, `tables ${gone} triggers ${trig} features ${featureRows}`);
   const nAfterRollback = await q(`INSERT INTO notifications (user_id,organization_id,notification_type,channel,status,sent_at) VALUES ($1,$2,'SHIFT_CANCELLED','in_app','sent',now()) RETURNING id`, [A.admin.userId, orgA]);
   check("S20 after rollback, notices keep working (in-app)", nAfterRollback.rows.length === 1);
-  await q(readFileSync(new URL("../migrations/146_web_push_notifications.sql", import.meta.url), "utf8"));
-  await q(readFileSync(new URL("../migrations/146_web_push_notifications.sql", import.meta.url), "utf8"));
-  check("S20 migration re-applies cleanly twice after a rollback", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 20);
+  for (let i = 0; i < 2; i++) {
+    await q(readFileSync(new URL("../migrations/146_web_push_notifications.sql", import.meta.url), "utf8"));
+    await q(readFileSync(new URL("../migrations/147_web_push_smartmatch_activities.sql", import.meta.url), "utf8"));
+  }
+  check("S20 146 + 147 re-apply cleanly twice after a rollback", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 30);
 
   console.log = origLog; console.error = origError;
   await runtime.end(); await db.end();

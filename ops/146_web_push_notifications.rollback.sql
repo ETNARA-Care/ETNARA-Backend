@@ -26,6 +26,7 @@ DROP FUNCTION IF EXISTS public.app_push_unregister(text);
 DROP FUNCTION IF EXISTS public.app_push_register(uuid, text, text, text, text);
 DROP FUNCTION IF EXISTS public.app_push_resolve(uuid, boolean);
 DROP FUNCTION IF EXISTS public.app_push_user_has_access(uuid);
+DROP FUNCTION IF EXISTS public.app_push_in_quiet_hours(uuid);  -- 147, si estaba aplicada
 
 DROP TABLE IF EXISTS push_deliveries;
 DROP TABLE IF EXISTS push_outbox;

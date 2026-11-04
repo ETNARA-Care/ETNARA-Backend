@@ -148,7 +148,10 @@ export async function getNotificationTarget(userId: string, notificationId: stri
     if (!resolved || resolved.reason || !resolved.audience) return { path: null, organizationId: null, portal: null };
     const path = notificationTargetPath({ type: n.notification_type, audience: resolved.audience,
       relatedEntityType: n.related_entity_type, relatedEntityId: n.related_entity_id, shiftId: n.shift_id });
-    const portal = resolved.audience === "self" ? null : resolved.audience;
-    return { path, organizationId: path ? n.organization_id : null, portal: path ? portal : null };
+    // 147: quien se postuló a SmartMatch puede no ser miembro de la agencia que publicó: se queda
+    // en su agencia activa (sin cambiar de organización) y abre sus propias solicitudes.
+    const portal = resolved.audience === "self" ? null : resolved.audience === "applicant" ? "caregiver" : resolved.audience;
+    const organizationId = path && resolved.audience !== "applicant" ? n.organization_id : null;
+    return { path, organizationId, portal: path ? portal : null };
   });
 }
