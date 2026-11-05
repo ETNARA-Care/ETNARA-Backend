@@ -372,9 +372,18 @@ async function main() {
       `rewrite=${aRewrite.code} listed=${!!listedLegacy}/${listedLegacy?.review_status} after=${legacyAfter.review_status}`);
 
     // ------------------------------------------------------------ establishment documents: failure + archive
+    // D4: incoherent dates are now rejected BEFORE anything is uploaded (400, nothing stored)...
+    const eBeforeBad = await objectCount(edPrefix);
+    const eBad = await call("POST", ED(orgA, estA) + qs(`Fechas ${tag}`, "other_permit", secretFile, "&issuedOn=2026-03-01&expiresOn=2026-01-01"), A.admin.token, pdf);
+    check("E8a D4 incoherent dates rejected before upload: 400, no object", eBad.status === 400 && eBad.body.error === "INVALID_DOCUMENT_DATES" && (await objectCount(edPrefix)) === eBeforeBad, `status=${eBad.status}`);
+    // ...so the INSERT failure after upload is forced with a temporary test-only trigger (disposable DB).
+    await q(`CREATE OR REPLACE FUNCTION pg_temp_d4_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.title LIKE 'Fallo %' THEN RAISE EXCEPTION 'TEST_FORCED_INSERT_FAILURE'; END IF; RETURN NEW; END $$`);
+    await q(`CREATE TRIGGER zz_test_force_insert_failure BEFORE INSERT ON establishment_documents FOR EACH ROW EXECUTE FUNCTION pg_temp_d4_fail()`);
     const eBeforeFail = await objectCount(edPrefix);
-    const eFail = await call("POST", ED(orgA, estA) + qs(`Fallo ${tag}`, "other_permit", secretFile, "&issuedOn=2026-03-01&expiresOn=2026-01-01"), A.admin.token, pdf);
+    const eFail = await call("POST", ED(orgA, estA) + qs(`Fallo ${tag}`, "other_permit", secretFile, "&issuedOn=2026-01-01&expiresOn=2026-03-01"), A.admin.token, pdf);
     const eAfterFail = await objectCount(edPrefix);
+    await q(`DROP TRIGGER zz_test_force_insert_failure ON establishment_documents`);
+    await q(`DROP FUNCTION pg_temp_d4_fail()`);
     check("E8 establishment INSERT fails after upload: 500, the just-uploaded file is deleted (no new orphan)", eFail.status === 500 && eAfterFail === eBeforeFail, `status=${eFail.status} ${eBeforeFail}->${eAfterFail}`);
     const eArch = await call("DELETE", `${ED(orgA, estA)}/${eDoc2}`, A.admin.token);
     const eArchRow = (await q<Json>(`SELECT archived_at, storage_key FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
