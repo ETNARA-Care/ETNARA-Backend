@@ -110,6 +110,9 @@ async function main() {
 
     const afterReject = await evaluateWorkerEligibility(managerA, orgA, workerMembership);
     if (afterReject.eligibilityStatus !== "not_eligible") throw new Error("rejected credential became eligible");
+    if (afterReject.requirements[0]?.reason !== "ORGANIZATION_REVIEW_REJECTED") {
+      throw new Error(`expected ORGANIZATION_REVIEW_REJECTED after rejection, got ${JSON.stringify(afterReject)}`);
+    }
 
     const file2 = (await q(`
       INSERT INTO stored_files (
