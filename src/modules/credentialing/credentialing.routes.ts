@@ -25,6 +25,8 @@ import {
   CredentialTypeNotFoundError,
   InvalidFileOwnershipError,
   CredentialManagementForbiddenError,
+  CredentialSelfManagementForbiddenError,
+  CredentialSelfReviewForbiddenError,
   CredentialUploadMismatchError,
   CredentialDocumentRequiredError,
   initiateCredentialDocumentUploadSchema,
@@ -90,6 +92,20 @@ function handleTenantError(err: unknown, res: Response): boolean {
     return true;
   }
   if (err instanceof CredentialManagementForbiddenError) {
+    res.status(403).json({ error: "CREDENTIAL_MANAGEMENT_FORBIDDEN" });
+    return true;
+  }
+  // B1/B2: the service refuses first; the database (149) refuses too if a path ever skips it.
+  const dbMessage = (err as { message?: unknown } | null)?.message;
+  if (err instanceof CredentialSelfManagementForbiddenError || (typeof dbMessage === "string" && dbMessage.includes("CREDENTIAL_SELF_MANAGEMENT_FORBIDDEN"))) {
+    res.status(403).json({ error: "CREDENTIAL_SELF_MANAGEMENT_FORBIDDEN" });
+    return true;
+  }
+  if (err instanceof CredentialSelfReviewForbiddenError || (typeof dbMessage === "string" && dbMessage.includes("CREDENTIAL_SELF_REVIEW_FORBIDDEN"))) {
+    res.status(403).json({ error: "CREDENTIAL_SELF_REVIEW_FORBIDDEN" });
+    return true;
+  }
+  if (typeof dbMessage === "string" && dbMessage.includes("CREDENTIAL_MANAGER_REQUIRED")) {
     res.status(403).json({ error: "CREDENTIAL_MANAGEMENT_FORBIDDEN" });
     return true;
   }

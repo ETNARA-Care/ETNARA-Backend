@@ -96,9 +96,6 @@
       "SELECT",
       "UPDATE"
     ],
-    "credential_platform_verifications": [
-      "SELECT"
-    ],
     "credential_types": [
       "SELECT"
     ],
@@ -246,9 +243,6 @@
       "UPDATE"
     ],
     "operational_alert_escalations": [
-      "SELECT"
-    ],
-    "org_workers": [
       "SELECT"
     ],
     "organization_care_event_types": [
@@ -452,9 +446,6 @@
     ],
     "worker_availability_settings": [
       "INSERT",
-      "SELECT"
-    ],
-    "worker_credentials": [
       "SELECT"
     ],
     "worker_eligibility": [

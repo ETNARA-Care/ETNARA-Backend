@@ -1,67 +1,16 @@
-import { sql } from "kysely";
 import { withPlatformContext } from "../../context/tenantContext.js";
 
 /**
- * Platform privacy boundary:
- * ETNARA Administration may inspect aggregate credential/compliance status,
- * but must not receive worker identities, credential documents, filenames,
- * issuing entities, expirations tied to a worker, or review notes.
+ * 149 (5-nov-2026): ETNARA Central no revisa, aprueba ni supervisa las credenciales del personal de
+ * las agencias; cada agencia es responsable. Esta ruta queda solo para que un portal de Central
+ * antiguo (en caché) no falle durante la transición: exige un superadministrador real y responde
+ * `summary: null` sin consultar ninguna tabla. La base lo impone también (platform_phi_deny en
+ * credentials, credential_platform_verifications, organization_credential_reviews y
+ * organization_document_version_reviews).
  */
-export interface PlatformOrganizationCredentialSummary {
-  total_active_workers: number;
-  workers_with_credentials: number;
-  credentials_total: number;
-  credentials_pending: number;
-  credentials_verified: number;
-  credentials_rejected: number;
-}
+export const PLATFORM_CREDENTIAL_ACCESS_MODEL = "AGENCY_RESPONSIBILITY" as const;
 
-export async function getPlatformOrganizationCredentialSummary(userId: string, organizationId: string) {
-  return withPlatformContext(userId, async (trx) => {
-    const organization = await sql<{ id: string }>`
-      SELECT id FROM organizations
-      WHERE id = ${organizationId} AND archived_at IS NULL
-      LIMIT 1
-    `.execute(trx);
-    if (!organization.rows[0]) throw new Error("ORGANIZATION_NOT_FOUND");
-
-    const result = await sql<PlatformOrganizationCredentialSummary>`
-      WITH org_workers AS (
-        SELECT DISTINCT owm.worker_id
-        FROM organization_worker_memberships owm
-        WHERE owm.organization_id = ${organizationId}
-          AND owm.status = 'active'
-      ),
-      worker_credentials AS (
-        SELECT c.id, c.worker_id,
-          COALESCE(latest.status::text, 'pending') AS verification_status
-        FROM org_workers ow
-        JOIN credentials c ON c.worker_id = ow.worker_id AND c.status <> 'revoked'
-        LEFT JOIN LATERAL (
-          SELECT cpv.status
-          FROM credential_platform_verifications cpv
-          WHERE cpv.credential_id = c.id
-          ORDER BY cpv.verified_at DESC
-          LIMIT 1
-        ) latest ON true
-      )
-      SELECT
-        (SELECT COUNT(*)::int FROM org_workers) AS total_active_workers,
-        (SELECT COUNT(DISTINCT worker_id)::int FROM worker_credentials) AS workers_with_credentials,
-        COUNT(*)::int AS credentials_total,
-        COUNT(*) FILTER (WHERE verification_status = 'pending')::int AS credentials_pending,
-        COUNT(*) FILTER (WHERE verification_status = 'verified')::int AS credentials_verified,
-        COUNT(*) FILTER (WHERE verification_status = 'rejected')::int AS credentials_rejected
-      FROM worker_credentials
-    `.execute(trx);
-
-    return result.rows[0] ?? {
-      total_active_workers: 0,
-      workers_with_credentials: 0,
-      credentials_total: 0,
-      credentials_pending: 0,
-      credentials_verified: 0,
-      credentials_rejected: 0,
-    };
-  });
+export async function getPlatformOrganizationCredentialSummary(userId: string, _organizationId: string): Promise<null> {
+  await withPlatformContext(userId, async () => undefined);
+  return null;
 }
