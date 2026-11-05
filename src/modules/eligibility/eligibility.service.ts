@@ -194,13 +194,19 @@ export async function evaluateWorkerEligibilityInTransaction(
           // organization that employs/contracts the caregiver. ETNARA Platform
           // has no runtime document-inspection path and therefore must never be
           // a prerequisite for worker eligibility.
-          const orgReview = await sql<{ id: string }>`
-            SELECT id FROM organization_credential_reviews
+          // Same rule as before (only an approved review satisfies it); the reason now
+          // distinguishes a rejected document from one still waiting, so the agency
+          // sees what to do (decisión 4-nov-2026).
+          const orgReview = await sql<{ review_status: string }>`
+            SELECT review_status FROM organization_credential_reviews
             WHERE credential_id = ${credential.id} AND organization_id = ${organizationId}
-              AND review_status = 'approved'
+            ORDER BY (review_status = 'approved') DESC
             LIMIT 1
           `.execute(trx);
-          if (!orgReview.rows[0]) {
+          const reviewStatus = orgReview.rows[0]?.review_status;
+          if (reviewStatus === "rejected") {
+            reason = "ORGANIZATION_REVIEW_REJECTED";
+          } else if (reviewStatus !== "approved") {
             reason = "ORGANIZATION_REVIEW_MISSING";
           } else {
             satisfied = true;
@@ -560,6 +566,9 @@ function complianceAgentRecommendation(blockers: string[], expiring: boolean) {
   }
   if (blockers.includes("MISSING_CREDENTIAL")) {
     return "Abrir el perfil y solicitar la credencial obligatoria que falta.";
+  }
+  if (blockers.includes("ORGANIZATION_REVIEW_REJECTED")) {
+    return "Abrir el perfil y solicitar un documento nuevo: la agencia rechazó el anterior.";
   }
   if (blockers.includes("ORGANIZATION_REVIEW_MISSING")) {
     return "Abrir el perfil y realizar la revisión humana requerida por la agencia.";
