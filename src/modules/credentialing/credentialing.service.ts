@@ -42,6 +42,43 @@ export class CredentialManagementForbiddenError extends Error {
     this.name = "CredentialManagementForbiddenError";
   }
 }
+/**
+ * B1/B2 (5-nov-2026): nadie decide sobre su propia credencial. La persona dueña de la credencial
+ * no puede crear ni cambiar sus datos de elegibilidad (tipo, estado, fechas, emisor), ni aprobarla
+ * o rechazarla, aunque además sea administradora o supervisora. Sí puede subir evidencia: eso
+ * devuelve la revisión a "pendiente". La base de datos lo impone también (migración 149).
+ */
+export class CredentialSelfManagementForbiddenError extends Error {
+  constructor() {
+    super("CREDENTIAL_SELF_MANAGEMENT_FORBIDDEN");
+    this.name = "CredentialSelfManagementForbiddenError";
+  }
+}
+export class CredentialSelfReviewForbiddenError extends Error {
+  constructor() {
+    super("CREDENTIAL_SELF_REVIEW_FORBIDDEN");
+    this.name = "CredentialSelfReviewForbiddenError";
+  }
+}
+
+/** True when the signed-in person is the caregiver this worker record belongs to. */
+async function actorOwnsWorker(trx: unknown, workerId: string): Promise<boolean> {
+  const result = await sql<{ own: boolean }>`
+    SELECT EXISTS (
+      SELECT 1 FROM workers w
+      WHERE w.id = ${workerId}
+        AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    ) AS own
+  `.execute(trx as never);
+  return result.rows[0]?.own === true;
+}
+
+/** Eligibility data of a credential is agency-managed and never self-managed. */
+async function assertCredentialDataManager(trx: unknown, workerId: string): Promise<void> {
+  await assertCredentialManager(trx);
+  if (await actorOwnsWorker(trx, workerId)) throw new CredentialSelfManagementForbiddenError();
+}
+
 export class CredentialUploadMismatchError extends Error {
   constructor() {
     super("CREDENTIAL_UPLOAD_MISMATCH");
@@ -250,6 +287,7 @@ export async function createCredential(
   assertUuid(workerId, "workerId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    await assertCredentialDataManager(trx, workerId);
     const credentialTypeId = await resolveCredentialTypeId(trx, input.credentialTypeCode);
 
     let documentId: string | null = null;
@@ -621,6 +659,7 @@ export async function updateCredential(
   assertUuid(credentialId, "credentialId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
+    await assertCredentialDataManager(trx, workerId);
 
     // worker_id is deliberately NEVER part of the whitelist below -- a
     // credential can never be reassigned from one worker to another via
@@ -704,6 +743,8 @@ export async function listPendingOrganizationCredentialReviews(
       WHERE owm.organization_id = ${organizationId}
         AND owm.status = 'active'
         AND COALESCE(ocr.review_status, 'pending') = 'pending'
+        -- B2: a manager's own credentials go to another manager's queue.
+        AND w.user_id IS DISTINCT FROM NULLIF(current_setting('app.current_user_id', true), '')::uuid
       ORDER BY dv.created_at ASC, w.display_name NULLS LAST, ct.name
     `.execute(trx);
 
@@ -764,6 +805,8 @@ export async function createOrUpdateOrganizationReview(
       WHERE c.id = ${credentialId} AND c.worker_id = ${membershipRow.rows[0].worker_id} LIMIT 1
     `.execute(trx);
     if (!credCheck.rows[0]) throw new CredentialNotFoundError();
+    // B2: nobody reviews her own credential, whatever other roles she holds.
+    if (await actorOwnsWorker(trx, membershipRow.rows[0].worker_id)) throw new CredentialSelfReviewForbiddenError();
     if (!credCheck.rows[0].document_id) throw new CredentialDocumentRequiredError();
 
     // Organization review is tenant-local and never exposes the worker document to ETNARA Platform.

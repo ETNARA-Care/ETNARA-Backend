@@ -28,17 +28,18 @@ describe("tenant document download boundaries", () => {
     expect(routes).not.toContain("reviewEstablishmentDocument");
   });
 
-  it("keeps ETNARA Verified establishment review isolated to platform context", () => {
+  it("149: ETNARA Central has no standing access to establishment documents (fail-closed)", () => {
     const service = read("src/modules/establishmentDocuments/platformEstablishmentDocuments.service.ts");
     const routes = read("src/modules/establishmentDocuments/platformEstablishmentDocuments.routes.ts");
+    const code = service.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-    expect(service).toContain("withPlatformContext");
-    expect(service).toContain("establishment_documents");
-    expect(service).not.toContain("resident_documents");
-    expect(service).not.toContain("credentials");
-    expect(routes).toContain("/platform/establishment-documents/verification-queue");
-    expect(routes).toContain("/platform/establishment-documents/:documentId/download");
-    expect(routes).toContain("/platform/establishment-documents/:documentId/review");
+    // Still a verified platform admin first (others keep their 403)...
+    expect(code).toContain("withPlatformContext");
+    // ...but no query, no signed URL and no review write.
+    expect(code).not.toMatch(/\bsql\b|SELECT |UPDATE |FROM establishment_documents|createPrivateDownloadUrl/);
+    expect((code.match(/throw new PlatformDocumentAccessClosedError\(\)/g) ?? []).length).toBe(2);
+    expect(code).toMatch(/listPlatformEstablishmentDocumentQueue[\s\S]*?return \[\];/);
+    expect(routes).toContain("PLATFORM_PRIVATE_DOCUMENT_ACCESS_DENIED");
   });
 
   it("issues short-lived signed downloads only after authorization in each service", () => {
