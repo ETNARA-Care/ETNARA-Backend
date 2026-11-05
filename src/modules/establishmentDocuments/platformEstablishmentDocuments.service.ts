@@ -1,7 +1,38 @@
-import { sql } from "kysely";
 import { withPlatformContext } from "../../context/tenantContext.js";
-import { createPrivateDownloadUrl } from "../storage/objectStorage.js";
-import { EstablishmentDocumentNotFoundError } from "./establishmentDocuments.service.js";
-export async function listPlatformEstablishmentDocumentQueue(userId:string){return withPlatformContext(userId,async trx=>(await sql<any>`SELECT d.id,d.organization_id,o.name organization_name,d.establishment_id,l.name establishment_name,d.document_type,d.title,d.file_name,d.content_type,d.issued_on,d.expires_on,d.review_status,d.reviewed_at,d.review_reason,d.created_at FROM establishment_documents d JOIN organizations o ON o.id=d.organization_id JOIN locations l ON l.id=d.establishment_id AND l.organization_id=d.organization_id WHERE d.archived_at IS NULL ORDER BY CASE d.review_status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END,d.created_at DESC`.execute(trx)).rows);}
-export async function getPlatformEstablishmentDocumentDownload(userId:string,id:string){return withPlatformContext(userId,async trx=>{const r=await sql<any>`SELECT storage_key,file_name,content_type FROM establishment_documents WHERE id=${id} AND archived_at IS NULL LIMIT 1`.execute(trx);if(!r.rows[0])throw new EstablishmentDocumentNotFoundError();return createPrivateDownloadUrl(r.rows[0].storage_key,r.rows[0].file_name,r.rows[0].content_type);});}
-export async function reviewPlatformEstablishmentDocument(userId:string,id:string,status:'approved'|'rejected',reason?:string){return withPlatformContext(userId,async trx=>{const r=await sql<any>`UPDATE establishment_documents SET review_status=${status},reviewed_by_user_id=${userId},reviewed_at=now(),review_reason=${reason??null},updated_at=now() WHERE id=${id} AND archived_at IS NULL RETURNING id,review_status,reviewed_at,review_reason`.execute(trx);if(!r.rows[0])throw new EstablishmentDocumentNotFoundError();return r.rows[0];});}
+
+/**
+ * ETNARA Central NO tiene acceso permanente a los documentos institucionales de las agencias
+ * (decisión de producto del 1-nov-2026, PR 1 de ETNARA Verified).
+ *
+ * - Ninguna de estas funciones consulta la tabla `establishment_documents` ni firma URL de descarga.
+ * - La migración 140 lo impone también en la base: política RESTRICTIVA `platform_phi_deny`
+ *   (0 filas para un superadministrador) y se retiran las políticas de revisión de Central de la 125.
+ * - Se sigue exigiendo un superadministrador real (`withPlatformContext`) para que los demás
+ *   usuarios reciban el mismo 403 de siempre.
+ *
+ * La cola responde 200 con una lista vacía para no romper el portal de Central, que la usa en
+ * su resumen. Abrir o revisar un documento responde 403. El acceso futuro será solo por
+ * autorización expresa y temporal de la agencia, documento por documento (PR 2, no incluido aquí).
+ */
+export class PlatformDocumentAccessClosedError extends Error {
+  constructor() { super("PLATFORM_PRIVATE_DOCUMENT_ACCESS_DENIED"); this.name = "PlatformDocumentAccessClosedError"; }
+}
+
+export const PLATFORM_DOCUMENT_ACCESS_MODEL = "AGENCY_AUTHORIZATION_REQUIRED" as const;
+
+export async function listPlatformEstablishmentDocumentQueue(userId: string): Promise<never[]> {
+  await withPlatformContext(userId, async () => undefined);
+  return [];
+}
+
+export async function getPlatformEstablishmentDocumentDownload(userId: string, _documentId: string): Promise<never> {
+  await withPlatformContext(userId, async () => undefined);
+  throw new PlatformDocumentAccessClosedError();
+}
+
+export async function reviewPlatformEstablishmentDocument(
+  userId: string, _documentId: string, _status: "approved" | "rejected", _reason?: string,
+): Promise<never> {
+  await withPlatformContext(userId, async () => undefined);
+  throw new PlatformDocumentAccessClosedError();
+}
