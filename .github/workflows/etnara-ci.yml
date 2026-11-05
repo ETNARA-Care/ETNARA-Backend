@@ -207,6 +207,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifySmartMatchFixesRollback.ts
 
+      - name: PostgreSQL 148 rollback (standard and full; schema identical to 147; agency configuration untouched)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyDefaultCareEventTypesRollback.ts
+
       - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -407,6 +413,10 @@ jobs:
           AUTHZ_DB_MODE=app_runtime npx tsx scripts/verifyEstablishmentAgencyChanges.ts
           # 139: app_runtime no escribe en las tablas administrativas sin RLS (prueba directa en SQL + guardia).
           npx tsx scripts/verifyRuntimeAdminTables.ts
+          # 148 (validación de agencias fundadoras, 4-nov): toda agencia nueva nace con los 8 tipos de registro
+          # de cuidado de Casa Demo; relleno solo de agencias sin configuración; ciclo completo por HTTP. Ambos modos.
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyDefaultCareEventTypes.ts
+          npx tsx scripts/verifyDefaultCareEventTypes.ts
 
       - name: PostgreSQL runtime role check at startup (app_runtime vs postgres, readiness, refusal, unreachable DB)
         env:

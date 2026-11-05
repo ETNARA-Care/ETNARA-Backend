@@ -58,7 +58,7 @@ async function main() {
   const org = async (name: string, features: string[]) => {
     const id = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
     for (const f of features) await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) VALUES ($1,$2,true)`, [id, f]);
-    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id) SELECT $1,id FROM care_event_types`, [id]);
+    await q(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id) SELECT $1,id FROM care_event_types ON CONFLICT (organization_id, care_event_type_id) DO NOTHING`, [id]);
     return id;
   };
   const orgA = await org(`SR A ${tag}`, ["EN_CAMINO", "SHIFT_REPORTS"]);

@@ -2,6 +2,12 @@
 
 ## In Progress
 
+### CARE-TYPES-148 — Tipos de registro de cuidado por defecto para agencias nuevas (A1, bloqueante del piloto)
+
+- Status: PR de backend (migración 148 + verifyDefaultCareEventTypes 26/26 en ambos modos + rollback 19/19). Sin cambios en el portal. Not authorized: merge, deploy, applying 148 in production.
+- Next: D1 (consulta de solo lectura en producción) y D2 (fusionar) según ops/148_default_care_event_types_despliegue.md.
+
+
 ### BILL-F2.3 — Facturación Premium F2.3 (issue, numbering, PDF, private storage, void, audit)
 
 - Status: backend PR (migration 127 + verifyBillingF23 18/18); portal PR next. Depends on F2.2 (#218). Not authorized: merge, deploy, creating the production billing bucket. Real issuing stays blocked until the agency validates its tax configuration.
