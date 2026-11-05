@@ -17,11 +17,13 @@ const tables = [
   "assignment_history", "verification_events", "verification_overrides",
   // Informe de Turno (126): report content and its history.
   "shift_reports", "shift_report_events", "shift_report_reviewers",
+  // 149: ETNARA Central does not review, approve or oversee agency staff credentials.
+  "credentials", "credential_platform_verifications", "organization_credential_reviews", "organization_document_version_reviews",
 ] as const;
 
 // Tables the runtime IS granted SELECT on (the feature reads them). For these a
 // 42501 is a broken grant, not a pass: the probe must reach RLS and get 0 rows.
-const runtimeReadable = new Set<string>(["resident_documents"]);
+const runtimeReadable = new Set<string>(["resident_documents", "credentials", "credential_platform_verifications", "organization_credential_reviews", "organization_document_version_reviews"]);
 
 const client = new pg.Client({ connectionString: url });
 async function main() {

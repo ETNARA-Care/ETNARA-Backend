@@ -213,6 +213,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyDefaultCareEventTypesRollback.ts
 
+      - name: PostgreSQL 149 rollback (schema identical to 148, no data touched, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyAgencyDocumentResponsibilityRollback.ts
+
       - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -318,11 +324,17 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyPushNotifications.ts
 
-      - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA central, no orphan files)
+      - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA Central closed by 149, history kept, no orphan files)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyDocumentAccess.ts
+
+      - name: PostgreSQL credential self-management and self-approval (149) — caregivers never manage or approve their own credentials, admin/supervisor-caregivers neither, colleagues can, other agency and ETNARA Central cannot, history and eligibility unchanged
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCredentialSelfApproval.ts
 
       - name: PostgreSQL Facturación F2.3 issue, consecutive numbering, private PDF (local S3), void, immutability, isolation
         env:

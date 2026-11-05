@@ -38,6 +38,9 @@ async function main() {
   const server = new pg.Client({ connectionString: adminUrl }); await server.connect();
   const upTo147 = mkdtempSync(join(tmpdir(), "etnara-147-"));
   for (const f of readdirSync(ALL).filter((f) => /^\d{3}_.*\.sql$/.test(f) && Number(f.slice(0, 3)) <= 147)) copyFileSync(join(ALL, f), join(upTo147, f));
+  // 149+: later migrations are not part of what 148's rollback must restore; stop at 148.
+  const upTo148 = mkdtempSync(join(tmpdir(), "etnara-148-"));
+  for (const f of readdirSync(ALL).filter((f) => /^\d{3}_.*\.sql$/.test(f) && Number(f.slice(0, 3)) <= 148)) copyFileSync(join(ALL, f), join(upTo148, f));
   const dbs: string[] = [];
   const newDb = async (suffix: string) => {
     const name = `etnara_rb148_${suffix}_${tag}`; await server.query(`CREATE DATABASE ${name}`); dbs.push(name);
@@ -79,7 +82,7 @@ async function main() {
     const a = await newDb("std"); await migrate(a, upTo147);
     const fa = await fixtures(a);
     const customBefore = await cfg(a, fa.custom);
-    await migrate(a, ALL);
+    await migrate(a, upTo148);
     const newAfter148 = await org(a, "Nueva con 148");
     check("R1a 148 aplicada: relleno de la agencia sin configuración y agencia nueva con 8 tipos", (await count(a, fa.blank)) === 8 && (await count(a, newAfter148)) === 8);
     check("R1b 148 no cambió la configuración propia ni la archivada", (await cfg(a, fa.custom)) === customBefore && (await count(a, fa.archived)) === 0);
@@ -92,7 +95,7 @@ async function main() {
     const afterRollback = await org(a, "Nueva tras la reversión");
     check("R1g una agencia creada tras la reversión nace sin tipos (como en 147)", (await count(a, afterRollback)) === 0);
     check("R4a la reversión estándar se puede repetir", (await run(a, STANDARD)) === "ok");
-    await migrate(a, ALL);
+    await migrate(a, upTo148);
     check("R2a 148 se vuelve a aplicar después de la reversión", await has148(a));
     check("R2b solo se rellena la agencia que quedó sin tipos; las demás no cambian",
       (await count(a, afterRollback)) === 8 && (await cfg(a, fa.blank)) === blankCfg && (await cfg(a, fa.custom)) === customBefore && (await count(a, fa.archived)) === 0);
@@ -104,7 +107,7 @@ async function main() {
     const b = await newDb("full"); await migrate(b, upTo147);
     const fb = await fixtures(b);
     const customBeforeB = await cfg(b, fb.custom);
-    await migrate(b, ALL);
+    await migrate(b, upTo148);
     const newB = await org(b, "Nueva con 148");
     // La agencia rellenada cambia uno de los tipos que puso 148: debe conservarse.
     await b.query(`UPDATE organization_care_event_types SET is_enabled=false WHERE organization_id=$1 AND care_event_type_id=(SELECT id FROM care_event_types WHERE code='HYDRATION')`, [fb.blank]);

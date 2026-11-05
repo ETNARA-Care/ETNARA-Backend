@@ -326,25 +326,50 @@ async function main() {
       eDenied.length === 0 && eRlsCg === 0 && eRlsB === 0 && eRlsForged === 0 && eInsB.code === "42501" && eInsBest.code === "42501" && eInsApproved.code === "42501",
       `${eDenied.join("; ") || "all 403"} rls=${eRlsCg}/${eRlsB}/${eRlsForged} ins=${eInsB.code}/${eInsBest.code}/${eInsApproved.code}`);
     const selfApprove = await rt(A.admin.userId, orgA, `UPDATE establishment_documents SET review_status='approved', reviewed_by_user_id=$2, reviewed_at=now() WHERE id=$1`, [eDoc2, A.admin.userId]);
-    check("E5 the agency cannot approve its own document (review is ETNARA central only)", selfApprove.code === "42501", String(selfApprove.code));
+    check("E5 the agency cannot write the review columns (149: they are history; the agency is responsible but nobody rewrites past decisions)", selfApprove.code === "42501", String(selfApprove.code));
 
-    // ------------------------------------------------------------ establishment documents: ETNARA Verified
+    // ------------------------------------------------------------ establishment documents: ETNARA Central closed (149)
+    // Central no longer reviews, approves, certifies or downloads agency documents: the queue answers 200
+    // with an EMPTY list (an old cached Central portal keeps working), opening or deciding answers 403,
+    // and RLS gives a verified platform admin 0 rows with or without an organization context.
+    // A legacy decision recorded by Central before 149 stays exactly as it was (history).
+    const legacy = (await q<Json>(`INSERT INTO establishment_documents (organization_id,establishment_id,document_type,title,file_name,content_type,size_bytes,storage_key,review_status,reviewed_by_user_id,reviewed_at,review_reason)
+      VALUES ($1,$2,'insurance',$3,'poliza-historica.pdf','application/pdf',10,$4,'rejected',$5,'2026-10-15T12:00:00Z','Ilegible (decisión histórica)') RETURNING id, review_status, reviewed_by_user_id, reviewed_at, review_reason`,
+      [orgA, estA, `Póliza histórica ${tag}`, `establishment-documents/${orgA}/${estA}/legacy-${tag}.pdf`, platform.userId])).rows[0];
+    const statusBefore = (await q<Json>(`SELECT review_status, reviewed_at FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
     const queue = await call("GET", "/platform/establishment-documents/verification-queue", platform.token);
-    const inQueue = queue.body.documents?.find((d: Json) => d.id === eDoc2);
-    const archivedInQueue = queue.body.documents?.some((d: Json) => d.id === eDoc);
     const pOpen = await call("GET", `/platform/establishment-documents/${eDoc2}/download`, platform.token);
-    const noReason = await call("PATCH", `/platform/establishment-documents/${eDoc2}/review`, platform.token, { status: "rejected" });
     const approve = await call("PATCH", `/platform/establishment-documents/${eDoc2}/review`, platform.token, { status: "approved" });
+    const reject = await call("PATCH", `/platform/establishment-documents/${legacy.id}/review`, platform.token, { status: "rejected", reason: "prueba" });
     const nonPlatform = await call("GET", "/platform/establishment-documents/verification-queue", A.admin.token);
-    check("E6 ETNARA central reviews establishment documents: queue lists the current one (not archived ones), opens it, approves it; non-platform users 403",
-      queue.status === 200 && !!inQueue && !archivedInQueue && pOpen.status === 200 && !!pOpen.body.url && noReason.status === 400 && approve.status === 200 && approve.body.document?.review_status === "approved" && nonPlatform.status === 403,
-      `queue=${queue.status} found=${!!inQueue} archived=${archivedInQueue} open=${pOpen.status} review=${noReason.status}/${approve.status} nonPlatform=${nonPlatform.status}`);
+    const nonPlatformOpen = await call("GET", `/platform/establishment-documents/${eDoc2}/download`, A.admin.token);
+    const statusAfter = (await q<Json>(`SELECT review_status, reviewed_at FROM establishment_documents WHERE id=$1`, [eDoc2])).rows[0];
+    check("E6 149: ETNARA Central has no ordinary access by API: queue 200 with 0 documents, open 403 (no URL), approve/reject 403, document unchanged; non-platform users 403",
+      queue.status === 200 && Array.isArray(queue.body.documents) && queue.body.documents.length === 0 && queue.body.accessModel === "AGENCY_RESPONSIBILITY"
+        && pOpen.status === 403 && pOpen.body.error === "PLATFORM_PRIVATE_DOCUMENT_ACCESS_DENIED" && !pOpen.body.url
+        && approve.status === 403 && reject.status === 403
+        && statusAfter.review_status === statusBefore.review_status && String(statusAfter.reviewed_at) === String(statusBefore.reviewed_at)
+        && nonPlatform.status === 403 && nonPlatformOpen.status === 403,
+      `queue=${queue.status} n=${queue.body.documents?.length} open=${pOpen.status} review=${approve.status}/${reject.status} status=${statusBefore.review_status}->${statusAfter.review_status} nonPlatform=${nonPlatform.status}/${nonPlatformOpen.status}`);
+    const pSee = await rlsCount(platform.userId, "", "establishment_documents", "true", [], true);
+    const pSeeForged = await rlsCount(platform.userId, orgA, "establishment_documents", "organization_id=$1", [orgA], true);
+    const pReview = await rt(platform.userId, "", `UPDATE establishment_documents SET review_status='approved', reviewed_by_user_id=$2, reviewed_at=now() WHERE id=$1`, [eDoc2, platform.userId], true);
     const pArchive = await rt(platform.userId, "", `UPDATE establishment_documents SET archived_at=now() WHERE id=$1`, [eDoc2], true);
-    const pTitle = await rt(platform.userId, "", `UPDATE establishment_documents SET title='x' WHERE id=$1`, [eDoc2], true);
+    const pTitle = await rt(platform.userId, orgA, `UPDATE establishment_documents SET title='x' WHERE id=$1`, [eDoc2], true);
     const pIns = await rt(platform.userId, "", `INSERT INTO establishment_documents (organization_id,establishment_id,document_type,title,file_name,content_type,size_bytes,storage_key) VALUES ($1,$2,'x','x','x.pdf','application/pdf',1,$3)`, [orgA, estA, `probe/${randomUUID()}`], true);
-    const pOldRow = await rlsCount(platform.userId, "", "establishment_documents", "id=$1", [eDoc], true);
-    check("E7 ETNARA central cannot archive, edit other fields or insert establishment documents, and does not see archived ones",
-      pArchive.code === "42501" && pTitle.code === "42501" && pIns.code === "42501" && pOldRow === 0, `${pArchive.code}/${pTitle.code}/${pIns.code} archivedVisible=${pOldRow}`);
+    const agencyStill = await rlsCount(A.admin.userId, orgA, "establishment_documents", "id=$1", [eDoc2]);
+    const blocked = (r: Json) => r.code === "42501" || (r.rowCount === 0 && !r.error);
+    check("E7 149 at the database: Central sees 0 establishment documents (no org and forged org A), cannot review, archive, edit or insert; positive control: agency A still sees it",
+      pSee === 0 && pSeeForged === 0 && blocked(pReview) && blocked(pArchive) && blocked(pTitle) && pIns.code === "42501" && agencyStill === 1,
+      `see=${pSee}/${pSeeForged} review=${pReview.code ?? pReview.rowCount} archive=${pArchive.code ?? pArchive.rowCount} title=${pTitle.code ?? pTitle.rowCount} ins=${pIns.code} agency=${agencyStill}`);
+    const aRewrite = await rt(A.admin.userId, orgA, `UPDATE establishment_documents SET review_status='approved', reviewed_by_user_id=$2, reviewed_at=now(), review_reason=NULL WHERE id=$1`, [legacy.id, A.admin.userId]);
+    const aList = await call("GET", ED(orgA, estA), A.admin.token);
+    const listedLegacy = aList.body.documents?.find((d: Json) => d.id === legacy.id);
+    const legacyAfter = (await q<Json>(`SELECT review_status, reviewed_by_user_id, reviewed_at, review_reason FROM establishment_documents WHERE id=$1`, [legacy.id])).rows[0];
+    check("E7b history: a decision recorded by Central before 149 stays identical (status, author, date, reason); the agency still lists it with that history and cannot rewrite it",
+      aRewrite.code === "42501" && !!listedLegacy && listedLegacy.review_status === "rejected" && legacyAfter.review_status === legacy.review_status
+        && legacyAfter.reviewed_by_user_id === legacy.reviewed_by_user_id && String(legacyAfter.reviewed_at) === String(legacy.reviewed_at) && legacyAfter.review_reason === legacy.review_reason,
+      `rewrite=${aRewrite.code} listed=${!!listedLegacy}/${listedLegacy?.review_status} after=${legacyAfter.review_status}`);
 
     // ------------------------------------------------------------ establishment documents: failure + archive
     const eBeforeFail = await objectCount(edPrefix);
@@ -370,7 +395,7 @@ async function main() {
     Object.assign(console, originals);
   }
 
-  out("\nResident and establishment documents (migration 125)\n");
+  out("\nResident and establishment documents (migrations 125 and 149)\n");
   out("| Check | Result | Detail |\n|---|---|---|");
   for (const r of results) out(`| ${r.check} | ${r.pass ? "PASS" : "FAIL"} | ${r.detail} |`);
   const failed = results.filter((r) => !r.pass).length;
