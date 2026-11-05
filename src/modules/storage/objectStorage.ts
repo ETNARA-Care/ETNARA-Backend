@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../../config/env.js";
 
@@ -49,6 +49,17 @@ export async function uploadPrivateObject(storageKey: string, contentType: strin
     ContentLength: body.byteLength,
     Body: body,
   }));
+}
+
+/**
+ * Server-side copy inside the same private bucket (the bytes never pass through the app).
+ * Used when a document version keeps its file but changes metadata: every version row owns
+ * its own key (storage_key is UNIQUE), and the source object is never modified or deleted.
+ */
+export async function copyPrivateObject(sourceKey: string, targetKey: string) {
+  const { s3, bucket } = client();
+  const encoded = sourceKey.split("/").map(encodeURIComponent).join("/");
+  await s3.send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${encoded}`, Key: targetKey, MetadataDirective: "COPY" }));
 }
 
 /** Removes one object. Only used to undo an upload whose database row was never written. */
