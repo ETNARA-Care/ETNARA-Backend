@@ -39,9 +39,20 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; 
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
 ];
 
+/**
+ * Express (strict routing off) serves `/x/` with the `/x` handler. The rules end in `$`, so
+ * without this a trailing slash skipped the gate (auditoría 4-nov, I-2 residual). Every trailing slash is
+ * stripped before matching (defensive); the request path itself is never rewritten.
+ */
+export function normalizeGatePath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed;
+}
+
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {
+  const normalized = normalizeGatePath(path);
   for (const rule of RULES) {
-    const m = rule.pattern.exec(path);
+    const m = rule.pattern.exec(normalized);
     if (m) {
       const read = method === "GET" || method === "HEAD";
       const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method) ?? false);
