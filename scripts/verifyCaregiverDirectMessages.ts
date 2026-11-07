@@ -204,12 +204,13 @@ async function main() {
     await db.query(`UPDATE user_roles SET role_id=(SELECT id FROM roles WHERE code='ORGANIZATION_ADMIN') WHERE organization_membership_id=$1`, [admin2.om]);
     check("Al restaurar el rol recupera el acceso", (await call("GET", msgPath, admin2.token)).status === 200);
 
-    // Nueva administradora: entra al abrir (no antes).
+    // Nueva administradora: desde 151 participa de inmediato (todas las administradoras activas
+    // atienden sin autorización individual); abrir desde el perfil sigue devolviendo la misma.
     const admin3 = await user("admin3", orgA, "ORGANIZATION_ADMIN");
     const pre = await call("GET", msgPath, admin3.token);
     const join = await open(admin3.token, orgA, cg.owm!);
     const post = await call("GET", msgPath, admin3.token);
-    check("Administradora nueva: accede al abrir desde el perfil (misma conversación)", pre.status === 404 && join.body.conversationId === thread && post.status === 200, `${pre.status}/${join.status}/${post.status}`);
+    check("Administradora nueva (151): accede de inmediato y abrir desde el perfil da la misma conversación", pre.status === 200 && join.body.conversationId === thread && post.status === 200, `${pre.status}/${join.status}/${post.status}`);
 
     // Historial: mensajes inmutables.
     const total = Number((await db.query(`SELECT count(*) FROM messages WHERE message_thread_id=$1`, [thread])).rows[0].count);

@@ -1,9 +1,10 @@
 /**
- * Mensajería directa agencia ↔ cuidadora (migración 136).
+ * Mensajería directa agencia ↔ cuidadora (migraciones 136 y 151).
  *
  * Una conversación por agencia y cuidadora (thread_type 'caregiver_agency', sin residente ni
- * turno). La abre solo una ORGANIZATION_ADMIN desde el perfil de la cuidadora; participan la
- * cuidadora y las administradoras activas. Leer y responder usa las rutas de siempre
+ * turno). La abre la agencia desde el perfil de la cuidadora o, desde 151, la propia cuidadora
+ * («Escribir a mi agencia»); es siempre la misma. Participan la cuidadora, todas las
+ * administradoras activas y las supervisoras que una administradora autorice expresamente. Leer y responder usa las rutas de siempre
  * (/conversations/:id/messages), protegidas por roleGuards.threadAccessSql: además de ser
  * participante, hay que ser administradora de la agencia o la cuidadora con su membresía activa.
  * Ninguna respuesta de este módulo incluye datos de residentes, direcciones ni planes.
@@ -13,14 +14,15 @@ import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { threadAccessSql } from "../../security/roleGuards.js";
 
+export type CaregiverConversationErrorCode = "CAREGIVER_THREAD_FORBIDDEN" | "CAREGIVER_NOT_FOUND" | "CAREGIVER_NO_ACCOUNT" | "CAREGIVER_THREAD_SELF" | "AGENCY_HAS_NO_MESSAGE_HANDLER";
 export class CaregiverConversationError extends Error {
-  constructor(public readonly code: "CAREGIVER_THREAD_FORBIDDEN" | "CAREGIVER_NOT_FOUND" | "CAREGIVER_NO_ACCOUNT" | "CAREGIVER_THREAD_SELF") {
+  constructor(public readonly code: CaregiverConversationErrorCode) {
     super(code);
     this.name = "CaregiverConversationError";
   }
 }
 
-const KNOWN = ["CAREGIVER_THREAD_FORBIDDEN", "CAREGIVER_NOT_FOUND", "CAREGIVER_NO_ACCOUNT", "CAREGIVER_THREAD_SELF"] as const;
+const KNOWN = ["CAREGIVER_THREAD_FORBIDDEN", "CAREGIVER_NOT_FOUND", "CAREGIVER_NO_ACCOUNT", "CAREGIVER_THREAD_SELF", "AGENCY_HAS_NO_MESSAGE_HANDLER"] as const;
 const uuidSchema = z.string().uuid();
 
 export interface CaregiverConversation {
@@ -39,6 +41,24 @@ export async function openCaregiverConversation(userId: string, organizationId: 
       `.execute(trx);
       const row = r.rows[0];
       return { conversationId: row.thread_id, created: row.created };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const code = KNOWN.find((c) => message.includes(c));
+      if (code) throw new CaregiverConversationError(code);
+      throw error;
+    }
+  });
+}
+
+/**
+ * 151 — «Escribir a mi agencia»: la cuidadora abre (o recupera) SU conversación directa con la
+ * agencia activa. Solo con su membresía de cuidadora activa; nunca la de otra persona.
+ */
+export async function openMyAgencyConversation(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    try {
+      const r = await sql<{ thread_id: string; created: boolean }>`SELECT thread_id, created FROM app_open_my_agency_thread()`.execute(trx);
+      return { conversationId: r.rows[0].thread_id, created: r.rows[0].created };
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       const code = KNOWN.find((c) => message.includes(c));
