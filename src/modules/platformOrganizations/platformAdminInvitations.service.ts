@@ -17,7 +17,9 @@ import { centralEmailDelivery, type CentralEmailDelivery } from "./platformAdmin
  * la plataforma y staff_role = ORGANIZATION_ADMIN). Las invitaciones de equipo que crea la propia agencia
  * siguen siendo de la agencia (team.service.ts) y Central no las lista, reenvía ni revoca.
  *
- * Auditoría: audit_log (solo INSERT para app_runtime desde 017), con target_organization_id = agencia.
+ * Auditoría: audit_log (solo INSERT para app_runtime desde 017), con organization_id = target_organization_id =
+ * agencia, como el resto de registros de audit_log (la sonda entre agencias lo exige). Los miembros de la agencia
+ * pueden leer que Central creó, reenvió o revocó una invitación; nunca la dirección ni ningún secreto.
  * Nunca se guarda el token, su hash, el correo del invitado ni mensajes del proveedor de correo.
  */
 
@@ -73,7 +75,7 @@ const CENTRAL_SCOPE = sql`ai.invitation_type = 'organization_admin' AND ai.staff
 
 export async function recordInvitationAudit(trx: Trx, actorUserId: string, organizationId: string, invitationId: string, action: string, details: Record<string, string | number | boolean | null>) {
   await sql`INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
-            VALUES (${actorUserId}, NULL, ${organizationId}, ${action}, 'access_invitation', ${invitationId}, ${JSON.stringify(details)}::jsonb)`.execute(trx);
+            VALUES (${actorUserId}, ${organizationId}, ${organizationId}, ${action}, 'access_invitation', ${invitationId}, ${JSON.stringify(details)}::jsonb)`.execute(trx);
 }
 
 async function requireOrganization(trx: Trx, organizationId: string, active: boolean) {

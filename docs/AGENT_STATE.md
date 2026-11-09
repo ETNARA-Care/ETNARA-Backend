@@ -10,7 +10,7 @@
   - `POST …/:invitationId/revoke`.
 - **Límites de reenvío:** 5 por invitación y hora (contados en `audit_log` con la fila bloqueada) y 20 por usuario de Central y hora (en memoria).
 - **Alcance:** solo las invitaciones creadas por Central. Son las que tienen la auditoría `ORG_ADMIN_INVITATION_CREATED`, o las anteriores a esta etapa cuyo invitador es administrador de la plataforma sin membresía activa en esa agencia. Las invitaciones de equipo de la propia agencia no cambian.
-- **Auditoría** (`audit_log`, `target_organization_id` = agencia): `ORG_ADMIN_INVITATION_CREATED`, `_RESENT`, `_RESEND_FAILED`, `_REVOKED`. No se guarda el token, el hash, el correo del invitado ni texto del proveedor.
+- **Auditoría** (`audit_log`, `organization_id` = `target_organization_id` = agencia, como el resto de registros): `ORG_ADMIN_INVITATION_CREATED`, `_RESENT`, `_RESEND_FAILED`, `_REVOKED`. No se guarda el token, el hash, el correo del invitado ni texto del proveedor.
 - **Sin cambios:** activación, roles, login y las invitaciones de equipo, de cuidadores y de familia. El hallazgo ADMIN/ORGANIZATION_ADMIN quedó cerrado (071/085 ya lo corrigieron).
 - **Rol de base de datos en producción (verificado en los logs de despliegue, solo lectura):** el despliegue activo `3f339e1e` (commit `2723dcc`, desde el 5-nov) arranca con `DB_RUNTIME_ROLE` `app_runtime`, `superuser:false`, `bypassrls:false`, `ownsPublicTables:0`, `requireRestricted:true`. El cambio desde `postgres` ocurrió el 31-oct a las 22:58 UTC. La nota del 26-oct («producción conecta como postgres») es anterior a ese cambio.
 - **Pruebas** (base desechable local, PostgreSQL 16):

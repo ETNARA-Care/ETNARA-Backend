@@ -112,7 +112,7 @@ async function main() {
     check("T08 la auditoría identifica actor, fecha, agencia, invitación y resultado (investigable uniéndola a la invitación)",
       !!full?.id && full.actor_user_id === platUser && full.occurred_at instanceof Date && full.target_organization_id === org && full.entity_id === id1
       && full.inv_org === org && full.email === e1 && full.new_value?.emailDelivery === "failed" && full.new_value?.error === "EMAIL_NOT_CONFIGURED" && typeof full.new_value?.expiresAt === "string", JSON.stringify(full));
-    check("T07 auditoría ORG_ADMIN_INVITATION_CREATED sin correo ni secretos", a1.length === 1 && a1[0].action === "ORG_ADMIN_INVITATION_CREATED" && a1[0].target_organization_id === org && a1[0].organization_id === null
+    check("T07 auditoría ORG_ADMIN_INVITATION_CREATED sin correo ni secretos", a1.length === 1 && a1[0].action === "ORG_ADMIN_INVITATION_CREATED" && a1[0].target_organization_id === org && a1[0].organization_id === org
       && !JSON.stringify(a1[0]).includes(e1) && noSecret(JSON.stringify(a1[0].new_value)), JSON.stringify(a1));
 
     // ---------------------------------------------------------------- T2 list
