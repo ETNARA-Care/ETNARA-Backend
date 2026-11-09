@@ -2,6 +2,25 @@
 
 ## Current Status
 
+## 2026-11-09 — Etapa 0: invitaciones de administrador sin token para ETNARA Central (rama claude/session-continuation-q649y3, sin migraciones, sin desplegar)
+- **Qué cambia:** `POST /platform/organizations/:id/admin-invitations` ya no devuelve `activationToken`; `emailDelivery` queda reducido a `{status, error?: EMAIL_NOT_CONFIGURED|EMAIL_SEND_FAILED}` (nunca el mensaje ni el id del proveedor).
+- **Nuevo** (`platformAdminInvitations.service.ts`):
+  - `GET …/admin-invitations` para consultar el estado, con `resendable`/`revocable`;
+  - `POST …/:invitationId/resend`: rota el token y renueva 7 días. Si el correo falla, la rotación se revierte (el último enlace sigue valiendo) y solo se audita el intento;
+  - `POST …/:invitationId/revoke`.
+- **Límites de reenvío:** 5 por invitación y hora (contados en `audit_log` con la fila bloqueada) y 20 por usuario de Central y hora (en memoria).
+- **Alcance:** solo las invitaciones creadas por Central. Son las que tienen la auditoría `ORG_ADMIN_INVITATION_CREATED`, o las anteriores a esta etapa cuyo invitador es administrador de la plataforma sin membresía activa en esa agencia. Las invitaciones de equipo de la propia agencia no cambian.
+- **Auditoría** (`audit_log`, `target_organization_id` = agencia): `ORG_ADMIN_INVITATION_CREATED`, `_RESENT`, `_RESEND_FAILED`, `_REVOKED`. No se guarda el token, el hash, el correo del invitado ni texto del proveedor.
+- **Sin cambios:** activación, roles, login y las invitaciones de equipo, de cuidadores y de familia. El hallazgo ADMIN/ORGANIZATION_ADMIN quedó cerrado (071/085 ya lo corrigieron).
+- **Rol de base de datos en producción (verificado en los logs de despliegue, solo lectura):** el despliegue activo `3f339e1e` (commit `2723dcc`, desde el 5-nov) arranca con `DB_RUNTIME_ROLE` `app_runtime`, `superuser:false`, `bypassrls:false`, `ownsPublicTables:0`, `requireRestricted:true`. El cambio desde `postgres` ocurrió el 31-oct a las 22:58 UTC. La nota del 26-oct («producción conecta como postgres») es anterior a ese cambio.
+- **Pruebas** (base desechable local, PostgreSQL 16):
+  - `verifyCentralAdminInvitations`: 44/44 como app_runtime y 43/43 como superusuario (el proveedor de correo se intercepta en memoria; no se envía nada);
+  - unitarias: 728/728;
+  - regresión: `verifyTeamAndAdminAuthority` 28/28, `verifyStaffRolesAndExistingAccounts` 18/18, `verifyDefaultCareEventTypes` 26/26 en ambos modos, `verifyRuntimeAdminTables` 18/18, `verifyTenantPolicyClosure` 22/22, `verifySecurityAudit` 22/22, `verifyPlatformPhiBoundary` PASS;
+  - build y manifiesto de privilegios al día.
+  - El script se añadió a `etnara-ci.yml`.
+- **Siguiente paso exacto:** revisión de Rafa. No fusionar ni desplegar sin autorización. El despliegue va primero en el frontend (tolera ambas respuestas) y después en el backend. Reversión: `git revert` (sin datos que restaurar).
+
 ## 2026-11-04 — 148: tipos de registro de cuidado por defecto para cada agencia (A1) — PR, sin desplegar
 - **Hallazgo A1 (validación de agencias fundadoras, 4-nov):** una agencia creada por ETNARA Central no tenía filas en `organization_care_event_types`; todo registro de cuidado respondía 409 `EVENT_TYPE_NOT_ENABLED`. Solo `seedDemo` las insertaba (por eso Casa Demo funcionaba).
 - **Migración 148:** disparador `AFTER INSERT ON organizations` (SECURITY DEFINER, solo filas de la agencia nueva, `ON CONFLICT DO NOTHING`) con los 8 tipos de Casa Demo; relleno solo de agencias **sin ninguna fila** y no archivadas; registro `care_event_type_default_grants` (sin acceso para app_runtime). Nunca UPDATE ni DELETE de configuración existente. PHOTO incluido como en Casa Demo: sigue rechazado mientras el módulo de fotos esté apagado.
