@@ -282,6 +282,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyShiftReportsF3.ts
 
+      - name: PostgreSQL 152 contract module (Etapas 1–2 — test documents, hash by the database, immutable versions and evidence, e-mail code before signing, downloads and certificate, Central overview, admin-only acceptance, isolation, concurrency)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContractDocuments.ts
+
+      - name: PostgreSQL 152 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 152
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

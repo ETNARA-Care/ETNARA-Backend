@@ -1,0 +1,136 @@
+// Módulo contractual, Etapa 1 (152). Con CONTRACTS_MODULE apagado todas las rutas responden 404.
+import { Router, type NextFunction, type Response } from "express";
+import { z } from "zod";
+import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
+import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
+import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
+import {
+  ContractForbiddenError, ContractNotFoundError, ContractRuleError, contractsModuleEnabled,
+  orgAcceptVersion, orgAcceptanceCertificate, orgDocumentFile, orgGetVersion, orgListAcceptances, orgListContracts, orgRequestSignatureCode,
+  platformContractOverview, platformCreateDocument, platformCreateVersion, platformListAcceptances, platformListContracts,
+  platformPublishVersion, platformRetireVersion, platformUpdateDraft,
+} from "./contracts.service.js";
+
+const router = Router();
+const uuid = z.string().uuid();
+const sha = z.string().regex(/^[0-9a-f]{64}$/);
+
+router.use(["/platform/contracts", "/organizations/:organizationId/contracts"], (_req, res: Response, next: NextFunction) => {
+  if (!contractsModuleEnabled()) { res.status(404).json({ error: "NOT_FOUND" }); return; }
+  next();
+});
+
+function fail(x: unknown, res: Response) {
+  if (x instanceof UnauthorizedPlatformAccessError) { res.status(403).json({ error: "PLATFORM_ACCESS_DENIED" }); return; }
+  if (isTenantAccessDenied(x)) { res.status(403).json(TENANT_ACCESS_DENIED_BODY); return; }
+  if (x instanceof ContractForbiddenError) { res.status(403).json({ error: "CONTRACT_FORBIDDEN" }); return; }
+  if (x instanceof ContractNotFoundError) { res.status(404).json({ error: "CONTRACT_NOT_FOUND" }); return; }
+  if (x instanceof ContractRuleError) {
+    if (typeof x.extra.retryAfterSeconds === "number") res.setHeader("Retry-After", String(x.extra.retryAfterSeconds));
+    res.status(x.status).json({ error: x.code, ...x.extra }); return;
+  }
+  res.status(500).json({ error: "INTERNAL_ERROR" });
+}
+const bad = (res: Response) => res.status(400).json({ error: "INVALID_PAYLOAD" });
+
+// ---------------------------------------------------------------- ETNARA Central
+const docBody = z.object({
+  code: z.string().regex(/^[A-Z][A-Z0-9_]{2,59}$/),
+  title: z.string().trim().min(3).max(200),
+  kind: z.enum(["SERVICE_AGREEMENT", "TERMS_OF_USE", "PRIVACY_NOTICE", "DATA_PROCESSING", "BUSINESS_ASSOCIATE", "OTHER"]),
+  isTest: z.boolean(),
+}).strict();
+const versionBody = z.object({ versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), body: z.string().min(50).max(200000), requiresNewAcceptance: z.boolean().optional() }).strict();
+const draftBody = z.object({ versionLabel: versionBody.shape.versionLabel.optional(), body: versionBody.shape.body.optional(), requiresNewAcceptance: z.boolean().optional() }).strict()
+  .refine((v) => v.versionLabel !== undefined || v.body !== undefined || v.requiresNewAcceptance !== undefined);
+
+router.get("/platform/contracts", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try { res.json({ documents: await platformListContracts(req.auth!.userId) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/documents", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const b = docBody.safeParse(req.body); if (!b.success) return void bad(res);
+  try { res.status(201).json({ document: await platformCreateDocument(req.auth!.userId, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/documents/:documentId/versions", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const d = uuid.safeParse(req.params.documentId), b = versionBody.safeParse(req.body); if (!d.success || !b.success) return void bad(res);
+  try { res.status(201).json({ version: await platformCreateVersion(req.auth!.userId, d.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.patch("/platform/contracts/versions/:versionId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = draftBody.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformUpdateDraft(req.auth!.userId, v.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/versions/:versionId/publish", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  try { res.json({ version: await platformPublishVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/versions/:versionId/retire", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  try { res.json({ version: await platformRetireVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/platform/contracts/overview", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try { res.json(await platformContractOverview(req.auth!.userId)); } catch (x) { fail(x, res); }
+});
+router.get("/platform/contracts/versions/:versionId/acceptances", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  try { res.json({ acceptances: await platformListAcceptances(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
+});
+
+// ---------------------------------------------------------------- Agencia (ORGANIZATION_ADMIN)
+router.get("/organizations/:organizationId/contracts", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ contracts: await orgListContracts(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/contracts/acceptances", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ acceptances: await orgListAcceptances(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/contracts/versions/:versionId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), v = uuid.safeParse(req.params.versionId); if (!o.success || !v.success) return void bad(res);
+  try { res.json({ version: await orgGetVersion(req.auth!.userId, o.data, v.data) }); } catch (x) { fail(x, res); }
+});
+// Representante autorizada: nombre completo (al menos nombre y apellido), cargo y confirmación
+// expresa de la declaración de autoridad que muestra el documento. Las casillas llegan desmarcadas
+// y la firma exige las dos en true, más el código enviado al correo de la cuenta.
+const signerFields = {
+  contentSha256: sha,
+  confirm: z.literal(true),
+  confirmAuthority: z.literal(true),
+  signerFullName: z.string().trim().min(5).max(150).regex(/\S+\s+\S+/),
+  signerTitle: z.string().trim().min(2).max(100),
+};
+const codeRequestBody = z.object(signerFields).strict();
+const acceptBody = z.object({ ...signerFields, challengeId: uuid, code: z.string().regex(/^[0-9]{6}$/) }).strict();
+router.post("/organizations/:organizationId/contracts/versions/:versionId/signature-code", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), v = uuid.safeParse(req.params.versionId), b = codeRequestBody.safeParse(req.body);
+  if (!o.success || !v.success || !b.success) return void bad(res);
+  try { res.status(201).json(await orgRequestSignatureCode(req.auth!.userId, o.data, v.data, b.data.contentSha256)); } catch (x) { fail(x, res); }
+});
+router.post("/organizations/:organizationId/contracts/versions/:versionId/accept", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), v = uuid.safeParse(req.params.versionId), b = acceptBody.safeParse(req.body);
+  if (!o.success || !v.success || !b.success) return void bad(res);
+  try {
+    const acceptance = await orgAcceptVersion(req.auth!.userId, o.data, v.data, b.data.contentSha256,
+      { fullName: b.data.signerFullName, title: b.data.signerTitle }, { challengeId: b.data.challengeId, code: b.data.code },
+      { ip: req.ip ?? null, userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null });
+    res.status(201).json({ acceptance });
+  } catch (x) { fail(x, res); }
+});
+/** Archivos binarios: el servicio construye las cabeceras dentro del contexto de la agencia. */
+function sendFile(res: Response, f: { body: Buffer; headers: Record<string, string> }) {
+  for (const [k, v] of Object.entries(f.headers)) res.setHeader(k, v);
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.send(f.body);
+}
+for (const format of ["pdf", "txt"] as const) {
+  router.get(`/organizations/:organizationId/contracts/versions/:versionId/document.${format}`, requireAuth, async (req: AuthenticatedRequest, res) => {
+    const o = uuid.safeParse(req.params.organizationId), v = uuid.safeParse(req.params.versionId); if (!o.success || !v.success) return void bad(res);
+    try { sendFile(res, await orgDocumentFile(req.auth!.userId, o.data, v.data, format)); } catch (x) { fail(x, res); }
+  });
+}
+router.get("/organizations/:organizationId/contracts/acceptances/:acceptanceId/certificate.pdf", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), a = uuid.safeParse(req.params.acceptanceId); if (!o.success || !a.success) return void bad(res);
+  try { sendFile(res, await orgAcceptanceCertificate(req.auth!.userId, o.data, a.data)); } catch (x) { fail(x, res); }
+});
+
+export default router;

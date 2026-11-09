@@ -162,3 +162,32 @@ export async function sendPasswordResetEmail(
     return { status: "failed", error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+/**
+ * Código de verificación para firmar un documento contractual (módulo contractual, Etapa 2).
+ * Solo el código, la agencia y el documento: ningún dato de residentes ni del personal.
+ */
+export async function sendContractSignatureCodeEmail(
+  payload: { recipientEmail: string; code: string; organizationName: string; documentTitle: string; versionLabel: string },
+  config: EmailConfig
+): Promise<EmailDeliveryResult> {
+  if (!config.apiKey) return { status: "failed", error: "EMAIL_NOT_CONFIGURED" };
+  const html = `<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.5;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><h1>${escapeHtml(config.senderName)}</h1><p>Tu código para firmar <strong>${escapeHtml(payload.documentTitle)}</strong> (versión ${escapeHtml(payload.versionLabel)}) en nombre de <strong>${escapeHtml(payload.organizationName)}</strong> es:</p><p style="font-size:28px;letter-spacing:6px;font-weight:bold">${escapeHtml(payload.code)}</p><p>Vence en 10 minutos y solo puede usarse una vez. Nadie de ETNARA te lo pedirá.</p><p>Si no estás firmando un documento en este momento, no lo compartas y avisa a soporte.</p></div></body></html>`;
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: `${config.senderName} <${config.senderEmail}>`,
+        to: payload.recipientEmail,
+        subject: `Tu código para firmar en ${config.senderName}`,
+        html,
+      }),
+    });
+    if (!response.ok) return { status: "failed", error: `HTTP ${response.status}` };
+    const result = await response.json() as { id?: string };
+    return result.id ? { status: "sent", messageId: result.id } : { status: "failed", error: "INVALID_RESPONSE" };
+  } catch (error) {
+    return { status: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+}
