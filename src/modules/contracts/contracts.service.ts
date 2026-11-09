@@ -21,20 +21,23 @@ export class ContractNotFoundError extends Error { constructor() { super("CONTRA
 export class ContractForbiddenError extends Error { constructor() { super("CONTRACT_FORBIDDEN"); } }
 /** Reglas de la base o del flujo, con un código estable para la respuesta (409/422). */
 export class ContractRuleError extends Error {
-  constructor(public code: string, public status: 409 | 422 | 429 | 503 = 409, public extra: Record<string, unknown> = {}) { super(code); }
+  constructor(public code: string, public status: 403 | 409 | 422 | 429 | 503 = 409, public extra: Record<string, unknown> = {}) { super(code); }
 }
 
-type Trx = Transaction<Database>;
+export type Trx = Transaction<Database>;
 const DB_RULES = new Set([
   "CONTRACT_VERSION_IMMUTABLE", "CONTRACT_DOCUMENT_IMMUTABLE", "CONTRACT_ACCEPTANCE_IMMUTABLE", "CONTRACT_VERSION_NOT_ACCEPTABLE",
   "CONTRACT_CONTENT_MISMATCH", "CONTRACT_TEST_BANNER_REQUIRED", "CONTRACT_OFFICIAL_CANNOT_BE_MARKED_TEST",
   "CONTRACT_VERSION_INVALID_TRANSITION", "CONTRACT_ACCEPTANCE_ADMIN_REQUIRED",
   "CONTRACT_CODE_NOT_USABLE", "CONTRACT_IDENTITY_NOT_VERIFIED", "CONTRACT_SIGNER_EMAIL_REQUIRED", "CONTRACT_CHALLENGE_IMMUTABLE",
+  // 153
+  "CONTRACT_LEGAL_APPROVAL_REQUIRED", "CONTRACT_LEGAL_APPROVAL_REFERENCE_REQUIRED", "CONTRACT_SIGNATORY_NOT_DESIGNATED", "CONTRACT_SIGNATORY_IMMUTABLE",
 ]);
 /** Traduce los errores de la base a errores de dominio sin exponer su texto. */
-function mapDbError(err: unknown): never {
+export function mapDbError(err: unknown): never {
   const e = err as { code?: string; message?: string; constraint?: string };
   const msg = e?.message ?? "";
+  if (msg === "CONTRACT_SIGNATORY_NOT_DESIGNATED") throw new ContractRuleError(msg, 403);
   if (msg === "CONTRACT_ACCEPTANCE_ADMIN_REQUIRED" || msg === "CONTRACT_IDENTITY_NOT_VERIFIED" || (e?.code === "42501" && /row-level security/.test(msg))) throw new ContractForbiddenError();
   if (DB_RULES.has(msg)) throw new ContractRuleError(msg, msg === "CONTRACT_TEST_BANNER_REQUIRED" || msg === "CONTRACT_OFFICIAL_CANNOT_BE_MARKED_TEST" ? 422 : 409);
   if (e?.code === "23505") {
@@ -46,11 +49,12 @@ function mapDbError(err: unknown): never {
   if (e?.code === "23514") throw new ContractRuleError("CONTRACT_INVALID_DOCUMENT", 422);
   throw err;
 }
-const audit = (trx: Trx, actor: string, org: string | null, action: string, entityType: string, entityId: string, value: Record<string, unknown>) =>
+export const audit = (trx: Trx, actor: string, org: string | null, action: string, entityType: string, entityId: string, value: Record<string, unknown>) =>
   sql`INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
       VALUES (${actor}, ${org}, ${org}, ${action}, ${entityType}, ${entityId}, ${JSON.stringify(value)}::jsonb)`.execute(trx);
 
 const versionFields = sql.raw(`v.id, v.document_id, v.version_label, v.status, v.is_test, v.requires_new_acceptance, v.content_sha256,
+  v.legal_status, v.legal_approved_at, v.source_file_name, v.source_file_sha256, v.commercial_terms,
   v.created_at, v.published_at, v.retired_at, length(v.body) AS body_length`);
 
 // ------------------------------------------------------------------ ETNARA Central
@@ -64,25 +68,26 @@ export async function platformListContracts(userId: string) {
   });
 }
 
-export async function platformCreateDocument(userId: string, input: { code: string; title: string; kind: string; isTest: boolean }) {
+export async function platformCreateDocument(userId: string, input: { code: string; title: string; kind: string; isTest: boolean; requiredForOperation?: boolean }) {
   return withPlatformContext(userId, async (trx) => {
     try {
-      const r = await sql<any>`INSERT INTO contract_documents (code, title, kind, is_test, created_by_user_id)
-        VALUES (${input.code}, ${input.title}, ${input.kind}, ${input.isTest}, ${userId})
-        RETURNING id, code, title, kind, is_test, created_at`.execute(trx);
+      if (input.kind === "SUBSCRIPTION_ORDER") throw new ContractRuleError("CONTRACT_ORDER_USE_DEDICATED_ROUTE", 422);
+      const r = await sql<any>`INSERT INTO contract_documents (code, title, kind, is_test, required_for_operation, created_by_user_id)
+        VALUES (${input.code}, ${input.title}, ${input.kind}, ${input.isTest}, ${input.requiredForOperation ?? false}, ${userId})
+        RETURNING id, code, title, kind, is_test, required_for_operation, organization_id, created_at`.execute(trx);
       await audit(trx, userId, null, "CONTRACT_DOCUMENT_CREATED", "contract_document", r.rows[0].id, { code: input.code, kind: input.kind, is_test: input.isTest });
       return r.rows[0];
-    } catch (err) { mapDbError(err); }
+    } catch (err) { if (err instanceof ContractRuleError) throw err; mapDbError(err); }
   });
 }
 
-export async function platformCreateVersion(userId: string, documentId: string, input: { versionLabel: string; body: string; requiresNewAcceptance?: boolean }) {
+export async function platformCreateVersion(userId: string, documentId: string, input: { versionLabel: string; body: string; requiresNewAcceptance?: boolean; sourceFileName?: string; sourceFileSha256?: string }) {
   return withPlatformContext(userId, async (trx) => {
     const doc = await sql<any>`SELECT id FROM contract_documents WHERE id = ${documentId}`.execute(trx);
     if (!doc.rows[0]) throw new ContractNotFoundError();
     try {
-      const r = await sql<any>`INSERT INTO contract_document_versions (document_id, version_label, body, content_sha256, is_test, requires_new_acceptance, created_by_user_id)
-        VALUES (${documentId}, ${input.versionLabel}, ${input.body}, repeat('0', 64), false, ${input.requiresNewAcceptance ?? true}, ${userId})
+      const r = await sql<any>`INSERT INTO contract_document_versions (document_id, version_label, body, content_sha256, is_test, requires_new_acceptance, source_file_name, source_file_sha256, created_by_user_id)
+        VALUES (${documentId}, ${input.versionLabel}, ${input.body}, repeat('0', 64), false, ${input.requiresNewAcceptance ?? true}, ${input.sourceFileName ?? null}, ${input.sourceFileSha256 ?? null}, ${userId})
         RETURNING id`.execute(trx);
       // La huella y la marca de prueba las fija la base: se lee la fila tal como quedó.
       const v = (await sql<any>`SELECT ${versionFields} FROM contract_document_versions v WHERE v.id = ${r.rows[0].id}`.execute(trx)).rows[0];
@@ -162,7 +167,7 @@ export async function platformListAcceptances(userId: string, versionId: string)
  */
 export async function platformContractOverview(userId: string) {
   return withPlatformContext(userId, async (trx) => {
-    const current = (await sql<any>`SELECT ${versionFields}, d.code, d.title FROM contract_document_versions v
+    const current = (await sql<any>`SELECT ${versionFields}, d.code, d.title, d.organization_id AS doc_org, d.required_for_operation FROM contract_document_versions v
       JOIN contract_documents d ON d.id = v.document_id WHERE v.status = 'published' ORDER BY d.created_at`.execute(trx)).rows;
     const orgs = (await sql<any>`SELECT id, name, status FROM organizations WHERE archived_at IS NULL AND status IN ('active', 'trial') ORDER BY name`.execute(trx)).rows;
     const acc = (await sql<any>`SELECT a.organization_id, a.document_version_id, v.document_id, v.version_label, v.published_at, a.accepted_at,
@@ -170,10 +175,11 @@ export async function platformContractOverview(userId: string) {
       FROM organization_contract_acceptances a JOIN contract_document_versions v ON v.id = a.document_version_id
       ORDER BY a.accepted_at`.execute(trx)).rows;
     return {
-      documents: current.map((v) => ({ documentId: v.document_id, code: v.code, title: v.title, versionId: v.id, versionLabel: v.version_label, isTest: v.is_test, requiresNewAcceptance: v.requires_new_acceptance })),
+      documents: current.map((v) => ({ documentId: v.document_id, code: v.code, title: v.title, versionId: v.id, versionLabel: v.version_label, isTest: v.is_test, requiresNewAcceptance: v.requires_new_acceptance, organizationId: v.doc_org, requiredForOperation: v.required_for_operation })),
       organizations: orgs.map((o) => ({
         organizationId: o.id, name: o.name, status: o.status,
-        contracts: current.map((v) => {
+        // Generales para todas; la Orden de Suscripción solo para su agencia.
+        contracts: current.filter((v) => !v.doc_org || v.doc_org === o.id).map((v) => {
           const mine = acc.filter((a) => a.organization_id === o.id && a.document_id === v.document_id);
           const exact = mine.find((a) => a.document_version_id === v.id);
           const last = mine[mine.length - 1];
@@ -190,7 +196,7 @@ export async function platformContractOverview(userId: string) {
 }
 
 // ------------------------------------------------------------------ Agencia (solo ORGANIZATION_ADMIN)
-async function requireOrgAdmin(trx: Trx) {
+export async function requireOrgAdmin(trx: Trx) {
   const r = await sql<{ ok: boolean }>`SELECT public.app_is_org_admin() AS ok`.execute(trx);
   if (!r.rows[0]?.ok) throw new ContractForbiddenError();
 }
@@ -237,7 +243,16 @@ export async function orgGetVersion(userId: string, organizationId: string, vers
     if (!v) throw new ContractNotFoundError();
     // Lo que la representante debe confirmar antes de aceptar (el texto de la declaración lo fija la base).
     const decl = (await sql<{ t: string }>`SELECT public.app_contract_authority_declaration() AS t`.execute(trx)).rows[0].t;
-    return { ...v, authorityDeclaration: decl, acceptanceStatementTemplate: acceptanceStatement(v.organization_name, v.title, v.version_label, v.content_sha256, { fullName: "{nombre completo}", title: "{cargo}" }) };
+    const checkbox = (await sql<{ t: string }>`SELECT public.app_contract_acceptance_checkbox_text() AS t`.execute(trx)).rows[0].t;
+    const rule = (await sql<{ designation_id: string | null; required: boolean }>`SELECT designation_id, required FROM public.app_contract_signatory_rule(${organizationId}, ${userId}, ${v.is_test})`.execute(trx)).rows[0];
+    const designation = rule?.designation_id ? (await sql<any>`SELECT full_name, title FROM organization_contract_signatories WHERE id = ${rule.designation_id}`.execute(trx)).rows[0] : null;
+    const signer = {
+      allowed: !rule?.required || !!rule?.designation_id,
+      designationRequired: !!rule?.required,
+      designation: designation ? { fullName: designation.full_name, title: designation.title } : null,
+      legallyApproved: v.is_test || v.legal_status === "legally_approved",
+    };
+    return { ...v, acceptanceCheckboxText: checkbox, signer, authorityDeclaration: decl, acceptanceStatementTemplate: acceptanceStatement(v.organization_name, v.title, v.version_label, v.content_sha256, { fullName: "{nombre completo}", title: "{cargo}" }) };
   });
 }
 
@@ -345,7 +360,8 @@ export async function orgListAcceptances(userId: string, organizationId: string)
     await requireOrgAdmin(trx);
     const r = await sql<any>`SELECT a.id, a.document_version_id, v.version_label, d.code, d.title, a.content_sha256, a.is_test,
         a.accepted_by_login, a.accepted_role, a.signer_full_name, a.signer_title, a.authority_declaration,
-        a.acceptance_statement, a.accepted_at, a.verification_method, v.status AS version_status
+        a.acceptance_statement, a.accepted_at, a.verification_method, a.acceptance_checkbox_text, a.consent_method, a.document_downloaded_at,
+        a.signatory_designation_id IS NOT NULL AS designated_signatory, v.status AS version_status
       FROM organization_contract_acceptances a
       JOIN contract_document_versions v ON v.id = a.document_version_id JOIN contract_documents d ON d.id = v.document_id
       WHERE a.organization_id = ${organizationId} ORDER BY a.accepted_at`.execute(trx);
@@ -360,6 +376,8 @@ export async function orgDocumentFile(userId: string, organizationId: string, ve
     const v = (await sql<any>`SELECT v.version_label, v.body, v.content_sha256, v.published_at, v.is_test, d.title, d.code
       FROM contract_document_versions v JOIN contract_documents d ON d.id = v.document_id WHERE v.id = ${versionId}`.execute(trx)).rows[0];
     if (!v) throw new ContractNotFoundError();
+    // 153: queda registrado que esta administradora descargó el documento (evidencia de «tuve oportunidad de descargarlo»).
+    await sql`INSERT INTO contract_document_downloads (organization_id, document_version_id, user_id, format) VALUES (${organizationId}, ${versionId}, ${userId}, ${format})`.execute(trx);
     const base = `${v.code}-v${v.version_label}`.replace(/[^A-Za-z0-9._-]/g, "_");
     // Cabeceras construidas aquí, dentro del contexto de la agencia (como facturación e informes).
     const headers = (fileName: string, contentType: string) => ({ "Content-Type": contentType, "Content-Disposition": `attachment; filename="${fileName}"`, "X-Content-SHA256": v.content_sha256 as string });
@@ -381,6 +399,7 @@ export async function orgAcceptanceCertificate(userId: string, organizationId: s
       id: a.id, organizationName: a.organization_name, title: a.title, code: a.code, versionLabel: a.version_label, contentSha256: a.content_sha256, isTest: a.is_test,
       signerFullName: a.signer_full_name, signerTitle: a.signer_title, authorityDeclaration: a.authority_declaration, acceptanceStatement: a.acceptance_statement,
       acceptedByLogin: a.accepted_by_login, verifiedEmail: maskEmail(a.verified_email), verificationMethod: a.verification_method, acceptedAt: a.accepted_at, ipAddress: a.ip_text,
+      acceptanceCheckboxText: a.acceptance_checkbox_text ?? null, documentDownloadedAt: a.document_downloaded_at ?? null, designatedSignatory: !!a.signatory_designation_id,
     });
     const fileName = `constancia-${String(a.code).replace(/[^A-Za-z0-9._-]/g, "_")}-v${a.version_label}.pdf`.replace(/[^A-Za-z0-9._-]/g, "_");
     return { body: pdf, headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${fileName}"` } };

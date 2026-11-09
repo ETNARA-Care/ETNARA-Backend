@@ -430,9 +430,17 @@ async function main() {
   const before26 = await counts();
   const dry = await errCode(q(ROLLBACK_SQL.replace(/COMMIT;\s*$/, "ROLLBACK;")));
   await q("ROLLBACK").catch(() => undefined);
-  check("26. Con evidencia solo de prueba, la reversión ordinaria se ejecuta (ensayo deshecho; datos intactos)", dry === "ok" && JSON.stringify(await counts()) === JSON.stringify(before26), dry);
+  const has153 = (await q(`SELECT 1 FROM schema_migrations WHERE filename='153_contract_saas_v1.sql'`)).rowCount === 1;
+  check(has153 ? "26. Con 153 aplicada, la reversión de 152 se detiene y pide revertir 153 primero (datos intactos)" : "26. Con evidencia solo de prueba, la reversión ordinaria se ejecuta (ensayo deshecho; datos intactos)",
+    (has153 ? dry.includes("CONTRACT_ROLLBACK_REVERT_153_FIRST") : dry === "ok") && JSON.stringify(await counts()) === JSON.stringify(before26), dry);
   const offDoc = (await q<{ id: string }>(`INSERT INTO contract_documents (code,title,kind,is_test,created_by_user_id) VALUES ($1,'Documento ficticio no marcado (prueba de reversión)','OTHER',false,$2) RETURNING id`, [`FICTICIO_REVERSION_${tag}`, central.userId])).rows[0].id;
   const offVer = (await q<{ id: string }>(`INSERT INTO contract_document_versions (document_id,version_label,body,content_sha256,is_test,created_by_user_id) VALUES ($1,'1.0','Texto ficticio sin valor legal, usado solo para comprobar que la reversión se niega.',repeat('0',64),false,$2) RETURNING id`, [offDoc, central.userId])).rows[0].id;
+  // Con 153 aplicada, un documento oficial solo se publica con aprobación jurídica registrada (aquí ficticia).
+  if ((await q(`SELECT 1 FROM information_schema.columns WHERE table_name='contract_document_versions' AND column_name='legal_status'`)).rowCount) {
+    await q(`UPDATE contract_document_versions SET legal_status='legally_approved', legal_approved_by_user_id=$2, legal_approval_reference='Referencia ficticia de prueba' WHERE id=$1`, [offVer, central.userId]);
+    // …y solo firma la representante designada por la agencia (ficticia).
+    await q(`INSERT INTO organization_contract_signatories (organization_id,user_id,full_name,title,basis,designated_by_user_id) VALUES ($1,$2,'Nombre Ficticio Representante','Cargo ficticio','Designación ficticia de prueba de reversión',$3)`, [orgB, B.admin.userId, central.userId]);
+  }
   await q(`UPDATE contract_document_versions SET status='published', published_by_user_id=$2 WHERE id=$1`, [offVer, central.userId]);
   const offHash = (await q(`SELECT content_sha256 FROM contract_document_versions WHERE id=$1`, [offVer])).rows[0].content_sha256;
   const offChal = await suChallenge(orgB, offVer, B.admin.userId);

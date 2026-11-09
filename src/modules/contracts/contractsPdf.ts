@@ -49,6 +49,7 @@ export interface AcceptanceCertificate {
   id: string; organizationName: string; title: string; code: string; versionLabel: string; contentSha256: string; isTest: boolean;
   signerFullName: string; signerTitle: string; authorityDeclaration: string; acceptanceStatement: string;
   acceptedByLogin: string; verifiedEmail: string; verificationMethod: string; acceptedAt: string; ipAddress: string | null;
+  acceptanceCheckboxText?: string | null; documentDownloadedAt?: string | null; designatedSignatory?: boolean;
 }
 
 export function renderAcceptanceCertificatePdf(a: AcceptanceCertificate): Promise<Buffer> {
@@ -65,8 +66,11 @@ export function renderAcceptanceCertificatePdf(a: AcceptanceCertificate): Promis
     row("Cuenta que firmó:", a.acceptedByLogin);
     row("Verificación de identidad:", a.verificationMethod === "EMAIL_CODE" ? `código de un solo uso enviado a ${a.verifiedEmail}` : a.verificationMethod);
     row("Fecha y hora:", when(a.acceptedAt));
+    if (a.designatedSignatory !== undefined) row("Representante designada por la organización ante ETNARA:", a.designatedSignatory ? "sí" : "no");
+    if (a.documentDownloadedAt) row("Documento descargado antes de aceptar:", when(a.documentDownloadedAt));
     if (a.ipAddress) row("Dirección IP:", a.ipAddress);
     row("Identificador de la evidencia:", a.id);
+    if (a.acceptanceCheckboxText) { doc.moveDown(0.6).font("Helvetica-Bold").text("Casilla de aceptación marcada"); doc.font("Helvetica").text(a.acceptanceCheckboxText); }
     doc.moveDown(0.6).font("Helvetica-Bold").text("Declaración de autoridad aceptada");
     doc.font("Helvetica").text(a.authorityDeclaration).moveDown(0.6);
     doc.font("Helvetica-Bold").text("Declaración de aceptación");

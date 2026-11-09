@@ -15,6 +15,12 @@ DO $$ BEGIN
     END IF;
   END IF;
 END $$;
+-- Orden: si 153 (contrato SaaS) está aplicada, primero se revierte 153.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '153_contract_saas_v1.sql') THEN
+    RAISE EXCEPTION 'CONTRACT_ROLLBACK_REVERT_153_FIRST';
+  END IF;
+END $$;
 -- La política de lectura del catálogo consulta las versiones: se quita antes de borrar las tablas.
 DO $$ BEGIN
   IF to_regclass('public.contract_documents') IS NOT NULL THEN
