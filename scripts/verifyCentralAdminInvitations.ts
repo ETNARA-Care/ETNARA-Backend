@@ -104,6 +104,14 @@ async function main() {
     const id3 = inv3.j.invitation.id as string;
 
     const a1 = (await audit(id1)).rows;
+    // Enough to investigate without secrets: who (actor), when, which agency, which invitation (join to
+    // access_invitations for the address), what happened and the delivery outcome.
+    const full = (await q<Json>(`SELECT al.id, al.actor_user_id, al.occurred_at, al.target_organization_id, al.entity_type, al.entity_id, al.action, al.new_value,
+        ai.email, ai.organization_id AS inv_org FROM audit_log al JOIN access_invitations ai ON ai.id = al.entity_id
+       WHERE al.entity_type='access_invitation' AND al.entity_id=$1`, [id1])).rows[0];
+    check("T08 la auditoría identifica actor, fecha, agencia, invitación y resultado (investigable uniéndola a la invitación)",
+      !!full?.id && full.actor_user_id === platUser && full.occurred_at instanceof Date && full.target_organization_id === org && full.entity_id === id1
+      && full.inv_org === org && full.email === e1 && full.new_value?.emailDelivery === "failed" && full.new_value?.error === "EMAIL_NOT_CONFIGURED" && typeof full.new_value?.expiresAt === "string", JSON.stringify(full));
     check("T07 auditoría ORG_ADMIN_INVITATION_CREATED sin correo ni secretos", a1.length === 1 && a1[0].action === "ORG_ADMIN_INVITATION_CREATED" && a1[0].target_organization_id === org && a1[0].organization_id === null
       && !JSON.stringify(a1[0]).includes(e1) && noSecret(JSON.stringify(a1[0].new_value)), JSON.stringify(a1));
 
