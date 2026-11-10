@@ -193,6 +193,54 @@ async function main() {
         VALUES ('PLATFORM_PROFESSIONAL',$1,$2,'application/pdf','x.pdf',1,$3,'private','hidden')`, [worker, `credentials/x130/${tag}/c`, adminC]),
     }));
     check("X10 an agency where the caregiver does not work neither sees her professional files nor uploads in her name", c.sees === 0 && c.ins.startsWith("denied"), JSON.stringify(c));
+
+    // 153 — catálogo contractual: documentos COMPARTIDOS (sin agencia, publicados por ETNARA para todas) frente a
+    // documentos PRIVADOS (Orden de Suscripción de UNA agencia). La excepción de lectura del sondeo general cubre
+    // solo los compartidos (organization_id IS NULL); aquí se comprueba, fila por fila, que no abre nada más.
+    if ((await admin.query(`SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='contract_documents' AND column_name='organization_id'`)).rowCount) {
+      const central = await user("central");
+      const BANNER = "DOCUMENTO FICTICIO DE PRUEBA — sin valor legal. Texto usado solo por el sondeo de aislamiento entre agencias.";
+      const TERMS = JSON.stringify({ status: "proposal", chargesRequireExpressAcceptance: true, automaticCharges: false, automaticRenewal: false, billingActivated: false });
+      const doc = async (code: string, kind: string, orgId: string | null, publish: boolean) => {
+        const d = (await one(`INSERT INTO contract_documents (code,title,kind,is_test,organization_id,created_by_user_id) VALUES ($1,$2,$3,true,$4,$5) RETURNING id`,
+          [`TEST_X153_${code}_${tag}`.toUpperCase(), `[PRUEBA] X153 ${code} ${tag}`, kind, orgId, central])).id as string;
+        const v = (await one(`INSERT INTO contract_document_versions (document_id,version_label,body,content_sha256,is_test,commercial_terms,created_by_user_id) VALUES ($1,'1.0',$2,repeat('0',64),true,$3::jsonb,$4) RETURNING id`,
+          [d, BANNER, kind === "SUBSCRIPTION_ORDER" ? TERMS : null, central])).id as string;
+        if (publish) await admin.query(`UPDATE contract_document_versions SET status='published', published_by_user_id=$2 WHERE id=$1`, [v, central]);
+        return { d, v };
+      };
+      const shared = await doc("COMPARTIDO", "SERVICE_AGREEMENT", null, true);
+      const sharedDraft = await doc("BORRADOR", "SERVICE_AGREEMENT", null, false);
+      const privB = await doc("ORDEN_B", "SUBSCRIPTION_ORDER", orgB, true);
+      const privBDraft = await doc("ORDEN_B_BORR", "SUBSCRIPTION_ORDER", orgB, false);
+      const privA = await doc("ORDEN_A", "SUBSCRIPTION_ORDER", orgA, true);
+      const all = [shared, sharedDraft, privB, privBDraft, privA];
+      const view = async (u: string, o: string) => as(u, o, async () => {
+        const docs = (await runtime.query<{ id: string }>(`SELECT id FROM contract_documents WHERE id = ANY($1)`, [all.map((x) => x.d)])).rows.map((r) => r.id);
+        const vers = (await runtime.query<{ id: string }>(`SELECT id FROM contract_document_versions WHERE id = ANY($1)`, [all.map((x) => x.v)])).rows.map((r) => r.id);
+        return {
+          docs, vers,
+          upd: await attempt(`UPDATE contract_documents SET title = title WHERE id = ANY($1)`, [all.map((x) => x.d)]),
+          del: await attempt(`DELETE FROM contract_documents WHERE id = ANY($1)`, [all.map((x) => x.d)]),
+          updV: await attempt(`UPDATE contract_document_versions SET body = body WHERE id = ANY($1)`, [all.map((x) => x.v)]),
+          accB: await attempt(`SELECT 1 FROM organization_contract_acceptances WHERE organization_id = $1`, [orgB]),
+        };
+      });
+      const same = (got: string[], want: string[]) => JSON.stringify([...got].sort()) === JSON.stringify([...want].sort());
+      const blocked = (r: string) => r === "rows=0" || r.startsWith("denied");
+      const a = await view(adminA, orgA), bb = await view(adminB, orgB), cg = await view(cgUser, orgA), cc = await view(adminC, orgC);
+      check("X11 contratos: la administración de A ve el documento COMPARTIDO publicado y SU Orden; no ve la Orden de B (ni publicada ni en borrador) ni borradores; no puede modificar ni borrar nada",
+        same(a.docs, [shared.d, privA.d]) && same(a.vers, [shared.v, privA.v]) && blocked(a.upd) && blocked(a.del) && blocked(a.updV), JSON.stringify(a));
+      check("X12 contratos: B ve el compartido y solo SU Orden publicada; C (sin Orden) ve solo el compartido; una cuidadora no ve ningún documento contractual",
+        same(bb.docs, [shared.d, privB.d]) && same(bb.vers, [shared.v, privB.v]) && same(cc.docs, [shared.d]) && same(cc.vers, [shared.v]) && cg.docs.length === 0 && cg.vers.length === 0
+        && blocked(bb.upd) && blocked(bb.del) && blocked(cc.upd) && blocked(cg.upd), JSON.stringify({ b: bb, c: cc, caregiver: cg }));
+      // El sondeo general sigue contando las Órdenes ajenas como filas de otra agencia (la excepción no las oculta).
+      const generic = (await probeAs(runtime, ["contract_documents"], orgA, adminA, "app_runtime"))[0];
+      const foreignPrivate = Number((await admin.query(`SELECT count(*) AS n FROM contract_documents x WHERE x.organization_id IS DISTINCT FROM $1::uuid AND NOT ${readFilter("contract_documents")}`, [orgA])).rows[0].n);
+      const exempted = Number((await admin.query(`SELECT count(*) AS n FROM contract_documents x WHERE ${readFilter("contract_documents")} AND x.organization_id IS NOT NULL`)).rows[0].n);
+      check("X13 contratos: la excepción del sondeo cubre SOLO documentos sin agencia; las Órdenes ajenas se sondean (existen ≥2) y A no ve, modifica ni borra ninguna",
+        exempted === 0 && foreignPrivate >= 2 && generic.visible === 0 && generic.updatable === 0 && generic.deletable === 0 && !generic.error, JSON.stringify({ exempted, foreignPrivate, generic }));
+    }
   }
 
   // Superuser-only escalation attempts must fail for app_runtime.
