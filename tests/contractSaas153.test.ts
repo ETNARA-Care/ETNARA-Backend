@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
+import { FOUNDING_PROGRAM, normalizeOrderTerms, subscriptionOrderBody } from "../src/modules/contracts/contracts.orderTerms.js";
 import { contractsEnforcementEnabled, decideContractGate, MIN_NOTICE_DAYS, type GateInput } from "../src/modules/contracts/contracts.enforcement.js";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -74,5 +75,36 @@ describe("153 contrato SaaS — reglas de acceso (preparadas y apagadas)", () =>
     expect(rollback).toContain("CONTRACT_ROLLBACK_REFUSED_OFFICIAL_EVIDENCE");
     expect(rollback).toContain("Declaro que tengo autoridad suficiente para aceptar este documento en nombre de la organización");
     expect(rollback).toContain("DELETE FROM schema_migrations WHERE filename = '153_contract_saas_v1.sql'");
+  });
+});
+
+describe("153 Orden de Suscripción — condiciones individuales, siempre propuesta", () => {
+  it("no hay precio predeterminado: sin precio queda «por definir y aceptar»", () => {
+    const t = normalizeOrderTerms({ planName: "Plan A", features: ["Turnos"] });
+    expect(t.pricing.proposedMonthlyPriceUsd).toBeNull();
+    const body = subscriptionOrderBody("Agencia", t, false);
+    expect(body).toContain("Precio mensual: POR DEFINIR Y ACEPTAR");
+    expect(body).not.toMatch(/99/);
+  });
+  it("un precio individual siempre se presenta como PROPUESTA sujeta a aceptación expresa", () => {
+    const t = normalizeOrderTerms({ planName: "Plan B", features: [], proposedMonthlyPriceUsd: 120 });
+    expect(subscriptionOrderBody("Agencia", t, false)).toContain("US$120.00 al mes (PROPUESTA, sujeta a aprobación y a la aceptación expresa de la Agencia)");
+  });
+  it("las salvaguardas las fija el servidor aunque el cliente intente otra cosa", () => {
+    const t = normalizeOrderTerms({ planName: "Plan C", features: [], ...( { billingActivated: true, automaticCharges: true } as object) } as never);
+    expect(t).toMatchObject({ status: "proposal", chargesRequireExpressAcceptance: true, automaticCharges: false, automaticRenewal: false, billingActivated: false });
+  });
+  it("Agencias Fundadoras: configuración pendiente de aprobación definitiva, sin tarifas", () => {
+    expect(FOUNDING_PROGRAM.status).toBe("pending_definitive_approval");
+    expect(JSON.stringify(FOUNDING_PROGRAM)).not.toMatch(/\$|USD|99/);
+    const t = normalizeOrderTerms({ planName: "Plan D", features: [], foundingProgram: true });
+    expect(t.foundingProgram?.programStatus).toBe("pending_definitive_approval");
+    expect(subscriptionOrderBody("Agencia", t, false)).toContain("PENDIENTE DE APROBACIÓN DEFINITIVA");
+  });
+  it("la migración bloquea texto ficticio y borradores marcados como no firmables, y exige aprobación comercial", () => {
+    expect(migration).toContain("CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED");
+    expect(migration).toContain("NO UTILIZAR PARA FIRMAS");
+    expect(migration).toContain("CONTRACT_COMMERCIAL_APPROVAL_REQUIRED");
+    expect(migration).toContain("CONTRACT_ORDER_TERMS_INVALID");
   });
 });

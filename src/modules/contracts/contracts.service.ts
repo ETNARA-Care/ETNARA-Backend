@@ -6,6 +6,8 @@
  * Interruptores (por defecto apagados; no hay bloqueos de ningún tipo en esta etapa):
  *   CONTRACTS_MODULE=on               habilita las rutas (si no, responden 404);
  *   CONTRACTS_OFFICIAL_PUBLISHING=on  permite publicar un documento NO marcado como prueba.
+ *   CONTRACTS_TEST_SIGNING=on         (solo pruebas locales) permite firmar documentos de PRUEBA;
+ *                                     apagado, ningún texto ficticio se puede aceptar ni firmar.
  */
 import { createHash, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { sql, type Transaction } from "kysely";
@@ -14,7 +16,7 @@ import { withPlatformContext, withTenantContext } from "../../context/tenantCont
 import { loadEmailConfig, sendContractSignatureCodeEmail } from "../email/email.service.js";
 import { renderAcceptanceCertificatePdf, renderContractDocumentPdf } from "./contractsPdf.js";
 
-import { acceptanceStatement, officialPublishingEnabled, type ContractSigner } from "./contracts.rules.js";
+import { acceptanceStatement, officialPublishingEnabled, testSigningEnabled, type ContractSigner } from "./contracts.rules.js";
 export { acceptanceStatement, contractsModuleEnabled } from "./contracts.rules.js";
 
 export class ContractNotFoundError extends Error { constructor() { super("CONTRACT_NOT_FOUND"); } }
@@ -32,14 +34,17 @@ const DB_RULES = new Set([
   "CONTRACT_CODE_NOT_USABLE", "CONTRACT_IDENTITY_NOT_VERIFIED", "CONTRACT_SIGNER_EMAIL_REQUIRED", "CONTRACT_CHALLENGE_IMMUTABLE",
   // 153
   "CONTRACT_LEGAL_APPROVAL_REQUIRED", "CONTRACT_LEGAL_APPROVAL_REFERENCE_REQUIRED", "CONTRACT_SIGNATORY_NOT_DESIGNATED", "CONTRACT_SIGNATORY_IMMUTABLE",
+  "CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED", "CONTRACT_DRAFT_MARKED_NOT_SIGNABLE", "CONTRACT_COMMERCIAL_APPROVAL_REQUIRED",
+  "CONTRACT_COMMERCIAL_APPROVAL_REFERENCE_REQUIRED", "CONTRACT_ORDER_TERMS_INVALID",
 ]);
+const UNPROCESSABLE = new Set(["CONTRACT_TEST_BANNER_REQUIRED", "CONTRACT_OFFICIAL_CANNOT_BE_MARKED_TEST", "CONTRACT_ORDER_TERMS_INVALID"]);
 /** Traduce los errores de la base a errores de dominio sin exponer su texto. */
 export function mapDbError(err: unknown): never {
   const e = err as { code?: string; message?: string; constraint?: string };
   const msg = e?.message ?? "";
   if (msg === "CONTRACT_SIGNATORY_NOT_DESIGNATED") throw new ContractRuleError(msg, 403);
   if (msg === "CONTRACT_ACCEPTANCE_ADMIN_REQUIRED" || msg === "CONTRACT_IDENTITY_NOT_VERIFIED" || (e?.code === "42501" && /row-level security/.test(msg))) throw new ContractForbiddenError();
-  if (DB_RULES.has(msg)) throw new ContractRuleError(msg, msg === "CONTRACT_TEST_BANNER_REQUIRED" || msg === "CONTRACT_OFFICIAL_CANNOT_BE_MARKED_TEST" ? 422 : 409);
+  if (DB_RULES.has(msg)) throw new ContractRuleError(msg, UNPROCESSABLE.has(msg) ? 422 : 409);
   if (e?.code === "23505") {
     if (e.constraint === "organization_contract_acceptances_once") throw new ContractRuleError("CONTRACT_ALREADY_ACCEPTED");
     if (e.constraint === "contract_document_versions_label_unique") throw new ContractRuleError("CONTRACT_VERSION_LABEL_TAKEN");
@@ -54,7 +59,7 @@ export const audit = (trx: Trx, actor: string, org: string | null, action: strin
       VALUES (${actor}, ${org}, ${org}, ${action}, ${entityType}, ${entityId}, ${JSON.stringify(value)}::jsonb)`.execute(trx);
 
 const versionFields = sql.raw(`v.id, v.document_id, v.version_label, v.status, v.is_test, v.requires_new_acceptance, v.content_sha256,
-  v.legal_status, v.legal_approved_at, v.source_file_name, v.source_file_sha256, v.commercial_terms,
+  v.legal_status, v.legal_approved_at, v.source_file_name, v.source_file_sha256, v.commercial_terms, v.commercial_status, v.commercial_approved_at,
   v.created_at, v.published_at, v.retired_at, length(v.body) AS body_length`);
 
 // ------------------------------------------------------------------ ETNARA Central
@@ -99,8 +104,10 @@ export async function platformCreateVersion(userId: string, documentId: string, 
 
 export async function platformUpdateDraft(userId: string, versionId: string, input: { versionLabel?: string; body?: string; requiresNewAcceptance?: boolean }) {
   return withPlatformContext(userId, async (trx) => {
-    const cur = await sql<any>`SELECT status FROM contract_document_versions WHERE id = ${versionId} FOR UPDATE`.execute(trx);
+    const cur = await sql<any>`SELECT v.status, d.kind FROM contract_document_versions v JOIN contract_documents d ON d.id = v.document_id WHERE v.id = ${versionId} FOR UPDATE OF v`.execute(trx);
     if (!cur.rows[0]) throw new ContractNotFoundError();
+    // El texto de una Orden se genera de sus condiciones: se edita con las condiciones, no a mano.
+    if (cur.rows[0].kind === "SUBSCRIPTION_ORDER" && input.body !== undefined) throw new ContractRuleError("CONTRACT_ORDER_EDIT_VIA_TERMS", 422);
     try {
       await sql`UPDATE contract_document_versions
         SET body = COALESCE(${input.body ?? null}, body), version_label = COALESCE(${input.versionLabel ?? null}, version_label),
@@ -246,8 +253,10 @@ export async function orgGetVersion(userId: string, organizationId: string, vers
     const checkbox = (await sql<{ t: string }>`SELECT public.app_contract_acceptance_checkbox_text() AS t`.execute(trx)).rows[0].t;
     const rule = (await sql<{ designation_id: string | null; required: boolean }>`SELECT designation_id, required FROM public.app_contract_signatory_rule(${organizationId}, ${userId}, ${v.is_test})`.execute(trx)).rows[0];
     const designation = rule?.designation_id ? (await sql<any>`SELECT full_name, title FROM organization_contract_signatories WHERE id = ${rule.designation_id}`.execute(trx)).rows[0] : null;
+    const testBlocked = v.is_test && !testSigningEnabled();
     const signer = {
-      allowed: !rule?.required || !!rule?.designation_id,
+      allowed: !testBlocked && (!rule?.required || !!rule?.designation_id),
+      blockedReason: testBlocked ? "TEST_DOCUMENT" : (rule?.required && !rule?.designation_id ? "NOT_DESIGNATED" : null),
       designationRequired: !!rule?.required,
       designation: designation ? { fullName: designation.full_name, title: designation.title } : null,
       legallyApproved: v.is_test || v.legal_status === "legally_approved",
@@ -266,11 +275,13 @@ export const maskEmail = (email: string) => {
 };
 
 async function loadAcceptableVersion(trx: Trx, organizationId: string, versionId: string, contentSha256: string) {
-  const v = (await sql<any>`SELECT v.id, v.version_label, v.status, v.content_sha256, d.title, o.name AS organization_name
+  const v = (await sql<any>`SELECT v.id, v.version_label, v.status, v.content_sha256, v.is_test, d.title, o.name AS organization_name
     FROM contract_document_versions v JOIN contract_documents d ON d.id = v.document_id JOIN organizations o ON o.id = ${organizationId}
     WHERE v.id = ${versionId}`.execute(trx)).rows[0];
   if (!v) throw new ContractNotFoundError();
   if (v.status !== "published") throw new ContractRuleError("CONTRACT_VERSION_NOT_ACCEPTABLE");
+  // Un documento de prueba (texto ficticio) no se firma fuera de las pruebas locales.
+  if (v.is_test && !testSigningEnabled()) throw new ContractRuleError("CONTRACT_TEST_DOCUMENT_NOT_SIGNABLE");
   if (v.content_sha256 !== contentSha256) throw new ContractRuleError("CONTRACT_CONTENT_MISMATCH");
   const done = (await sql<any>`SELECT 1 FROM organization_contract_acceptances WHERE organization_id = ${organizationId} AND document_version_id = ${versionId}`.execute(trx)).rows[0];
   if (done) throw new ContractRuleError("CONTRACT_ALREADY_ACCEPTED");

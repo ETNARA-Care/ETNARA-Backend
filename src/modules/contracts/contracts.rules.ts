@@ -2,6 +2,9 @@
 
 /** CONTRACTS_MODULE=on habilita las rutas; cualquier otro valor (o ausente) las deja en 404. */
 export const contractsModuleEnabled = () => process.env.CONTRACTS_MODULE === "on";
+/** Firmar documentos MARCADOS COMO PRUEBA solo en entornos de prueba locales (apagado por defecto):
+ *  así un texto ficticio nunca puede aceptarse ni firmarse en un entorno real. */
+export const testSigningEnabled = () => process.env.CONTRACTS_TEST_SIGNING === "on";
 /** CONTRACTS_OFFICIAL_PUBLISHING=on permite publicar un documento no marcado como prueba. */
 export const officialPublishingEnabled = () => process.env.CONTRACTS_OFFICIAL_PUBLISHING === "on";
 

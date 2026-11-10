@@ -63,6 +63,7 @@ async function main() {
   process.env.CONTRACTS_MODULE = "on";
   delete process.env.CONTRACTS_OFFICIAL_PUBLISHING;
   delete process.env.CONTRACTS_ENFORCEMENT;
+  delete process.env.CONTRACTS_TEST_SIGNING;
   const pdfDir = mkdtempSync(join(tmpdir(), "contracts153-"));
   const pdfText = (buf: Buffer) => { const f = join(pdfDir, `${randomUUID()}.pdf`); writeFileSync(f, buf); return execFileSync("pdftotext", ["-layout", f, "-"]).toString("utf8"); };
 
@@ -121,31 +122,49 @@ async function main() {
     return { req, acc };
   }
 
-  // ================================================================ Borrador oficial v1.0 (ficticio): no publicable ni aceptable
-  const DRAFT_BODY = `CONTRATO GENERAL DE SUSCRIPCIÓN Y SERVICIOS — PLATAFORMA ETNARA CARE (TEXTO DE REEMPLAZO PARA PRUEBAS LOCALES)\nVersión 1.0 — BORRADOR PENDIENTE DE APROBACIÓN JURÍDICA.\n1. Cláusula de reemplazo ${tag}. 2. Cláusula de reemplazo. 18. Cláusula de reemplazo. Anexos pendientes.\n`;
+  // ================================================================ Borradores oficiales: nunca publicables ni firmables
+  // (a) Texto de reemplazo/ficticio con forma de oficial: no se aprueba, no se publica, no se firma.
+  const PLACEHOLDER = `CONTRATO GENERAL DE SUSCRIPCIÓN Y SERVICIOS — PLATAFORMA ETNARA CARE (TEXTO DE REEMPLAZO PARA PRUEBAS LOCALES)\nVersión 1.0 — BORRADOR.\n1. Cláusula de reemplazo ${tag}. 2. Cláusula de reemplazo. 18. Cláusula de reemplazo.\n`;
+  // (b) Borrador con la marca del propio documento «NO UTILIZAR PARA FIRMAS» (como el contrato real v1.1).
+  const MARKED = `CONTRATO GENERAL — ENSAYO ${tag}\nDOCUMENTO PARA REVISIÓN JURÍDICA Y VALIDACIÓN TÉCNICA — NO UTILIZAR PARA FIRMAS\n1. Cláusula de ensayo para la verificación local.\n2. Cláusula de ensayo.\n`;
+  // (c) Borrador limpio (sin marcas) para probar la aprobación ligada a la huella; nunca se publica.
+  const CLEAN = `CONTRATO GENERAL — ENSAYO DE APROBACIÓN ${tag}\n1. Cláusula de ensayo para la verificación local de la huella.\n2. Cláusula de ensayo.\n`;
   const SRC = randomBytes(64);
-  const gen = await call("POST", `${P_}/documents`, central.token, { code: `CONTRATO_GENERAL_${tag}`, title: "Contrato General de Suscripción y Servicios — Plataforma ETNARA Care", kind: "SERVICE_AGREEMENT", isTest: false, requiredForOperation: true });
-  const genV = await call("POST", `${P_}/documents/${gen.body.document?.id}/versions`, central.token, { versionLabel: "1.0", body: DRAFT_BODY, sourceFileName: "Contrato_ETNARA_Care(1).docx", sourceFileSha256: sha256(SRC) });
-  const gv = genV.body.version ?? {};
-  check("A1. Borrador oficial v1.0 guardado íntegro: huella del texto, nombre y SHA-256 del archivo fuente, estado «pendiente de aprobación jurídica»", genV.status === 201 && gv.content_sha256 === sha256(DRAFT_BODY) && gv.source_file_sha256 === sha256(SRC) && gv.legal_status === "pending_legal_approval" && gv.status === "draft", [genV.status, gv.legal_status]);
-  const prev = await call("GET", `${P_}/versions/${gv.id}`, central.token);
-  check("A2. Central ve y puede descargar el borrador completo (vista previa); las agencias no lo ven", prev.status === 200 && prev.body.version?.body === DRAFT_BODY && (await call("GET", `${O(orgN)}/versions/${gv.id}`, N.admin.token)).status === 404 && (await call("GET", `${P_}/versions/${gv.id}`, N.admin.token)).status === 403, prev.status);
-  const pubOff = await call("POST", `${P_}/versions/${gv.id}/publish`, central.token);
+  const mkOfficial = async (suffix: string, body: string, src?: Buffer) => {
+    const d = await call("POST", `${P_}/documents`, central.token, { code: `CONTRATO_GENERAL_${suffix}_${tag}`, title: `Contrato General de Suscripción y Servicios ${suffix}`, kind: "SERVICE_AGREEMENT", isTest: false, requiredForOperation: true });
+    return call("POST", `${P_}/documents/${d.body.document?.id}/versions`, central.token, { versionLabel: "1.1", body, ...(src ? { sourceFileName: "ETNARA_Care_Contrato_Consolidado_v1_1.docx", sourceFileSha256: sha256(src) } : {}) });
+  };
+  const phV = (await mkOfficial("PH", PLACEHOLDER)).body.version ?? {};
+  const mkV0 = await mkOfficial("MK", MARKED, SRC);
+  const mkV = mkV0.body.version ?? {};
+  const gv = (await mkOfficial("CL", CLEAN)).body.version ?? {};
+  check("A1. Borrador oficial guardado íntegro: huella = SHA-256 del texto, nombre y SHA-256 del archivo fuente, «borrador» y «pendiente de aprobación jurídica»", mkV0.status === 201 && mkV.content_sha256 === sha256(MARKED) && mkV.source_file_sha256 === sha256(SRC) && mkV.legal_status === "pending_legal_approval" && mkV.status === "draft", [mkV0.status, mkV.legal_status]);
+  const prev = await call("GET", `${P_}/versions/${mkV.id}`, central.token);
+  check("A2. Central ve el borrador completo (vista previa); las agencias no lo ven", prev.status === 200 && prev.body.version?.body === MARKED && (await call("GET", `${O(orgN)}/versions/${mkV.id}`, N.admin.token)).status === 404 && (await call("GET", `${P_}/versions/${mkV.id}`, N.admin.token)).status === 403, prev.status);
+  const phLegal = await call("POST", `${P_}/versions/${phV.id}/legal-approval`, central.token, { reference: "Referencia ficticia de prueba", contentSha256: phV.content_sha256 });
+  const mkLegal = await call("POST", `${P_}/versions/${mkV.id}/legal-approval`, central.token, { reference: "Referencia ficticia de prueba", contentSha256: mkV.content_sha256 });
+  check("A2b. Texto de reemplazo → no se aprueba (409 CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED); texto marcado «NO UTILIZAR PARA FIRMAS» → no se aprueba (409 CONTRACT_DRAFT_MARKED_NOT_SIGNABLE)",
+    phLegal.status === 409 && phLegal.body.error === "CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED" && mkLegal.status === 409 && mkLegal.body.error === "CONTRACT_DRAFT_MARKED_NOT_SIGNABLE", [phLegal.body, mkLegal.body]);
+  const pubOff = await call("POST", `${P_}/versions/${mkV.id}/publish`, central.token);
   process.env.CONTRACTS_OFFICIAL_PUBLISHING = "on";
+  const pubMk = await call("POST", `${P_}/versions/${mkV.id}/publish`, central.token);
+  const pubPh = await call("POST", `${P_}/versions/${phV.id}/publish`, central.token);
   const pubNoLegal = await call("POST", `${P_}/versions/${gv.id}/publish`, central.token);
   delete process.env.CONTRACTS_OFFICIAL_PUBLISHING;
-  check("A3. El borrador oficial no se publica: sin interruptor (422) y, aun con el interruptor, sin aprobación jurídica (409 CONTRACT_LEGAL_APPROVAL_REQUIRED)", pubOff.status === 422 && pubNoLegal.status === 409 && pubNoLegal.body.error === "CONTRACT_LEGAL_APPROVAL_REQUIRED" && (await q(`SELECT status FROM contract_document_versions WHERE id=$1`, [gv.id])).rows[0].status === "draft", [pubOff.status, pubNoLegal.body]);
+  check("A3. Ningún borrador oficial se publica: sin interruptor (422); con el interruptor, el marcado (409 NOT_SIGNABLE), el de reemplazo (409 PLACEHOLDER) y el limpio sin aprobación (409 LEGAL_APPROVAL_REQUIRED)",
+    pubOff.status === 422 && pubMk.body.error === "CONTRACT_DRAFT_MARKED_NOT_SIGNABLE" && pubPh.body.error === "CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED" && pubNoLegal.status === 409 && pubNoLegal.body.error === "CONTRACT_LEGAL_APPROVAL_REQUIRED"
+    && (await q(`SELECT count(*)::int n FROM contract_document_versions WHERE id = ANY($1) AND status='draft'`, [[mkV.id, phV.id, gv.id]])).rows[0].n === 3, [pubOff.status, pubMk.body, pubPh.body, pubNoLegal.body]);
   const legalWrong = await call("POST", `${P_}/versions/${gv.id}/legal-approval`, central.token, { reference: "Referencia ficticia de prueba", contentSha256: sha256("otro") });
   const legalAgency = await call("POST", `${P_}/versions/${gv.id}/legal-approval`, N.admin.token, { reference: "Referencia ficticia de prueba", contentSha256: gv.content_sha256 });
   check("A4. La aprobación jurídica exige la huella exacta (409) y solo la registra Central (agencia 403)", legalWrong.status === 409 && legalAgency.status === 403, [legalWrong.status, legalAgency.status]);
-  // Aprobación de prueba sobre el borrador y anulación al editar (no se publica nunca).
   await call("POST", `${P_}/versions/${gv.id}/legal-approval`, central.token, { reference: "Referencia ficticia de prueba (no es una aprobación real)", contentSha256: gv.content_sha256 });
   const approved = (await q(`SELECT legal_status, legal_approved_sha256 FROM contract_document_versions WHERE id=$1`, [gv.id])).rows[0];
-  await call("PATCH", `${P_}/versions/${gv.id}`, central.token, { body: DRAFT_BODY + "Cambio en borrador.\n" });
+  await call("PATCH", `${P_}/versions/${gv.id}`, central.token, { body: CLEAN + "Cambio en borrador.\n" });
   const reset = (await q(`SELECT legal_status, legal_approved_sha256 FROM contract_document_versions WHERE id=$1`, [gv.id])).rows[0];
   check("A5. La aprobación vale para ESA huella: al editar el borrador, la base la anula", approved.legal_status === "legally_approved" && approved.legal_approved_sha256 === gv.content_sha256 && reset.legal_status === "pending_legal_approval" && reset.legal_approved_sha256 === null, [approved, reset]);
   const suPub = await errCode(q(`UPDATE contract_document_versions SET status='published', published_by_user_id=$2 WHERE id=$1`, [gv.id, central.userId]));
-  check("A6. Ni el superusuario publica un oficial sin aprobación jurídica vigente", suPub.includes("CONTRACT_LEGAL_APPROVAL_REQUIRED"), suPub);
+  const suMk = await errCode(q(`UPDATE contract_document_versions SET legal_status='legally_approved', legal_approved_by_user_id=$2, legal_approval_reference='Referencia ficticia de prueba' WHERE id=$1`, [mkV.id, central.userId]));
+  check("A6. Ni el superusuario publica un oficial sin aprobación vigente ni aprueba un texto marcado como no firmable", suPub.includes("CONTRACT_LEGAL_APPROVAL_REQUIRED") && suMk.includes("CONTRACT_DRAFT_MARKED_NOT_SIGNABLE"), [suPub, suMk]);
 
   // ================================================================ Documento de PRUEBA obligatorio + Órdenes de prueba
   const BANNER = "DOCUMENTO FICTICIO DE PRUEBA — sin valor legal. No es el contrato oficial de ETNARA Care.";
@@ -153,23 +172,74 @@ async function main() {
   const tbody1 = `${BANNER}\n\n1. Objeto (ficticio). 2. Plazo (ficticio). 18. Cláusula final (ficticia).\n`;
   const tv1 = (await call("POST", `${P_}/documents/${tdoc.body.document.id}/versions`, central.token, { versionLabel: "1.0", body: tbody1 })).body.version;
   await call("POST", `${P_}/versions/${tv1.id}/publish`, central.token);
-  const ordN = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: true, versionLabel: "1.0", requiredForOperation: true });
-  const ordE = await call("POST", `${P_}/organizations/${orgE}/subscription-orders`, central.token, { isTest: true, versionLabel: "1.0", requiredForOperation: true });
-  const ordAgency = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, N.admin.token, { isTest: true, versionLabel: "9" });
-  const on = ordN.body.order ?? {};
-  check("F1. Orden de Suscripción de prueba por agencia: primer mes gratis, premium temporal, plan básico US$99, complementos opcionales, cargos solo con aceptación expresa, facturación desactivada; solo Central la crea", ordN.status === 201 && ordE.status === 201 && ordAgency.status === 403
-    && on.commercialTerms?.freeMonth === true && on.commercialTerms?.premiumTrial === true && on.commercialTerms?.basicPlanMonthlyUsd === 99 && on.commercialTerms?.chargesRequireExpressAcceptance === true && on.commercialTerms?.billingActivated === false, [ordN.status, ordE.status, ordAgency.status]);
+  // Texto ficticio: sin CONTRACTS_TEST_SIGNING (estado de cualquier entorno real) nadie lo puede firmar.
+  const tView = await call("GET", `${O(orgN)}/versions/${tv1.id}`, N.admin.token);
+  const tCode = await call("POST", `${O(orgN)}/versions/${tv1.id}/signature-code`, N.admin.token, { contentSha256: sha256(tbody1), ...SIGN });
+  check("T1. Documento ficticio publicado: con el interruptor de pruebas apagado se puede leer pero NO firmar (409 CONTRACT_TEST_DOCUMENT_NOT_SIGNABLE, sin código enviado)",
+    tView.status === 200 && tView.body.version?.signer?.allowed === false && tView.body.version?.signer?.blockedReason === "TEST_DOCUMENT" && tCode.status === 409 && tCode.body.error === "CONTRACT_TEST_DOCUMENT_NOT_SIGNABLE" && mails.length === 0, [tView.body.version?.signer, tCode.body]);
+  process.env.CONTRACTS_TEST_SIGNING = "on"; // solo en esta prueba local, para ejercitar el flujo con documentos ficticios
+  // Orden individual: sin precio (por definir) para N; precio PROPUESTO distinto para E.
+  const TERMS_N = { planName: "Plan de prueba A", features: ["Turnos y asistencia", "Residentes"], proposedMonthlyPriceUsd: null, promotions: [{ description: "Promoción ficticia de bienvenida", durationDays: 30 }], conditions: ["Condición particular ficticia"], foundingProgram: true };
+  const TERMS_E = { planName: "Plan de prueba B", features: ["Turnos y asistencia", "Mensajería"], proposedMonthlyPriceUsd: 135.5, addOns: [{ name: "Complemento ficticio", proposedMonthlyPriceUsd: null }] };
+  const ordN = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: true, versionLabel: "1.0", requiredForOperation: true, terms: TERMS_N });
+  const ordE = await call("POST", `${P_}/organizations/${orgE}/subscription-orders`, central.token, { isTest: true, versionLabel: "1.0", requiredForOperation: true, terms: TERMS_E });
+  const ordAgency = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, N.admin.token, { isTest: true, versionLabel: "9", terms: TERMS_N });
+  const ordNoTerms = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: true, versionLabel: "8" });
+  const on = ordN.body.order ?? {}, oe = ordE.body.order ?? {};
+  const bodyN = (await q(`SELECT body, commercial_status FROM contract_document_versions WHERE id=$1`, [on.versionId])).rows[0] ?? {};
+  const bodyE = (await q(`SELECT body FROM contract_document_versions WHERE id=$1`, [oe.versionId])).rows[0] ?? {};
+  check("F1. Orden por agencia con condiciones individuales (plan, funcionalidades, precio, promociones, complementos, condiciones); sin precio predeterminado: la de N dice «POR DEFINIR Y ACEPTAR», la de E muestra su precio como PROPUESTA; ningún US$99; solo Central la crea; sin condiciones → 400",
+    ordN.status === 201 && ordE.status === 201 && ordAgency.status === 403 && ordNoTerms.status === 400
+    && on.commercialTerms?.pricing?.proposedMonthlyPriceUsd === null && oe.commercialTerms?.pricing?.proposedMonthlyPriceUsd === 135.5
+    && bodyN.body.includes("Precio mensual: POR DEFINIR Y ACEPTAR") && bodyE.body.includes("US$135.50 al mes (PROPUESTA") && !/99/.test(bodyN.body + bodyE.body)
+    && on.commercialTerms?.status === "proposal" && bodyN.commercial_status === "proposal" && on.commercialStatus === "proposal", [ordN.status, ordE.status, ordAgency.status, ordNoTerms.status]);
+  check("F1b. Salvaguardas fijadas por el servidor: aceptación expresa obligatoria, sin cobro ni renovación automáticos, facturación desactivada; Fundadoras como configuración PENDIENTE DE APROBACIÓN DEFINITIVA",
+    on.commercialTerms?.chargesRequireExpressAcceptance === true && on.commercialTerms?.automaticCharges === false && on.commercialTerms?.automaticRenewal === false && on.commercialTerms?.billingActivated === false
+    && on.commercialTerms?.foundingProgram?.programStatus === "pending_definitive_approval" && bodyN.body.includes("PENDIENTE DE APROBACIÓN DEFINITIVA") && oe.commercialTerms?.foundingProgram === null, on.commercialTerms);
+  const badTerms = [
+    await errCode(q(`UPDATE contract_document_versions SET commercial_terms = commercial_terms || '{"billingActivated":true}'::jsonb WHERE id=$1`, [on.versionId])),
+    await errCode(q(`UPDATE contract_document_versions SET commercial_terms = commercial_terms || '{"automaticCharges":true}'::jsonb WHERE id=$1`, [on.versionId])),
+    await errCode(q(`UPDATE contract_document_versions SET commercial_terms = commercial_terms || '{"status":"final"}'::jsonb WHERE id=$1`, [on.versionId])),
+  ];
+  check("F1c. Ni el superusuario puede activar facturación, cobro automático o quitar el estado «propuesta» en una Orden", badTerms.every((x) => x.includes("CONTRACT_ORDER_TERMS_INVALID")), badTerms);
+  const patchOrder = await call("PATCH", `${P_}/versions/${on.versionId}`, central.token, { body: "Texto escrito a mano para la Orden, que no debe aceptarse por esta vía." });
+  const fp = await call("GET", `${P_}/founding-program`, central.token), fpAgency = await call("GET", `${P_}/founding-program`, N.admin.token);
+  check("F1d. El texto de la Orden solo cambia por sus condiciones (422); el programa Fundadoras se consulta solo en Central y figura pendiente de aprobación definitiva",
+    patchOrder.status === 422 && patchOrder.body.error === "CONTRACT_ORDER_EDIT_VIA_TERMS" && fp.status === 200 && fp.body.program?.status === "pending_definitive_approval" && fpAgency.status === 403, [patchOrder.status, fp.body.program?.status, fpAgency.status]);
   await call("POST", `${P_}/versions/${on.versionId}/publish`, central.token);
-  await call("POST", `${P_}/versions/${ordE.body.order.versionId}/publish`, central.token);
-  const termsImm = await errCode(q(`UPDATE contract_document_versions SET commercial_terms='{"basicPlanMonthlyUsd":1}'::jsonb WHERE id=$1`, [on.versionId]));
+  await call("POST", `${P_}/versions/${oe.versionId}/publish`, central.token);
+  const termsImm = await errCode(q(`UPDATE contract_document_versions SET commercial_terms = commercial_terms || '{"planName":"otro"}'::jsonb WHERE id=$1`, [on.versionId]));
   check("F2. Las condiciones de una Orden publicada no cambian (ni el superusuario)", termsImm.includes("IMMUTABLE"), termsImm);
-  // Límite de 10 fundadoras (Órdenes oficiales en borrador; nada se publica)
+  // Orden OFICIAL (borrador): aprobación comercial y jurídica de ESE texto; ajustar condiciones las anula.
+  const offOrd = await call("POST", `${P_}/organizations/${orgX}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.0", terms: { planName: "Plan propuesto X", features: ["Turnos"], proposedMonthlyPriceUsd: 120 } });
+  const ov = offOrd.body.order ?? {};
+  await call("POST", `${P_}/versions/${ov.versionId}/legal-approval`, central.token, { reference: "Referencia ficticia de prueba jurídica", contentSha256: ov.contentSha256 });
+  process.env.CONTRACTS_OFFICIAL_PUBLISHING = "on";
+  const pubNoCom = await call("POST", `${P_}/versions/${ov.versionId}/publish`, central.token);
+  delete process.env.CONTRACTS_OFFICIAL_PUBLISHING;
+  const comWrong = await call("POST", `${P_}/versions/${ov.versionId}/commercial-approval`, central.token, { reference: "Referencia ficticia de prueba comercial", contentSha256: sha256("otro") });
+  const comAgency = await call("POST", `${P_}/versions/${ov.versionId}/commercial-approval`, X.admin.token, { reference: "Referencia ficticia de prueba comercial", contentSha256: ov.contentSha256 });
+  const comOk = await call("POST", `${P_}/versions/${ov.versionId}/commercial-approval`, central.token, { reference: "Referencia ficticia de prueba comercial", contentSha256: ov.contentSha256 });
+  const both = (await q(`SELECT legal_status, commercial_status FROM contract_document_versions WHERE id=$1`, [ov.versionId])).rows[0];
+  const edited = await call("PUT", `${P_}/versions/${ov.versionId}/order-terms`, central.token, { planName: "Plan propuesto X", features: ["Turnos"], proposedMonthlyPriceUsd: 110 });
+  const afterEdit = (await q(`SELECT legal_status, commercial_status, body FROM contract_document_versions WHERE id=$1`, [ov.versionId])).rows[0];
+  const signOff = await errCode((async () => { await q("BEGIN"); try {
+    await q(`UPDATE contract_document_versions SET legal_status='legally_approved', legal_approved_by_user_id=$2, legal_approval_reference='Referencia ficticia de prueba' WHERE id=$1`, [ov.versionId, central.userId]);
+    await q(`INSERT INTO contract_signature_challenges (id,organization_id,document_version_id,user_id,code_hash) VALUES ($1,$2,$3,$4,repeat('f',64))`, [randomUUID(), orgX, ov.versionId, X.admin.userId]);
+  } finally { await q("ROLLBACK"); } })());
+  check("F4. Orden oficial: con aprobación jurídica pero sin la comercial no se publica (409 CONTRACT_COMMERCIAL_APPROVAL_REQUIRED); la comercial exige la huella exacta (409) y solo Central (403); ajustar condiciones regenera el texto y anula ambas aprobaciones",
+    offOrd.status === 201 && pubNoCom.status === 409 && pubNoCom.body.error === "CONTRACT_COMMERCIAL_APPROVAL_REQUIRED" && comWrong.status === 409 && comAgency.status === 403 && comOk.status === 200
+    && both.legal_status === "legally_approved" && both.commercial_status === "commercially_approved" && edited.status === 200
+    && afterEdit.legal_status === "pending_legal_approval" && afterEdit.commercial_status === "proposal" && afterEdit.body.includes("US$110.00"), [offOrd.status, pubNoCom.body, comWrong.status, comAgency.status, comOk.status, comOk.body, both, afterEdit.legal_status, afterEdit.commercial_status]);
+  check("F4b. Una Orden oficial sin publicar (le falta la aprobación comercial) no se puede firmar, ni insertando en la base", signOff.includes("CONTRACT_VERSION_NOT_ACCEPTABLE") || signOff.includes("CONTRACT_COMMERCIAL_APPROVAL_REQUIRED"), signOff);
+  // Límite de 10 fundadoras (Órdenes oficiales en borrador inscritas en el programa; nada se publica)
   const extra: string[] = [];
   for (let i = 0; i < 10; i++) extra.push(await org(`Fundadora Ficticia ${i} ${tag}`));
   const founding: number[] = [];
-  for (const o of extra) founding.push((await call("POST", `${P_}/organizations/${o}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.0" })).status);
-  const eleventh = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.1" });
-  check("F3. Programa Agencias Fundadoras: 10 Órdenes oficiales (borrador) y la undécima se rechaza (409 CONTRACT_FOUNDING_PROGRAM_FULL); ninguna se publica", founding.every((s) => s === 201) && eleventh.status === 409 && eleventh.body.error === "CONTRACT_FOUNDING_PROGRAM_FULL" && (await q(`SELECT count(*)::int n FROM contract_document_versions v JOIN contract_documents d ON d.id=v.document_id WHERE d.kind='SUBSCRIPTION_ORDER' AND NOT d.is_test AND v.status<>'draft'`)).rows[0].n === 0, [founding, eleventh.status]);
+  for (const o of extra) founding.push((await call("POST", `${P_}/organizations/${o}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.0", terms: { planName: "Plan propuesto", features: ["Turnos"], foundingProgram: true } })).status);
+  const eleventh = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.1", terms: { planName: "Plan propuesto", features: ["Turnos"], foundingProgram: true } });
+  const notFounding = await call("POST", `${P_}/organizations/${orgN}/subscription-orders`, central.token, { isTest: false, versionLabel: "1.2", terms: { planName: "Plan propuesto", features: ["Turnos"] } });
+  check("F3. Programa Agencias Fundadoras (propuesto): 10 Órdenes oficiales inscritas (borrador) y la undécima inscrita se rechaza (409 CONTRACT_FOUNDING_PROGRAM_FULL); una Orden sin el programa sí se crea; ninguna se publica", founding.every((s) => s === 201) && notFounding.status === 201 && eleventh.status === 409 && eleventh.body.error === "CONTRACT_FOUNDING_PROGRAM_FULL" && (await q(`SELECT count(*)::int n FROM contract_document_versions v JOIN contract_documents d ON d.id=v.document_id WHERE d.kind='SUBSCRIPTION_ORDER' AND NOT d.is_test AND v.status<>'draft'`)).rows[0].n === 0, [founding, eleventh.status]);
 
   // ================================================================ Caso 1: agencia nueva sin contrato
   const st1 = await call("GET", `${O(orgN)}/status`, N.admin.token);
@@ -329,7 +399,7 @@ async function main() {
   const evImm = [await errCode(q(`UPDATE organization_contract_acceptances SET signer_title='x' WHERE id=$1`, [ev.id])), await errCode(q(`DELETE FROM contract_document_downloads`)), await errCode(q(`DELETE FROM organization_contract_signatories`))];
   check("I2. Evidencia, descargas y designaciones protegidas contra alteraciones (también el superusuario)", evImm.every((x) => x.includes("IMMUTABLE")), evImm);
   const actions = (await q(`SELECT action FROM audit_log WHERE action LIKE 'CONTRACT\\_%' GROUP BY 1`)).rows.map((r) => r.action);
-  const need = ["CONTRACT_LEGAL_APPROVAL_RECORDED", "CONTRACT_SIGNATORY_DESIGNATED", "CONTRACT_SIGNATORY_REVOKED", "CONTRACT_SUBSCRIPTION_ORDER_DRAFTED", "CONTRACT_ENFORCEMENT_SET", "CONTRACT_VERSION_ACCEPTED", "CONTRACT_SIGNATURE_CODE_FAILED"];
+  const need = ["CONTRACT_LEGAL_APPROVAL_RECORDED", "CONTRACT_COMMERCIAL_APPROVAL_RECORDED", "CONTRACT_SUBSCRIPTION_ORDER_TERMS_EDITED", "CONTRACT_SIGNATORY_DESIGNATED", "CONTRACT_SIGNATORY_REVOKED", "CONTRACT_SUBSCRIPTION_ORDER_DRAFTED", "CONTRACT_ENFORCEMENT_SET", "CONTRACT_VERSION_ACCEPTED", "CONTRACT_SIGNATURE_CODE_FAILED"];
   check("I3. Auditoría de aprobación jurídica, designación y revocación, Órdenes, reglas de acceso, firmas e intentos fallidos", need.every((a) => actions.includes(a)), actions);
   check("I4. Ningún correo salió a otra dirección que la cuenta de quien firma; ninguno a la administradora técnica", mails.length > 0 && mails.every((m) => [N.admin, E.admin, X.admin].some((p) => p.email === m.to)), mails.length);
 

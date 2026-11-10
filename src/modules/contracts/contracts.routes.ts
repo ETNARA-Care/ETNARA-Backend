@@ -13,6 +13,7 @@ import {
 import {
   orgContractStatus, orgListSignatories, platformCreateSubscriptionOrder, platformDesignateSignatory, platformGetVersion,
   platformListSignatories, platformRecordLegalApproval, platformRevokeSignatory, platformSetEnforcement,
+  FOUNDING_PROGRAM, platformRecordCommercialApproval, platformUpdateOrderTerms,
 } from "./contractsSaas.service.js";
 
 const router = Router();
@@ -99,7 +100,30 @@ router.post("/platform/contracts/organizations/:organizationId/signatories/:sign
   if (!o.success || !s.success || !b.success) return void bad(res);
   try { res.json({ signatory: await platformRevokeSignatory(req.auth!.userId, o.data, s.data, b.data.reason) }); } catch (x) { fail(x, res); }
 });
-const orderBody = z.object({ isTest: z.boolean(), versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), requiredForOperation: z.boolean().optional() }).strict();
+const money = z.number().nonnegative().max(100000).nullable().optional();
+const line = z.string().trim().min(2).max(300);
+/** Condiciones individuales de la Orden (todas propuestas). No hay precio predeterminado. */
+const orderTerms = z.object({
+  planName: z.string().trim().min(2).max(120), features: z.array(line).max(40), limits: z.string().trim().max(500).nullable().optional(),
+  proposedMonthlyPriceUsd: money,
+  promotions: z.array(z.object({ description: line, durationDays: z.number().int().min(1).max(366).nullable().optional() }).strict()).max(10).optional(),
+  addOns: z.array(z.object({ name: line, proposedMonthlyPriceUsd: money }).strict()).max(20).optional(),
+  conditions: z.array(z.string().trim().min(2).max(1000)).max(20).optional(),
+  foundingProgram: z.boolean().optional(),
+}).strict();
+const orderBody = z.object({ isTest: z.boolean(), versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), requiredForOperation: z.boolean().optional(), terms: orderTerms }).strict();
+router.get("/platform/contracts/founding-program", requireAuth, async (req: AuthenticatedRequest, res) => {
+  // Solo Central (el contexto de plataforma lo verifica la consulta de la lista de contratos).
+  try { await platformListContracts(req.auth!.userId); res.json({ program: FOUNDING_PROGRAM }); } catch (x) { fail(x, res); }
+});
+router.put("/platform/contracts/versions/:versionId/order-terms", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = orderTerms.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformUpdateOrderTerms(req.auth!.userId, v.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/versions/:versionId/commercial-approval", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = legalBody.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformRecordCommercialApproval(req.auth!.userId, v.data, b.data.reference, b.data.contentSha256) }); } catch (x) { fail(x, res); }
+});
 router.post("/platform/contracts/organizations/:organizationId/subscription-orders", requireAuth, async (req: AuthenticatedRequest, res) => {
   const o = uuid.safeParse(req.params.organizationId), b = orderBody.safeParse(req.body); if (!o.success || !b.success) return void bad(res);
   try { res.status(201).json({ order: await platformCreateSubscriptionOrder(req.auth!.userId, o.data, b.data) }); } catch (x) { fail(x, res); }

@@ -14,8 +14,13 @@
 --     Documento de prueba: si la agencia tiene designaciones, solo las designadas; si no, cualquier
 --     administradora activa. El acceso administrativo, por sí solo, no basta para firmar lo oficial.
 --   * Orden de Suscripción: documento de UNA agencia (kind SUBSCRIPTION_ORDER, organization_id), con
---     condiciones comerciales estructuradas e inalterables tras publicarse. Solo la ve esa agencia.
---     No crea cobros ni suscripciones.
+--     condiciones comerciales INDIVIDUALES (plan, funcionalidades, precio PROPUESTO, promociones,
+--     complementos, condiciones), inalterables tras publicarse. Solo la ve esa agencia. Siempre nace
+--     como «propuesta»: una Orden oficial solo se publica con aprobación comercial Y jurídica de ese
+--     texto exacto. La base rechaza condiciones con cobro automático, renovación automática o
+--     facturación activada. No crea cobros ni suscripciones; no hay precio predeterminado.
+--   * Texto ficticio o marcado «no utilizar para firmas»: un documento oficial con texto de reemplazo,
+--     marcas de prueba o la marca de borrador no firmable no puede aprobarse, publicarse ni firmarse.
 --   * Evidencia: texto exacto de la casilla de aceptación, declaración de autoridad (texto nuevo),
 --     método de consentimiento, si se descargó el documento antes de aceptar y la designación usada.
 --   * Reglas de acceso: modo por agencia (off | notice | restrict_new_operations | contract_only) y
@@ -49,6 +54,61 @@ ALTER TABLE contract_document_versions ADD CONSTRAINT contract_document_versions
   (source_file_sha256 IS NULL OR source_file_sha256 ~ '^[0-9a-f]{64}$')
   AND (source_file_name IS NULL OR length(source_file_name) BETWEEN 1 AND 200));
 
+-- Aprobación comercial (solo Órdenes de Suscripción): nunca predeterminada.
+ALTER TABLE contract_document_versions ADD COLUMN IF NOT EXISTS commercial_status text NOT NULL DEFAULT 'not_applicable';
+ALTER TABLE contract_document_versions DROP CONSTRAINT IF EXISTS contract_document_versions_commercial_status_check;
+ALTER TABLE contract_document_versions ADD CONSTRAINT contract_document_versions_commercial_status_check CHECK (commercial_status IN ('not_applicable', 'proposal', 'commercially_approved'));
+ALTER TABLE contract_document_versions ADD COLUMN IF NOT EXISTS commercial_approved_at timestamptz;
+ALTER TABLE contract_document_versions ADD COLUMN IF NOT EXISTS commercial_approved_by_user_id uuid REFERENCES users(id);
+ALTER TABLE contract_document_versions ADD COLUMN IF NOT EXISTS commercial_approval_reference text;
+ALTER TABLE contract_document_versions ADD COLUMN IF NOT EXISTS commercial_approved_sha256 text;
+
+-- Sin RLS: tipo de un documento (para las reglas de la Orden de Suscripción).
+CREATE OR REPLACE FUNCTION public.app_contract_document_kind(p_document uuid)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$ SELECT kind FROM public.contract_documents WHERE id = p_document $$;
+REVOKE ALL ON FUNCTION public.app_contract_document_kind(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_contract_document_kind(uuid) TO app_runtime;
+
+-- Un texto oficial con marcas de reemplazo/prueba o con la marca de borrador no firmable no se
+-- aprueba, no se publica y no se firma. Devuelve el código del motivo o NULL.
+CREATE OR REPLACE FUNCTION public.app_contract_text_signing_block(p_body text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog
+AS $$
+  SELECT CASE
+    WHEN upper(p_body) LIKE '%TEXTO DE REEMPLAZO%' OR upper(p_body) LIKE '%DOCUMENTO FICTICIO%' OR upper(p_body) LIKE '%FICTICIO DE PRUEBA%'
+      THEN 'CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED'
+    WHEN upper(p_body) LIKE '%NO UTILIZAR PARA FIRMAS%' OR upper(p_body) LIKE '%NO HABILITAR FIRMA%'
+      THEN 'CONTRACT_DRAFT_MARKED_NOT_SIGNABLE'
+  END
+$$;
+REVOKE ALL ON FUNCTION public.app_contract_text_signing_block(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_contract_text_signing_block(text) TO app_runtime;
+
+-- Condiciones de una Orden: siempre propuesta, sin cobro ni renovación automáticos, facturación apagada.
+CREATE OR REPLACE FUNCTION public.app_contract_order_terms_valid(p_terms jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog
+AS $$
+  SELECT p_terms IS NOT NULL AND jsonb_typeof(p_terms) = 'object'
+     AND p_terms->>'status' = 'proposal'
+     AND p_terms->'chargesRequireExpressAcceptance' = 'true'::jsonb
+     AND p_terms->'automaticCharges' = 'false'::jsonb
+     AND p_terms->'automaticRenewal' = 'false'::jsonb
+     AND p_terms->'billingActivated' = 'false'::jsonb
+$$;
+REVOKE ALL ON FUNCTION public.app_contract_order_terms_valid(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_contract_order_terms_valid(jsonb) TO app_runtime;
+
 -- Sin RLS: devuelve la agencia de un documento (evita la recursión entre las políticas de ambas tablas).
 CREATE OR REPLACE FUNCTION public.app_contract_document_org(p_document uuid)
 RETURNS uuid
@@ -65,12 +125,24 @@ RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
+DECLARE
+  v_kind text := public.app_contract_document_kind(NEW.document_id);
+  v_block text;
 BEGIN
   -- Corre después de contract_document_versions_guard (152): content_sha256 ya está calculada.
   IF TG_OP = 'INSERT' THEN
     NEW.legal_status := 'pending_legal_approval';
     NEW.legal_approved_at := NULL; NEW.legal_approved_by_user_id := NULL;
     NEW.legal_approval_reference := NULL; NEW.legal_approved_sha256 := NULL;
+    NEW.commercial_status := CASE WHEN v_kind = 'SUBSCRIPTION_ORDER' THEN 'proposal' ELSE 'not_applicable' END;
+    NEW.commercial_approved_at := NULL; NEW.commercial_approved_by_user_id := NULL;
+    NEW.commercial_approval_reference := NULL; NEW.commercial_approved_sha256 := NULL;
+    IF v_kind = 'SUBSCRIPTION_ORDER' AND NOT public.app_contract_order_terms_valid(NEW.commercial_terms) THEN
+      RAISE EXCEPTION 'CONTRACT_ORDER_TERMS_INVALID' USING ERRCODE = '22023';
+    END IF;
+    IF v_kind IS DISTINCT FROM 'SUBSCRIPTION_ORDER' AND NEW.commercial_terms IS NOT NULL THEN
+      RAISE EXCEPTION 'CONTRACT_ORDER_TERMS_INVALID' USING ERRCODE = '22023';
+    END IF;
     RETURN NEW;
   END IF;
   IF OLD.status <> 'draft' THEN
@@ -79,10 +151,21 @@ BEGIN
        OR NEW.legal_approval_reference IS DISTINCT FROM OLD.legal_approval_reference
        OR NEW.legal_approved_sha256 IS DISTINCT FROM OLD.legal_approved_sha256
        OR NEW.source_file_name IS DISTINCT FROM OLD.source_file_name OR NEW.source_file_sha256 IS DISTINCT FROM OLD.source_file_sha256
-       OR NEW.commercial_terms IS DISTINCT FROM OLD.commercial_terms THEN
+       OR NEW.commercial_terms IS DISTINCT FROM OLD.commercial_terms OR NEW.commercial_status IS DISTINCT FROM OLD.commercial_status
+       OR NEW.commercial_approved_at IS DISTINCT FROM OLD.commercial_approved_at
+       OR NEW.commercial_approved_by_user_id IS DISTINCT FROM OLD.commercial_approved_by_user_id
+       OR NEW.commercial_approval_reference IS DISTINCT FROM OLD.commercial_approval_reference
+       OR NEW.commercial_approved_sha256 IS DISTINCT FROM OLD.commercial_approved_sha256 THEN
       RAISE EXCEPTION 'CONTRACT_VERSION_IMMUTABLE' USING ERRCODE = '42501';
     END IF;
     RETURN NEW;
+  END IF;
+  -- Borrador de Orden: condiciones siempre válidas (propuesta, sin cobros automáticos).
+  IF v_kind = 'SUBSCRIPTION_ORDER' AND NOT public.app_contract_order_terms_valid(NEW.commercial_terms) THEN
+    RAISE EXCEPTION 'CONTRACT_ORDER_TERMS_INVALID' USING ERRCODE = '22023';
+  END IF;
+  IF v_kind IS DISTINCT FROM 'SUBSCRIPTION_ORDER' AND (NEW.commercial_terms IS NOT NULL OR NEW.commercial_status <> 'not_applicable') THEN
+    RAISE EXCEPTION 'CONTRACT_ORDER_TERMS_INVALID' USING ERRCODE = '22023';
   END IF;
   -- Borrador: una aprobación vale solo para el texto y las condiciones que se aprobaron.
   IF OLD.legal_status = 'legally_approved' AND NEW.legal_status = 'legally_approved'
@@ -90,9 +173,18 @@ BEGIN
           OR NEW.version_label IS DISTINCT FROM OLD.version_label OR NEW.source_file_sha256 IS DISTINCT FROM OLD.source_file_sha256) THEN
     NEW.legal_status := 'pending_legal_approval';
   END IF;
+  IF OLD.commercial_status = 'commercially_approved' AND NEW.commercial_status = 'commercially_approved'
+     AND (NEW.content_sha256 IS DISTINCT FROM OLD.content_sha256 OR NEW.commercial_terms IS DISTINCT FROM OLD.commercial_terms
+          OR NEW.version_label IS DISTINCT FROM OLD.version_label) THEN
+    NEW.commercial_status := 'proposal';
+  END IF;
   IF NEW.legal_status = 'legally_approved' AND OLD.legal_status = 'pending_legal_approval' THEN
     IF NEW.legal_approved_by_user_id IS NULL OR length(btrim(coalesce(NEW.legal_approval_reference, ''))) < 10 THEN
       RAISE EXCEPTION 'CONTRACT_LEGAL_APPROVAL_REFERENCE_REQUIRED' USING ERRCODE = '22023';
+    END IF;
+    IF NOT NEW.is_test THEN
+      v_block := public.app_contract_text_signing_block(NEW.body);
+      IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block USING ERRCODE = '42501'; END IF;
     END IF;
     NEW.legal_approved_at := now();
     NEW.legal_approved_sha256 := NEW.content_sha256;
@@ -100,10 +192,30 @@ BEGIN
     NEW.legal_approved_at := NULL; NEW.legal_approved_by_user_id := NULL;
     NEW.legal_approval_reference := NULL; NEW.legal_approved_sha256 := NULL;
   END IF;
-  -- Publicar un documento oficial exige la aprobación jurídica de ESTE texto.
-  IF NEW.status = 'published' AND NOT NEW.is_test
-     AND (NEW.legal_status <> 'legally_approved' OR NEW.legal_approved_sha256 IS DISTINCT FROM NEW.content_sha256) THEN
-    RAISE EXCEPTION 'CONTRACT_LEGAL_APPROVAL_REQUIRED' USING ERRCODE = '42501';
+  IF NEW.commercial_status = 'commercially_approved' AND OLD.commercial_status = 'proposal' THEN
+    IF NEW.commercial_approved_by_user_id IS NULL OR length(btrim(coalesce(NEW.commercial_approval_reference, ''))) < 10 THEN
+      RAISE EXCEPTION 'CONTRACT_COMMERCIAL_APPROVAL_REFERENCE_REQUIRED' USING ERRCODE = '22023';
+    END IF;
+    NEW.commercial_approved_at := now();
+    NEW.commercial_approved_sha256 := NEW.content_sha256;
+  ELSIF NEW.commercial_status IN ('proposal', 'not_applicable') THEN
+    IF NEW.commercial_status = 'not_applicable' AND v_kind = 'SUBSCRIPTION_ORDER' THEN
+      RAISE EXCEPTION 'CONTRACT_ORDER_TERMS_INVALID' USING ERRCODE = '22023';
+    END IF;
+    NEW.commercial_approved_at := NULL; NEW.commercial_approved_by_user_id := NULL;
+    NEW.commercial_approval_reference := NULL; NEW.commercial_approved_sha256 := NULL;
+  END IF;
+  -- Publicar un documento oficial exige: texto sin marcas de reemplazo ni de borrador no firmable,
+  -- aprobación jurídica de ESTE texto y, si es una Orden, aprobación comercial de ESTE texto.
+  IF NEW.status = 'published' AND NOT NEW.is_test THEN
+    v_block := public.app_contract_text_signing_block(NEW.body);
+    IF v_block IS NOT NULL THEN RAISE EXCEPTION '%', v_block USING ERRCODE = '42501'; END IF;
+    IF NEW.legal_status <> 'legally_approved' OR NEW.legal_approved_sha256 IS DISTINCT FROM NEW.content_sha256 THEN
+      RAISE EXCEPTION 'CONTRACT_LEGAL_APPROVAL_REQUIRED' USING ERRCODE = '42501';
+    END IF;
+    IF v_kind = 'SUBSCRIPTION_ORDER' AND (NEW.commercial_status <> 'commercially_approved' OR NEW.commercial_approved_sha256 IS DISTINCT FROM NEW.content_sha256) THEN
+      RAISE EXCEPTION 'CONTRACT_COMMERCIAL_APPROVAL_REQUIRED' USING ERRCODE = '42501';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -259,6 +371,10 @@ DECLARE
   v_version uuid;
   v_designation uuid;
   v_required boolean;
+  v_block text;
+  v_kind text;
+  v_commercial text;
+  v_commercial_sha text;
 BEGIN
   IF TG_OP <> 'INSERT' THEN RETURN NEW; END IF; -- UPDATE/DELETE ya los cierra 152
   IF TG_TABLE_NAME = 'contract_signature_challenges' THEN
@@ -266,15 +382,22 @@ BEGIN
   ELSE
     v_org := NEW.organization_id; v_user := NEW.accepted_by_user_id; v_version := NEW.document_version_id;
   END IF;
-  SELECT public.app_contract_document_org(v.document_id), v.is_test, v.legal_status, v.legal_approved_sha256, v.content_sha256
-    INTO v_doc_org, v_is_test, v_legal, v_legal_sha, v_sha
+  SELECT public.app_contract_document_org(v.document_id), v.is_test, v.legal_status, v.legal_approved_sha256, v.content_sha256,
+         public.app_contract_text_signing_block(v.body), public.app_contract_document_kind(v.document_id), v.commercial_status, v.commercial_approved_sha256
+    INTO v_doc_org, v_is_test, v_legal, v_legal_sha, v_sha, v_block, v_kind, v_commercial, v_commercial_sha
     FROM contract_document_versions v WHERE v.id = v_version;
   -- Un documento de otra agencia (Orden de Suscripción ajena) nunca se firma.
   IF v_doc_org IS NOT NULL AND v_doc_org <> v_org THEN
     RAISE EXCEPTION 'CONTRACT_VERSION_NOT_ACCEPTABLE' USING ERRCODE = '22023';
   END IF;
+  IF v_is_test IS FALSE AND v_block IS NOT NULL THEN
+    RAISE EXCEPTION '%', v_block USING ERRCODE = '42501';
+  END IF;
   IF v_is_test IS FALSE AND (v_legal IS DISTINCT FROM 'legally_approved' OR v_legal_sha IS DISTINCT FROM v_sha) THEN
     RAISE EXCEPTION 'CONTRACT_LEGAL_APPROVAL_REQUIRED' USING ERRCODE = '42501';
+  END IF;
+  IF v_is_test IS FALSE AND v_kind = 'SUBSCRIPTION_ORDER' AND (v_commercial IS DISTINCT FROM 'commercially_approved' OR v_commercial_sha IS DISTINCT FROM v_sha) THEN
+    RAISE EXCEPTION 'CONTRACT_COMMERCIAL_APPROVAL_REQUIRED' USING ERRCODE = '42501';
   END IF;
   SELECT r.designation_id, r.required INTO v_designation, v_required FROM public.app_contract_signatory_rule(v_org, v_user, coalesce(v_is_test, true)) r;
   IF v_required AND v_designation IS NULL THEN
@@ -353,7 +476,8 @@ BEGIN
     EXECUTE format('CREATE TRIGGER %I BEFORE TRUNCATE ON %I FOR EACH STATEMENT EXECUTE FUNCTION public.app_contract_no_truncate()', t || '_no_truncate', t);
   END LOOP;
 END $$;
-GRANT UPDATE (legal_status, legal_approved_by_user_id, legal_approval_reference, source_file_name, source_file_sha256, commercial_terms)
+GRANT UPDATE (legal_status, legal_approved_by_user_id, legal_approval_reference, source_file_name, source_file_sha256, commercial_terms,
+  commercial_status, commercial_approved_by_user_id, commercial_approval_reference)
   ON contract_document_versions TO app_runtime;
 GRANT SELECT, INSERT ON organization_contract_signatories TO app_runtime;
 GRANT UPDATE (revoked_by_user_id, revoke_reason) ON organization_contract_signatories TO app_runtime;

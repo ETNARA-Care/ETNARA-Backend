@@ -149,6 +149,8 @@ async function main() {
   const off = [await call("GET", P_, central.token), await call("GET", O(orgA), A.admin.token)];
   check("1. CONTRACTS_MODULE apagado (valor por defecto): las rutas responden 404", off.every((r) => r.status === 404), off.map((r) => r.status));
   process.env.CONTRACTS_MODULE = "on";
+  // 153: firmar documentos de PRUEBA exige este interruptor (solo pruebas locales).
+  process.env.CONTRACTS_TEST_SIGNING = "on";
 
   const badTest = await call("POST", `${P_}/documents`, central.token, { code: `MSA_${tag}`, title: "[PRUEBA] Acuerdo", kind: "SERVICE_AGREEMENT", isTest: true });
   const badOfficial = await call("POST", `${P_}/documents`, central.token, { code: `TEST_MSA_${tag}`, title: "Acuerdo de servicio", kind: "SERVICE_AGREEMENT", isTest: false });

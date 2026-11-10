@@ -93,44 +93,21 @@ export async function orgListSignatories(userId: string, organizationId: string)
 }
 
 // ---------------------------------------------------------------- Orden de Suscripción (por agencia)
-export const FOUNDING_PROGRAM_LIMIT = 10;
-export interface FoundingOrderTerms {
-  program: "AGENCIAS_FUNDADORAS"; freeMonth: true; freeDays: number; premiumTrial: true;
-  basicPlanMonthlyUsd: number; premiumAddOns: string; renewal: string; chargesRequireExpressAcceptance: true; billingActivated: false;
-}
-export function foundingOrderTerms(): FoundingOrderTerms {
-  return {
-    program: "AGENCIAS_FUNDADORAS", freeMonth: true, freeDays: 30, premiumTrial: true, basicPlanMonthlyUsd: 99,
-    premiumAddOns: "Opcionales, sujetos a condiciones aprobadas por escrito.",
-    renewal: "Pendiente de aprobación jurídica: ningún cargo ni renovación se aplica sin aceptación expresa.",
-    chargesRequireExpressAcceptance: true, billingActivated: false,
-  };
-}
-/** Texto de la Orden (plantilla). La de prueba lleva la marca obligatoria. */
-export function subscriptionOrderBody(orgName: string, t: FoundingOrderTerms, isTest: boolean) {
-  return `${isTest ? "DOCUMENTO FICTICIO DE PRUEBA — sin valor legal. No es una Orden de Suscripción real.\n\n" : ""}ORDEN DE SUSCRIPCIÓN — PROGRAMA AGENCIAS FUNDADORAS
-Proveedor: DE LA VEGA TECHNOLOGY LLC (ETNARA Care). Cliente: ${orgName}.
-Esta Orden forma parte del Contrato General de Suscripción y Servicios y se rige por él. ESTADO: BORRADOR PENDIENTE DE APROBACIÓN JURÍDICA.
+export { FOUNDING_PROGRAM, FOUNDING_PROGRAM_LIMIT, normalizeOrderTerms, subscriptionOrderBody, type OrderTerms, type OrderTermsInput } from "./contracts.orderTerms.js";
+import { FOUNDING_PROGRAM_LIMIT, normalizeOrderTerms, subscriptionOrderBody, type OrderTermsInput } from "./contracts.orderTerms.js";
 
-1. Período gratuito: primer mes (${t.freeDays} días) sin costo desde la activación.
-2. Durante el período gratuito: acceso temporal a todas las funcionalidades premium disponibles y habilitadas.
-3. Después del período gratuito: posibilidad de contratar el plan básico por US$${t.basicPlanMonthlyUsd} mensuales.
-4. Complementos premium: ${t.premiumAddOns}
-5. Cargos y renovación: ${t.renewal}
-6. Esta Orden no activa cobros automáticos ni suscripciones; la facturación permanece desactivada.
-`;
+async function countFounding(trx: Parameters<Parameters<typeof withPlatformContext>[1]>[0], exceptOrg: string) {
+  return (await sql<{ n: number }>`SELECT count(DISTINCT d.organization_id)::int n FROM contract_documents d JOIN contract_document_versions v ON v.document_id = d.id
+    WHERE d.kind = 'SUBSCRIPTION_ORDER' AND NOT d.is_test AND d.organization_id <> ${exceptOrg} AND (v.commercial_terms -> 'foundingProgram' ->> 'enrolled') = 'true'`.execute(trx)).rows[0].n;
 }
 
-export async function platformCreateSubscriptionOrder(userId: string, organizationId: string, input: { isTest: boolean; versionLabel: string; requiredForOperation?: boolean }) {
+export async function platformCreateSubscriptionOrder(userId: string, organizationId: string, input: { isTest: boolean; versionLabel: string; requiredForOperation?: boolean; terms: OrderTermsInput }) {
   return withPlatformContext(userId, async (trx) => {
     const org = (await sql<any>`SELECT id, name FROM organizations WHERE id = ${organizationId}`.execute(trx)).rows[0];
     if (!org) throw new ContractNotFoundError();
-    // Programa de 10 Agencias Fundadoras: como mucho 10 agencias con Orden oficial (las de prueba no cuentan).
-    if (!input.isTest) {
-      const n = (await sql<{ n: number }>`SELECT count(DISTINCT organization_id)::int n FROM contract_documents WHERE kind = 'SUBSCRIPTION_ORDER' AND NOT is_test AND organization_id <> ${organizationId}`.execute(trx)).rows[0].n;
-      if (n >= FOUNDING_PROGRAM_LIMIT) throw new ContractRuleError("CONTRACT_FOUNDING_PROGRAM_FULL");
-    }
-    const terms = foundingOrderTerms();
+    const terms = normalizeOrderTerms(input.terms);
+    // Programa Fundadoras (propuesto): como mucho 10 agencias con Orden oficial inscrita (las de prueba no cuentan).
+    if (!input.isTest && terms.foundingProgram && (await countFounding(trx, organizationId)) >= FOUNDING_PROGRAM_LIMIT) throw new ContractRuleError("CONTRACT_FOUNDING_PROGRAM_FULL");
     const short = organizationId.replace(/-/g, "").slice(0, 8).toUpperCase();
     const code = `${input.isTest ? "TEST_" : ""}ORDEN_SUSCRIPCION_${short}_${input.versionLabel.replace(/[^0-9A-Za-z]/g, "")}`;
     const title = `${input.isTest ? "[PRUEBA] " : ""}Orden de Suscripción — ${org.name}`;
@@ -139,13 +116,48 @@ export async function platformCreateSubscriptionOrder(userId: string, organizati
         VALUES (${code}, ${title}, 'SUBSCRIPTION_ORDER', ${input.isTest}, ${organizationId}, ${input.requiredForOperation ?? false}, ${userId}) RETURNING id`.execute(trx)).rows[0];
       const v = (await sql<any>`INSERT INTO contract_document_versions (document_id, version_label, body, content_sha256, is_test, commercial_terms, created_by_user_id)
         VALUES (${d.id}, ${input.versionLabel}, ${subscriptionOrderBody(org.name, terms, input.isTest)}, repeat('0', 64), false, ${JSON.stringify(terms)}::jsonb, ${userId})
-        RETURNING id, content_sha256, status, legal_status`.execute(trx)).rows[0];
-      await audit(trx, userId, organizationId, "CONTRACT_SUBSCRIPTION_ORDER_DRAFTED", "contract_document_version", v.id, { document_id: d.id, is_test: input.isTest });
-      return { documentId: d.id, versionId: v.id, code, title, status: v.status, legalStatus: v.legal_status, contentSha256: v.content_sha256, commercialTerms: terms };
+        RETURNING id, content_sha256, status, legal_status, commercial_status`.execute(trx)).rows[0];
+      await audit(trx, userId, organizationId, "CONTRACT_SUBSCRIPTION_ORDER_DRAFTED", "contract_document_version", v.id, { document_id: d.id, is_test: input.isTest, founding: !!terms.foundingProgram });
+      return { documentId: d.id, versionId: v.id, code, title, status: v.status, legalStatus: v.legal_status, commercialStatus: v.commercial_status, contentSha256: v.content_sha256, commercialTerms: terms };
     } catch (err) {
       if ((err as { code?: string }).code === "23505") throw new ContractRuleError("CONTRACT_CODE_TAKEN");
       return rethrow(err);
     }
+  });
+}
+
+/** Ajusta las condiciones de una Orden en borrador: regenera su texto (y su huella); anula aprobaciones previas. */
+export async function platformUpdateOrderTerms(userId: string, versionId: string, input: OrderTermsInput) {
+  return withPlatformContext(userId, async (trx) => {
+    const v = (await sql<any>`SELECT v.id, v.status, v.is_test, d.kind, d.organization_id, o.name AS organization_name FROM contract_document_versions v
+      JOIN contract_documents d ON d.id = v.document_id JOIN organizations o ON o.id = d.organization_id WHERE v.id = ${versionId} FOR UPDATE OF v`.execute(trx)).rows[0];
+    if (!v || v.kind !== "SUBSCRIPTION_ORDER") throw new ContractNotFoundError();
+    if (v.status !== "draft") throw new ContractRuleError("CONTRACT_VERSION_IMMUTABLE");
+    const terms = normalizeOrderTerms(input);
+    if (!v.is_test && terms.foundingProgram && (await countFounding(trx, v.organization_id)) >= FOUNDING_PROGRAM_LIMIT) throw new ContractRuleError("CONTRACT_FOUNDING_PROGRAM_FULL");
+    try {
+      await sql`UPDATE contract_document_versions SET body = ${subscriptionOrderBody(v.organization_name, terms, v.is_test)}, commercial_terms = ${JSON.stringify(terms)}::jsonb WHERE id = ${versionId}`.execute(trx);
+      const r = (await sql<any>`SELECT id, content_sha256, legal_status, commercial_status, commercial_terms FROM contract_document_versions WHERE id = ${versionId}`.execute(trx)).rows[0];
+      await audit(trx, userId, v.organization_id, "CONTRACT_SUBSCRIPTION_ORDER_TERMS_EDITED", "contract_document_version", versionId, { content_sha256: r.content_sha256 });
+      return r;
+    } catch (err) { return rethrow(err); }
+  });
+}
+
+/** Aprobación COMERCIAL de una Orden en borrador (referencia escrita), ligada a la huella exacta. No publica ni cobra. */
+export async function platformRecordCommercialApproval(userId: string, versionId: string, reference: string, expectedSha256: string) {
+  return withPlatformContext(userId, async (trx) => {
+    const v = (await sql<any>`SELECT v.status, v.content_sha256, d.kind, d.organization_id FROM contract_document_versions v JOIN contract_documents d ON d.id = v.document_id
+      WHERE v.id = ${versionId} FOR UPDATE OF v`.execute(trx)).rows[0];
+    if (!v || v.kind !== "SUBSCRIPTION_ORDER") throw new ContractNotFoundError();
+    if (v.status !== "draft") throw new ContractRuleError("CONTRACT_VERSION_IMMUTABLE");
+    if (v.content_sha256 !== expectedSha256) throw new ContractRuleError("CONTRACT_CONTENT_MISMATCH");
+    try {
+      await sql`UPDATE contract_document_versions SET commercial_status = 'commercially_approved', commercial_approved_by_user_id = ${userId}, commercial_approval_reference = ${reference}
+        WHERE id = ${versionId}`.execute(trx);
+      await audit(trx, userId, v.organization_id, "CONTRACT_COMMERCIAL_APPROVAL_RECORDED", "contract_document_version", versionId, { content_sha256: v.content_sha256 });
+      return (await sql<any>`SELECT id, commercial_status, commercial_approved_at, commercial_approved_sha256 FROM contract_document_versions WHERE id = ${versionId}`.execute(trx)).rows[0];
+    } catch (err) { return rethrow(err); }
   });
 }
 

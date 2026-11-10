@@ -7,7 +7,7 @@ BEGIN;
 DO $$ BEGIN
   IF to_regclass('public.organization_contract_acceptances') IS NOT NULL THEN
     IF EXISTS (SELECT 1 FROM organization_contract_acceptances WHERE NOT is_test)
-       OR EXISTS (SELECT 1 FROM contract_document_versions WHERE NOT is_test AND (status <> 'draft' OR legal_status = 'legally_approved')) THEN
+       OR EXISTS (SELECT 1 FROM contract_document_versions WHERE NOT is_test AND (status <> 'draft' OR legal_status = 'legally_approved' OR commercial_status = 'commercially_approved')) THEN
       RAISE EXCEPTION 'CONTRACT_ROLLBACK_REFUSED_OFFICIAL_EVIDENCE';
     END IF;
   END IF;
@@ -60,9 +60,18 @@ CREATE POLICY contract_document_versions_read ON contract_document_versions FOR 
   USING (app_is_superadmin() OR (status IN ('published', 'retired') AND public.app_is_org_admin()));
 DROP FUNCTION IF EXISTS public.app_contract_version_legal_guard();
 DROP FUNCTION IF EXISTS public.app_contract_document_org(uuid);
+DROP FUNCTION IF EXISTS public.app_contract_document_kind(uuid);
+DROP FUNCTION IF EXISTS public.app_contract_text_signing_block(text);
+DROP FUNCTION IF EXISTS public.app_contract_order_terms_valid(jsonb);
 
 ALTER TABLE contract_document_versions DROP CONSTRAINT IF EXISTS contract_document_versions_source_check;
 ALTER TABLE contract_document_versions DROP CONSTRAINT IF EXISTS contract_document_versions_legal_status_check;
+ALTER TABLE contract_document_versions DROP CONSTRAINT IF EXISTS contract_document_versions_commercial_status_check;
+ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_approved_sha256;
+ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_approval_reference;
+ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_approved_by_user_id;
+ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_approved_at;
+ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_status;
 ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS commercial_terms;
 ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS source_file_sha256;
 ALTER TABLE contract_document_versions DROP COLUMN IF EXISTS source_file_name;
