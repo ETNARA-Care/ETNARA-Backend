@@ -30,6 +30,9 @@ const SELF_FILTERS: Record<string, string> = {
 // reads them). Writes on them are still probed (and covered in detail by X07–X10).
 const READ_ONLY_BY_DESIGN: Record<string, string> = {
   stored_files: "x.scope_type = 'PLATFORM_PROFESSIONAL' AND x.organization_id IS NULL",
+  // 153: catálogo contractual GENERAL de ETNARA (Contrato General, avisos), sin agencia: lo leen todas las
+  // administraciones. Las Órdenes de Suscripción (con organization_id) siguen sondeándose como de una agencia.
+  contract_documents: "x.organization_id IS NULL",
 };
 const readFilter = (t: string) => `(${READ_ONLY_BY_DESIGN[t] ?? "false"})`;
 const selfFilter = (t: string) => `(${SELF_FILTERS[t] ?? "false"} AND $2::uuid IS NOT NULL)`;
