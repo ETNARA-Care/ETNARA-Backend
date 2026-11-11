@@ -11,6 +11,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import pg from "pg";
+import { pdfToText } from "./lib/pdfText.js";
 
 const adminUrl = process.env.MIGRATIONS_DATABASE_URL;
 if (!adminUrl || process.env.ETNARA_DISPOSABLE_DB !== "true") throw new Error("Requires MIGRATIONS_DATABASE_URL and ETNARA_DISPOSABLE_DB=true");
@@ -137,12 +138,9 @@ async function main() {
     return { status: res.status, type: res.headers.get("content-type") ?? "", disposition: res.headers.get("content-disposition") ?? "",
       cache: res.headers.get("cache-control") ?? "", buf };
   }
-  const { execFileSync } = await import("node:child_process");
-  const { writeFileSync, mkdtempSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const dir = mkdtempSync(join(tmpdir(), "sr3-"));
-  const pdfText = (buf: Buffer) => { const f = join(dir, `${randomUUID()}.pdf`); writeFileSync(f, buf); return execFileSync("pdftotext", ["-layout", f, "-"]).toString("utf8"); };
+  const { writeFileSync } = await import("node:fs");
+  // PDF text without system packages (pdfjs-dist pinned in package-lock); throws if unreadable/empty.
+  const pdfText = (buf: Buffer) => pdfToText(buf);
 
   try {
     // Four visits by the same caregiver for Doña Carmen; one for Doña Rosa.
@@ -206,7 +204,7 @@ async function main() {
 
     // ------------------------------------------------------------ D: PDF
     const p1 = await pdf(`${FR(rA)}/${r1.id}/pdf`, A.family.token);
-    const text = p1.status === 200 ? pdfText(p1.buf) : "";
+    const text = p1.status === 200 ? await pdfText(p1.buf) : "";
     check("D1 server PDF: application/pdf, download only, never cached, file name without personal names",
       p1.status === 200 && p1.type === "application/pdf" && /^attachment; filename="informe-de-turno-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}\.pdf"$/.test(p1.disposition)
       && /no-store/.test(p1.cache) && p1.buf.subarray(0, 5).toString() === "%PDF-" && !/Carmen|Cuidadora/.test(p1.disposition), `${p1.status} ${p1.type} ${p1.disposition} ${p1.cache}`);
@@ -217,7 +215,7 @@ async function main() {
       && text.includes(FREE_NOTE) && text.includes(FINAL) && text.includes(SUMMARY) && text.includes(INCIDENT));
     check("D4 PDF never shows withheld sections (hygiene, mood) nor location data", !text.includes(HYGIENE) && !text.includes(MOOD) && !/Higiene|Ánimo|ubicación|proximidad/i.test(text));
     const p2 = await pdf(`${FR(rA)}/${r2.id}/pdf`, A.family.token);
-    const text2 = p2.status === 200 ? pdfText(p2.buf) : "";
+    const text2 = p2.status === 200 ? await pdfText(p2.buf) : "";
     check("D5 PDF of the meals-only report: meals only, no schedule box", p2.status === 200 && text2.includes("Almuerzo · Mitad") && !text2.includes(HYGIENE) && !/Programado/.test(text2) && !/Hidratación/.test(text2), text2.replace(/\s+/g, " ").slice(0, 400));
     const events = (await q<{ event_type: string; actor_user_id: string }>(`SELECT event_type, actor_user_id FROM shift_report_events WHERE shift_report_id=$1 AND event_type='PDF_DOWNLOADED'`, [r1.id])).rows;
     const agencyHist = await call("GET", `${SA}/shifts/${s1}/shift-reports`, A.admin.token);
@@ -281,7 +279,7 @@ async function main() {
     const startAt: string = vM.body.reports?.[0]?.content?.times?.start?.at;
     const startDay = new Date(startAt).toLocaleDateString("es-PR", { timeZone: "America/Puerto_Rico", day: "numeric", month: "short" }).replace(/\./g, "");
     const pM = await pdf(`${FR(rA)}/${rM.id}/pdf`, A.family.token);
-    const textM = pM.status === 200 ? pdfText(pM.buf) : "";
+    const textM = pM.status === 200 ? await pdfText(pM.buf) : "";
     const flat = textM.replace(/\u00a0/g, " ");
     check("M1 multi-day visit: the PDF labels the earlier start with its date; a scheduled end past midnight says «termina el …»",
       pM.status === 200 && flat.includes(startDay) && /INICIO/.test(textM)
