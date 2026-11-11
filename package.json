@@ -33,6 +33,7 @@
     "@types/node": "^26.2.0",
     "@types/pg": "^8.21.0",
     "@types/web-push": "3.6.4",
+    "pdfjs-dist": "4.10.38",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
