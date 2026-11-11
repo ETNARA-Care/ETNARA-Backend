@@ -127,6 +127,8 @@ interface IncidentRow {
   resolution: string | null;
   status: string;
   created_at: string;
+  resolved_by_user_id: string | null;
+  resolved_at: string | null;
 }
 
 async function resolveWorkerForUser(trx: unknown, userId: string): Promise<string> {
@@ -245,7 +247,7 @@ export async function createIncident(
       )
       RETURNING id, organization_id, care_recipient_id, organization_worker_membership_id,
                 escalated_from_observation_id, severity, description, actions_taken,
-                assigned_to_user_id, resolution, status, created_at
+                assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
     `.execute(trx);
 
     if (input.escalatedFromObservationId) {
@@ -308,7 +310,7 @@ export async function escalateObservationToIncident(
       )
       RETURNING id, organization_id, care_recipient_id, organization_worker_membership_id,
                 escalated_from_observation_id, severity, description, actions_taken,
-                assigned_to_user_id, resolution, status, created_at
+                assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
     `.execute(trx);
 
     await sql`UPDATE observations SET status = 'escalated' WHERE id = ${observationId} AND organization_id = ${organizationId}`.execute(
@@ -335,7 +337,7 @@ export async function listIncidents(userId: string, organizationId: string, filt
     const result = await sql<IncidentRow>`
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id,
              escalated_from_observation_id, severity, description, actions_taken,
-             assigned_to_user_id, resolution, status, created_at
+             assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
       FROM incidents
       WHERE ${sql.join(conditions, sql` AND `)}
       ORDER BY created_at DESC
@@ -415,7 +417,7 @@ export async function getIncident(userId: string, organizationId: string, incide
     const result = await sql<IncidentRow>`
       SELECT id, organization_id, care_recipient_id, organization_worker_membership_id,
              escalated_from_observation_id, severity, description, actions_taken,
-             assigned_to_user_id, resolution, status, created_at
+             assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
       FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId}
         AND ${recipientStaffSql(sql`incidents.care_recipient_id`)}
       LIMIT 1
@@ -432,11 +434,77 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
 };
 
 /**
+ * 154: a resolution rule enforced by the database (app_incident_guard). The code is returned
+ * to the portal so it can say exactly what is missing; nothing is hidden or closed silently.
+ */
+export class IncidentRuleError extends Error {
+  constructor(public readonly code: string, public readonly status: number) {
+    super(code);
+    this.name = "IncidentRuleError";
+  }
+}
+const INCIDENT_RULE_STATUS: Record<string, number> = {
+  INCIDENT_SERIOUS_CLOSER_REQUIRED: 403,
+  INCIDENT_STATUS_FORBIDDEN: 403,
+  INCIDENT_SERIOUS_FOLLOW_UP_REQUIRED: 409,
+  INCIDENT_RESOLUTION_TOO_SHORT: 400,
+  INCIDENT_RESOLVED_IS_FINAL: 409,
+  INCIDENT_STATUS_TRANSITION_INVALID: 409,
+  INCIDENT_RECORD_IMMUTABLE: 409,
+  INCIDENT_RESOLUTION_UNATTRIBUTED: 409,
+};
+function incidentRuleError(error: unknown): IncidentRuleError | null {
+  const code = /INCIDENT_[A-Z_]+/.exec((error as { message?: string })?.message ?? "")?.[0];
+  return code && INCIDENT_RULE_STATUS[code] ? new IncidentRuleError(code, INCIDENT_RULE_STATUS[code]) : null;
+}
+
+/** What the current manager needs to know before resolving (shown in the portal). */
+export interface IncidentResolutionRules {
+  serious: boolean;
+  canManage: boolean;
+  canCloseSerious: boolean;
+  hasDocumentedFollowUp: boolean;
+  minResolutionLength: number;
+  resolvedByEmail: string | null;
+}
+
+async function resolutionRules(trx: unknown, incidentId: string, resolvedBy: string | null): Promise<IncidentResolutionRules> {
+  const r = (await sql<{ serious: boolean; manage: boolean; close: boolean; follow: boolean; email: string | null }>`
+    SELECT app_incident_is_serious(i.severity) AS serious, app_is_org_manager() AS manage,
+           app_can_close_serious_incidents() AS close, app_incident_has_documented_follow_up(i.id) AS follow,
+           (SELECT u.email FROM users u WHERE u.id = ${resolvedBy}) AS email
+    FROM incidents i WHERE i.id = ${incidentId}
+  `.execute(trx as never)).rows[0];
+  return {
+    serious: Boolean(r?.serious), canManage: Boolean(r?.manage), canCloseSerious: Boolean(r?.close),
+    hasDocumentedFollowUp: Boolean(r?.follow), minResolutionLength: r?.serious ? 30 : 10,
+    resolvedByEmail: r?.email ?? null,
+  };
+}
+
+/** GET /incidents/:id/resolution-rules — managers only (caregivers never resolve). */
+export async function getIncidentResolutionRules(userId: string, organizationId: string, incidentId: string) {
+  assertUuid(incidentId, "incidentId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgManager(trx);
+    const row = (await sql<{ resolved_by_user_id: string | null }>`
+      SELECT resolved_by_user_id FROM incidents WHERE id = ${incidentId} AND organization_id = ${organizationId} LIMIT 1
+    `.execute(trx)).rows[0];
+    if (!row) throw new IncidentNotFoundError();
+    return resolutionRules(trx, incidentId, row.resolved_by_user_id);
+  });
+}
+
+/**
  * Status transitions (workflow/supervision) require org-manager authority
  * -- the same principle as observations' review action. Incidents are
  * never deleted (schema comment: "part of the permanent historical
  * record"); this only ever moves status forward, never invents a delete
  * or archive path the schema doesn't have.
+ *
+ * 154: resolving records who and when (resolved_by_user_id / resolved_at), appends the
+ * resolution to the follow-up log, and the database writes audit_log. Serious incidents need
+ * documented follow-up, a substantive resolution and a closer the agency authorized.
  */
 export async function updateIncidentStatus(
   userId: string,
@@ -446,6 +514,7 @@ export async function updateIncidentStatus(
   resolution?: string
 ): Promise<IncidentRow> {
   assertUuid(incidentId, "incidentId");
+  const text = resolution?.trim();
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertOrgManager(trx);
     const current = await sql<{ status: string }>`
@@ -455,19 +524,103 @@ export async function updateIncidentStatus(
     if (!VALID_TRANSITIONS[current.rows[0].status]?.includes(newStatus)) {
       throw new InvalidStatusTransitionError();
     }
-    if (newStatus === "resolved" && !resolution) {
+    if (newStatus === "resolved" && !text) {
       throw new InvalidStatusTransitionError();
     }
 
+    const resolving = newStatus === "resolved";
     const result = await sql<IncidentRow>`
       UPDATE incidents
-      SET status = ${newStatus}, resolution = ${newStatus === "resolved" ? resolution : null}
+      SET status = ${newStatus},
+          resolution = ${resolving ? text! : null},
+          resolved_by_user_id = ${resolving ? userId : null},
+          resolved_at = ${resolving ? sql`now()` : null}
       WHERE id = ${incidentId} AND organization_id = ${organizationId}
       RETURNING id, organization_id, care_recipient_id, organization_worker_membership_id,
                 escalated_from_observation_id, severity, description, actions_taken,
-                assigned_to_user_id, resolution, status, created_at
-    `.execute(trx);
+                assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
+    `.execute(trx).catch((error: unknown) => {
+      throw incidentRuleError(error) ?? error;
+    });
+    if (resolving) {
+      await sql`
+        INSERT INTO incident_timeline_entries (organization_id, incident_id, entry_text, created_by_user_id)
+        VALUES (${organizationId}, ${incidentId}, ${`Incidente resuelto. ${text}`}, ${userId})
+      `.execute(trx);
+    }
     return result.rows[0];
+  });
+}
+
+// --- Who may close serious incidents (154, same pattern as shift_report_reviewers in 126) ---
+
+export class IncidentCloserError extends Error {
+  constructor(public readonly code: string, public readonly status: number) {
+    super(code);
+    this.name = "IncidentCloserError";
+  }
+}
+export const incidentCloserGrantSchema = z.object({ membershipId: z.string().uuid() });
+
+async function assertOrgAdmin(trx: unknown): Promise<void> {
+  const r = await sql<{ ok: boolean }>`SELECT app_is_org_admin() AS ok`.execute(trx as never);
+  if (!r.rows[0]?.ok) throw new IncidentCloserError("REQUIRES_ORGANIZATION_ADMIN", 403);
+}
+
+/** GET /incident-closers: the agency's active supervisors and whether each is authorized (admins only). */
+export async function listIncidentClosers(userId: string, organizationId: string) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgAdmin(trx);
+    const rows = (await sql<{ membership_id: string; email: string; grant_id: string | null; granted_at: string | null; granted_by_email: string | null }>`
+      SELECT om.id AS membership_id, u.email, g.id AS grant_id, g.granted_at, gu.email AS granted_by_email
+      FROM organization_memberships om
+      JOIN users u ON u.id = om.user_id
+      JOIN user_roles ur ON ur.organization_membership_id = om.id AND ur.organization_id = om.organization_id
+      JOIN roles r ON r.id = ur.role_id AND r.code = 'SUPERVISOR'
+      LEFT JOIN incident_closure_authorizers g ON g.organization_membership_id = om.id AND g.organization_id = om.organization_id AND g.revoked_at IS NULL
+      LEFT JOIN users gu ON gu.id = g.granted_by_user_id
+      WHERE om.organization_id = ${organizationId} AND om.status = 'active'
+      ORDER BY u.email
+    `.execute(trx)).rows;
+    return {
+      supervisors: rows.map((r) => ({
+        membershipId: r.membership_id, email: r.email, authorized: Boolean(r.grant_id),
+        grantedAt: r.granted_at ? new Date(r.granted_at).toISOString() : null, grantedBy: r.granted_by_email,
+      })),
+    };
+  });
+}
+
+/** POST /incident-closers: an admin authorizes one of the agency's supervisors. Idempotent. */
+export async function grantIncidentCloser(userId: string, organizationId: string, input: z.infer<typeof incidentCloserGrantSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgAdmin(trx);
+    const supervisor = await sql`
+      SELECT 1 FROM organization_memberships om
+      JOIN user_roles ur ON ur.organization_membership_id = om.id AND ur.organization_id = om.organization_id
+      JOIN roles ro ON ro.id = ur.role_id AND ro.code = 'SUPERVISOR'
+      WHERE om.id = ${input.membershipId} AND om.organization_id = ${organizationId} AND om.status = 'active'
+    `.execute(trx);
+    if (!supervisor.rows[0]) throw new IncidentCloserError("NOT_AN_ACTIVE_SUPERVISOR", 409);
+    await sql`
+      INSERT INTO incident_closure_authorizers (organization_id, organization_membership_id, granted_by_user_id)
+      VALUES (${organizationId}, ${input.membershipId}, ${userId})
+      ON CONFLICT (organization_membership_id) WHERE revoked_at IS NULL DO NOTHING
+    `.execute(trx);
+    return { membershipId: input.membershipId, authorized: true };
+  });
+}
+
+/** POST /incident-closers/:membershipId/revoke: the grant is kept with who and when it was revoked. */
+export async function revokeIncidentCloser(userId: string, organizationId: string, membershipId: string) {
+  assertUuid(membershipId, "membershipId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgAdmin(trx);
+    await sql`
+      UPDATE incident_closure_authorizers SET revoked_at = now(), revoked_by_user_id = ${userId}
+      WHERE organization_id = ${organizationId} AND organization_membership_id = ${membershipId} AND revoked_at IS NULL
+    `.execute(trx);
+    return { membershipId, authorized: false };
   });
 }
 
@@ -501,8 +654,11 @@ export async function assignIncident(
       WHERE id = ${incidentId} AND organization_id = ${organizationId}
       RETURNING id, organization_id, care_recipient_id, organization_worker_membership_id,
                 escalated_from_observation_id, severity, description, actions_taken,
-                assigned_to_user_id, resolution, status, created_at
-    `.execute(trx);
+                assigned_to_user_id, resolution, status, created_at, resolved_by_user_id, resolved_at
+    `.execute(trx).catch((error: unknown) => {
+      // 154: a resolved incident is final (database guard) -> 409, never a 500.
+      throw incidentRuleError(error) ?? error;
+    });
     return result.rows[0];
   });
 }

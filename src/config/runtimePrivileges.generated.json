@@ -172,6 +172,11 @@
       "INSERT",
       "SELECT"
     ],
+    "incident_closure_authorizers": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "incident_timeline_entries": [
       "INSERT",
       "SELECT"
@@ -243,6 +248,9 @@
       "UPDATE"
     ],
     "operational_alert_escalations": [
+      "SELECT"
+    ],
+    "operational_pending_activation": [
       "SELECT"
     ],
     "organization_care_event_types": [
@@ -347,6 +355,9 @@
       "INSERT",
       "SELECT",
       "UPDATE"
+    ],
+    "shift_attention_closures": [
+      "SELECT"
     ],
     "shift_finance_terms": [
       "INSERT",
@@ -490,7 +501,9 @@
     "app_billing_bootstrap_permissions",
     "app_billing_can",
     "app_billing_live_claims",
+    "app_can_close_serious_incidents",
     "app_can_review_shift_reports",
+    "app_close_shift_without_service",
     "app_create_activity_photo",
     "app_create_photo_consent_form",
     "app_delete_activity_photo",
@@ -501,6 +514,8 @@
     "app_family_photo_receipt",
     "app_find_family_thread_id",
     "app_find_own_verification_event",
+    "app_incident_has_documented_follow_up",
+    "app_incident_is_serious",
     "app_inspect_access_invitation",
     "app_is_any_establishment_admin",
     "app_is_establishment_admin",
@@ -585,6 +600,7 @@
     "app_self_has_active_family_access",
     "app_self_has_active_worker_access",
     "app_set_family_photo_receipt",
+    "app_shift_has_check_in",
     "app_shift_has_open_check_in",
     "app_shift_journey_state",
     "app_shift_journey_states",
