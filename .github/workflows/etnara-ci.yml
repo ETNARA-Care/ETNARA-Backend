@@ -425,6 +425,10 @@ jobs:
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
+          # Etapa 0 (9-nov): Central never receives the agency administrator's activation link; list, resend with
+          # token rotation, revoke, audit without secrets, limits. In-memory email provider (nothing is sent). Both modes.
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyCentralAdminInvitations.ts
+          npx tsx scripts/verifyCentralAdminInvitations.ts
           # Supervisor vs admin on personnel, credentials, compliance and team (B4), and deactivating /
           # reactivating a caregiver (paso 1B). Both modes since 137 closed RLS gap G4 (managers read an
           # inactive caregiver of their agency).
