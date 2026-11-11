@@ -80,6 +80,7 @@ DROP FUNCTION IF EXISTS app_incident_closure_authorizers_guard();
 DROP FUNCTION IF EXISTS app_incident_is_serious(text);
 DROP FUNCTION IF EXISTS app_check_in_after_closure_audit();
 DROP FUNCTION IF EXISTS app_verification_override_audit();
+DROP FUNCTION IF EXISTS app_rectify_shift_closure(uuid, text);
 DROP FUNCTION IF EXISTS app_close_shift_without_service(uuid, text, text);
 DROP FUNCTION IF EXISTS app_shift_has_check_in(uuid);
 DROP FUNCTION IF EXISTS app_shift_attention_closures_guard();

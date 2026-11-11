@@ -12,6 +12,8 @@ import {
   listShiftClosures,
   omittedVisitCorrectionSchema,
   recordOmittedVisitCorrection,
+  rectifyClosureSchema,
+  rectifyShiftClosure,
   ShiftClosureError,
 } from "./shiftClosures.service.js";
 
@@ -42,6 +44,8 @@ router.post("/organizations/:organizationId/shifts/:shiftId/close-without-servic
   handle(201, async (req, org) => ({ closure: await closeShiftWithoutService(user(req), org, String(req.params.shiftId), closeShiftSchema.parse(req.body ?? {})) })));
 router.post("/organizations/:organizationId/shifts/:shiftId/verification/omitted-visit-correction", requireAuth,
   handle(201, (req, org) => recordOmittedVisitCorrection(user(req), org, String(req.params.shiftId), omittedVisitCorrectionSchema.parse(req.body ?? {}))));
+router.post("/organizations/:organizationId/shift-closures/:closureId/rectify", requireAuth,
+  handle(200, async (req, org) => ({ closure: await rectifyShiftClosure(user(req), org, String(req.params.closureId), rectifyClosureSchema.parse(req.body ?? {})) })));
 router.get("/organizations/:organizationId/shift-closures", requireAuth,
   handle(200, (req, org) => listShiftClosures(user(req), org, listClosuresSchema.parse(req.query ?? {}))));
 

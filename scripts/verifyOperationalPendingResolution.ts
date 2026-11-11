@@ -233,6 +233,53 @@ async function main() {
     const histB = await call("GET", `/organizations/${orgB}/shift-closures`, adminB.token);
     check("A23 Otra agencia solo ve los suyos (0)", histB.status === 200 && histB.body.closures.length === 0, histB.raw);
 
+    // ================================================================= R. Rectification of a closure made by mistake
+    const firstClosure = await one(`SELECT * FROM shift_attention_closures WHERE shift_id=$1`, [uncovered]);
+    const rPath = `${P}/shift-closures/${firstClosure.id}/rectify`;
+    const rReason = "Cerrado por error: sí había cuidadora disponible esa tarde.";
+    const rSup = await call("POST", rPath, sup.token, { reason: rReason });
+    check("R1 Una supervisora no rectifica cierres (solo administradora, 403)", rSup.status === 403 && rSup.body.error === "SHIFT_CLOSURE_RECTIFY_FORBIDDEN", rSup.raw);
+    for (const [who, tok] of [["cuidadora", carlos], ["familia", fam.token], ["otra agencia", adminB.token]] as const) {
+      const r = await call("POST", rPath, tok, { reason: rReason });
+      check(`R2 Rectificar: ${who} sin acceso`, denied(r), `${r.status}`);
+    }
+    const rB = await call("POST", `/organizations/${orgB}/shift-closures/${firstClosure.id}/rectify`, adminB.token, { reason: rReason });
+    check("R3 Otra agencia por su propia ruta no encuentra el cierre (404)", rB.status === 404, rB.raw);
+    const rShort = await call("POST", rPath, admin.token, { reason: "por error" });
+    check("R4 Rectificar exige un motivo sustantivo (400)", rShort.status === 400, rShort.raw);
+    const rDirect = await superSql(`UPDATE shift_attention_closures SET rectified_at=now(), rectified_by_user_id=$2, rectification_reason=$3, note='nota cambiada' WHERE id=$1`, [firstClosure.id, admin.userId, rReason]);
+    check("R5 Ni el propietario puede cambiar el contenido original al rectificar", /SHIFT_CLOSURE_IMMUTABLE/.test(rDirect), rDirect);
+    const rOk = await call("POST", rPath, admin.token, { reason: rReason });
+    const afterR = await one(`SELECT * FROM shift_attention_closures WHERE id=$1`, [firstClosure.id]);
+    check("R6 Administradora rectifica: el registro original se conserva intacto y suma quién, cuándo y por qué",
+      rOk.status === 200 && afterR.note === firstClosure.note && afterR.closed_by_user_id === firstClosure.closed_by_user_id && afterR.reason_code === firstClosure.reason_code
+        && new Date(afterR.closed_at).getTime() === new Date(firstClosure.closed_at).getTime()
+        && afterR.rectified_by_user_id === admin.userId && afterR.rectification_reason === rReason && !!afterR.rectified_at
+        && rOk.body.closure?.rectifiedByEmail === admin.email, rOk.raw);
+    check("R7 Auditoría SHIFT_CLOSURE_RECTIFIED", (await audits("SHIFT_CLOSURE_RECTIFIED", uncovered)) === 1);
+    const cR = await center();
+    const attR = await call("GET", `${P}/shifts/${uncovered}/attention`, admin.token);
+    check("R8 Tras rectificar, el turno vuelve a «Requiere atención» y se puede cerrar de nuevo",
+      cR.alerts.some((a) => a.relatedEntityId === uncovered) && attR.body.closure === null && attR.body.canClose === true && attR.body.rectifiedClosures?.length === 1, attR.raw);
+    const rAgain = await call("POST", rPath, admin.token, { reason: rReason });
+    check("R9 Un cierre ya rectificado no se vuelve a rectificar (409)", rAgain.status === 409 && rAgain.body.error === "SHIFT_CLOSURE_ALREADY_RECTIFIED", rAgain.raw);
+    for (const [label, q2] of [["UPDATE", `UPDATE shift_attention_closures SET rectification_reason='otra razón distinta y más larga' WHERE id='${firstClosure.id}'`], ["DELETE", `DELETE FROM shift_attention_closures WHERE id='${firstClosure.id}'`]]) {
+      const r = await superSql(q2);
+      check(`R10 Rectificación definitiva: ${label} rechazado incluso como propietario`, /SHIFT_CLOSURE_IMMUTABLE/.test(r), r);
+    }
+    const reClose = await call("POST", `${P}/shifts/${uncovered}/close-without-service`, sup.token, { reasonCode: "family_cancelled", note: "La familia canceló el servicio por la mañana." });
+    const histR = await call("GET", `${P}/shift-closures`, admin.token);
+    const both = (histR.body.closures ?? []).filter((x: Json) => x.shiftId === uncovered);
+    check("R11 Nuevo cierre tras la rectificación; el historial conserva ambos (uno rectificado)",
+      reClose.status === 201 && both.length === 2 && both.filter((x: Json) => x.rectifiedAt).length === 1 && both.some((x: Json) => !x.rectifiedAt && x.reasonCode === "family_cancelled"), `${reClose.status} ${both.length}`);
+    const rFinal = await call("GET", `${P}/shifts/${uncovered}/attention`, sup.token);
+    check("R12 Detalle: la supervisora ve el cierre activo y el rectificado, pero no puede rectificar", rFinal.body.closure?.reasonCode === "family_cancelled" && rFinal.body.rectifiedClosures.length === 1 && rFinal.body.canRectify === false, rFinal.raw);
+    const shiftsList = await call("GET", `${P}/shifts`, admin.token);
+    const rowOf = (id: string) => (shiftsList.body.shifts ?? []).find((x: Json) => x.id === id);
+    const oneShift = await call("GET", `${P}/shifts/${uncovered}`, admin.token);
+    check("R13 Turnos: «Cerrado sin servicio» identificado en la lista y en el detalle (y no en los demás)",
+      rowOf(uncovered)?.closed_without_service === true && rowOf(noShow)?.closed_without_service === true && rowOf(future)?.closed_without_service === false && oneShift.body.shift?.closed_without_service === true, `${shiftsList.status}`);
+
     // ================================================================= B. Evidence of service
     const fake = await shift(-3, 2, null);
     const patch = await call("PATCH", `${P}/shifts/${fake}`, admin.token, { status: "completed" });

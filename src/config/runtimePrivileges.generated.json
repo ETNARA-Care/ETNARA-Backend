@@ -594,6 +594,7 @@
     "app_record_operational_agent_run",
     "app_record_photo_consent",
     "app_record_timesheet_from_checkout",
+    "app_rectify_shift_closure",
     "app_reset_credential_review_pending",
     "app_review_activity_photo",
     "app_revoke_photo_consent",

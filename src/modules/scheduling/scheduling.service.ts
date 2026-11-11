@@ -139,6 +139,8 @@ export interface ShiftRow {
   assignment_id?: string;
   assignment_response_status?: "pending" | "accepted";
   care_recipient_display_name?: string | null;
+  /** 154: an active closure without service exists (managers only). */
+  closed_without_service?: boolean;
   /** Municipality of the service (never the address); own shifts only (134). */
   service_municipality?: string | null;
 }
@@ -235,7 +237,9 @@ export async function listShifts(userId: string, organizationId: string, filter:
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
       SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
-             s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count
+             s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count,
+             -- 154: visual «Cerrado sin servicio» (managers only: RLS hides closures from caregivers).
+             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL) AS closed_without_service
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
@@ -431,7 +435,8 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
+      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at,
+             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = shifts.id AND c.rectified_at IS NULL) AS closed_without_service
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
         AND (app_is_org_manager() OR app_worker_has_shift_assignment(shifts.id))

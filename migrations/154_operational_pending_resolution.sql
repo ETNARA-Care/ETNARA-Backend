@@ -9,7 +9,10 @@
 --    resolution (no silent expiry).
 -- 2. Shifts that ended without service: shift_attention_closures, one immutable row per
 --    shift (who, when, outcome, reason, mandatory note). The shift row is NOT touched: its
---    status, assignments and history stay exactly as they were. Written only through
+--    status, assignments and history stay exactly as they were. A closure made by mistake is
+--    RECTIFIED, never deleted: an ORGANIZATION_ADMIN adds, once, who/when/why to the same row
+--    (app_rectify_shift_closure); the original stays readable and the shift becomes pending
+--    again (it may then be closed again or corrected). Written only through
 --    app_close_shift_without_service() (SECURITY DEFINER): org manager, same tenant, shift
 --    already ended, still unassigned/confirmed, no check-in, not closed before. A closure is
 --    never a service: it creates no verification event and no timesheet, so nothing becomes
@@ -68,8 +71,15 @@ CREATE TABLE IF NOT EXISTS shift_attention_closures (
   note               text NOT NULL CHECK (length(btrim(note)) BETWEEN 10 AND 2000),
   closed_by_user_id  uuid NOT NULL REFERENCES users(id),
   closed_at          timestamptz NOT NULL DEFAULT now(),
+  -- Rectification of a closure made by mistake: set once, never cleared; the row is never deleted.
+  rectified_at          timestamptz NULL,
+  rectified_by_user_id  uuid NULL REFERENCES users(id),
+  rectification_reason  text NULL,
   FOREIGN KEY (shift_id, organization_id) REFERENCES shifts (id, organization_id),
-  CONSTRAINT shift_attention_closures_one_per_shift UNIQUE (shift_id),
+  CONSTRAINT shift_attention_closures_rectification_complete CHECK (
+    (rectified_at IS NULL AND rectified_by_user_id IS NULL AND rectification_reason IS NULL)
+    OR (rectified_at IS NOT NULL AND rectified_by_user_id IS NOT NULL
+        AND length(btrim(rectification_reason)) BETWEEN 20 AND 2000)),
   CONSTRAINT shift_attention_closures_other_explained CHECK (reason_code <> 'other' OR length(btrim(note)) >= 20),
   CONSTRAINT shift_attention_closures_reason_fits CHECK (
     (outcome = 'not_covered' AND reason_code <> 'caregiver_no_show')
@@ -77,15 +87,30 @@ CREATE TABLE IF NOT EXISTS shift_attention_closures (
 );
 CREATE INDEX IF NOT EXISTS idx_shift_attention_closures_org_closed
   ON shift_attention_closures (organization_id, closed_at DESC);
+-- At most one ACTIVE (not rectified) closure per shift; rectified ones stay as history.
+CREATE UNIQUE INDEX IF NOT EXISTS shift_attention_closures_one_active
+  ON shift_attention_closures (shift_id) WHERE rectified_at IS NULL;
 
--- A closure is part of the permanent record: never edited or deleted (owner included).
+-- A closure is part of the permanent record: never deleted, its content never edited (owner
+-- included). The only change ever allowed is adding the rectification, once.
 CREATE OR REPLACE FUNCTION app_shift_attention_closures_guard()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
-  RAISE EXCEPTION 'SHIFT_CLOSURE_IMMUTABLE' USING ERRCODE = '23514';
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'SHIFT_CLOSURE_IMMUTABLE' USING ERRCODE = '23514';
+  END IF;
+  IF OLD.rectified_at IS NOT NULL
+     OR NEW.id IS DISTINCT FROM OLD.id OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+     OR NEW.shift_id IS DISTINCT FROM OLD.shift_id OR NEW.outcome IS DISTINCT FROM OLD.outcome
+     OR NEW.reason_code IS DISTINCT FROM OLD.reason_code OR NEW.note IS DISTINCT FROM OLD.note
+     OR NEW.closed_by_user_id IS DISTINCT FROM OLD.closed_by_user_id OR NEW.closed_at IS DISTINCT FROM OLD.closed_at
+     OR NEW.rectified_at IS NULL THEN
+    RAISE EXCEPTION 'SHIFT_CLOSURE_IMMUTABLE' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
 END;
 $$;
 DROP TRIGGER IF EXISTS shift_attention_closures_guard ON shift_attention_closures;
@@ -135,7 +160,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM verification_events WHERE shift_id = p_shift_id AND organization_id = v_org AND event_type = 'check_in') THEN
     RAISE EXCEPTION 'SHIFT_CLOSURE_HAS_CHECK_IN' USING ERRCODE = '23514';
   END IF;
-  IF EXISTS (SELECT 1 FROM shift_attention_closures WHERE shift_id = p_shift_id) THEN
+  IF EXISTS (SELECT 1 FROM shift_attention_closures WHERE shift_id = p_shift_id AND rectified_at IS NULL) THEN
     RAISE EXCEPTION 'SHIFT_CLOSURE_ALREADY_CLOSED' USING ERRCODE = '23505';
   END IF;
   v_accepted := EXISTS (SELECT 1 FROM assignments
@@ -161,6 +186,42 @@ BEGIN
           jsonb_build_object('status', v_shift.status),
           jsonb_build_object('closureId', v_id, 'outcome', v_outcome, 'reasonCode', p_reason_code));
   RETURN v_id;
+END;
+$$;
+
+/** Rectify a closure made by mistake (ORGANIZATION_ADMIN only): the original stays, audited. */
+CREATE OR REPLACE FUNCTION app_rectify_shift_closure(p_closure_id uuid, p_reason text)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_user uuid := NULLIF(current_setting('app.current_user_id', true), '')::uuid;
+  v_org uuid := NULLIF(current_setting('app.current_org_id', true), '')::uuid;
+  v_reason text := btrim(coalesce(p_reason, ''));
+  v_closure record;
+BEGIN
+  IF v_user IS NULL OR v_org IS NULL OR NOT app_is_org_admin() THEN
+    RAISE EXCEPTION 'SHIFT_CLOSURE_RECTIFY_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+  SELECT id, shift_id, outcome, reason_code, rectified_at INTO v_closure
+    FROM shift_attention_closures WHERE id = p_closure_id AND organization_id = v_org FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'SHIFT_CLOSURE_NOT_FOUND' USING ERRCODE = 'P0002'; END IF;
+  IF v_closure.rectified_at IS NOT NULL THEN
+    RAISE EXCEPTION 'SHIFT_CLOSURE_ALREADY_RECTIFIED' USING ERRCODE = '23514';
+  END IF;
+  IF length(v_reason) < 20 OR length(v_reason) > 2000 THEN
+    RAISE EXCEPTION 'SHIFT_CLOSURE_RECTIFY_REASON_REQUIRED' USING ERRCODE = '22023';
+  END IF;
+  UPDATE shift_attention_closures
+     SET rectified_at = now(), rectified_by_user_id = v_user, rectification_reason = v_reason
+   WHERE id = p_closure_id;
+  INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, previous_value, new_value)
+  VALUES (v_user, v_org, v_org, 'SHIFT_CLOSURE_RECTIFIED', 'shift', v_closure.shift_id,
+          jsonb_build_object('closureId', p_closure_id, 'outcome', v_closure.outcome, 'reasonCode', v_closure.reason_code),
+          jsonb_build_object('closureId', p_closure_id, 'rectified', true));
+  RETURN p_closure_id;
 END;
 $$;
 
@@ -219,7 +280,7 @@ BEGIN
   END IF;
   -- 154: the schedule of a shift closed without service is part of that record.
   IF (NEW.scheduled_start IS DISTINCT FROM OLD.scheduled_start OR NEW.scheduled_end IS DISTINCT FROM OLD.scheduled_end)
-     AND EXISTS (SELECT 1 FROM public.shift_attention_closures c WHERE c.shift_id = OLD.id) THEN
+     AND EXISTS (SELECT 1 FROM public.shift_attention_closures c WHERE c.shift_id = OLD.id AND c.rectified_at IS NULL) THEN
     RAISE EXCEPTION 'SHIFT_SCHEDULE_LOCKED' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
@@ -258,7 +319,7 @@ AS $$
 DECLARE v_closure uuid;
 BEGIN
   IF NEW.event_type = 'check_in' THEN
-    SELECT id INTO v_closure FROM shift_attention_closures WHERE shift_id = NEW.shift_id;
+    SELECT id INTO v_closure FROM shift_attention_closures WHERE shift_id = NEW.shift_id AND rectified_at IS NULL;
     IF v_closure IS NOT NULL THEN
       INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, new_value)
       VALUES (NEW.actor_user_id, NEW.organization_id, NEW.organization_id, 'SHIFT_CLOSURE_CONTRADICTED_BY_CHECK_IN', 'shift', NEW.shift_id,
@@ -501,6 +562,7 @@ REVOKE ALL ON FUNCTION app_operational_pending_activation_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_attention_closures_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_shift_has_check_in(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_close_shift_without_service(uuid, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_rectify_shift_closure(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_verification_override_audit() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_check_in_after_closure_audit() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_incident_closure_authorizers_guard() FROM PUBLIC;
@@ -511,6 +573,7 @@ REVOKE ALL ON FUNCTION app_incident_guard() FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_incident_status_audit() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_shift_has_check_in(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION app_close_shift_without_service(uuid, text, text) TO app_runtime;
+GRANT EXECUTE ON FUNCTION app_rectify_shift_closure(uuid, text) TO app_runtime;
 GRANT EXECUTE ON FUNCTION app_can_close_serious_incidents() TO app_runtime;
 GRANT EXECUTE ON FUNCTION app_incident_has_documented_follow_up(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION app_incident_is_serious(text) TO app_runtime;

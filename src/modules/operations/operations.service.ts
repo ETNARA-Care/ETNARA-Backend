@@ -102,7 +102,7 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
                  OR s.scheduled_end >= (SELECT activated_at FROM operational_pending_activation)))
       )
       -- 154: closed without service (who, when, reason are kept in the closure).
-      AND NOT EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id)
+      AND NOT EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL)
   `.execute(trx as never);
 
   const credentials = await sql<any>`

@@ -24,7 +24,7 @@ describe("154 operations center pending resolution", () => {
   });
 
   it("closures: immutable, one per shift, written only by the audited definer function", () => {
-    expect(sqlOnly).toMatch(/CONSTRAINT shift_attention_closures_one_per_shift UNIQUE \(shift_id\)/);
+    expect(sqlOnly).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS shift_attention_closures_one_active\s+ON shift_attention_closures \(shift_id\) WHERE rectified_at IS NULL;/);
     expect(sqlOnly).toMatch(/CREATE TRIGGER shift_attention_closures_guard BEFORE UPDATE OR DELETE ON shift_attention_closures/);
     expect(sqlOnly).toMatch(/GRANT SELECT ON shift_attention_closures TO app_runtime;/);
     expect(sqlOnly).not.toMatch(/GRANT[^;]*(INSERT|UPDATE|DELETE)[^;]*ON shift_attention_closures/);
@@ -35,6 +35,20 @@ describe("154 operations center pending resolution", () => {
     expect(sqlOnly).toMatch(/CREATE POLICY platform_phi_deny ON shift_attention_closures AS RESTRICTIVE/);
     // A closure never creates evidence of service.
     expect(closures).not.toMatch(/closeShiftWithoutService[\s\S]{0,800}INSERT INTO (verification_events|timesheets)/);
+  });
+
+  it("rectification: the original closure is never deleted or edited; only who/when/why is added once, by an admin", () => {
+    expect(sqlOnly).toMatch(/IF TG_OP = 'DELETE' THEN\s+RAISE EXCEPTION 'SHIFT_CLOSURE_IMMUTABLE'/);
+    expect(sqlOnly).toMatch(/IF OLD\.rectified_at IS NOT NULL[\s\S]*NEW\.note IS DISTINCT FROM OLD\.note[\s\S]*NEW\.rectified_at IS NULL THEN\s+RAISE EXCEPTION 'SHIFT_CLOSURE_IMMUTABLE'/);
+    expect(sqlOnly).toMatch(/CREATE OR REPLACE FUNCTION app_rectify_shift_closure\(p_closure_id uuid, p_reason text\)/);
+    expect(sqlOnly).toMatch(/NOT app_is_org_admin\(\) THEN\s+RAISE EXCEPTION 'SHIFT_CLOSURE_RECTIFY_FORBIDDEN'/);
+    expect(sqlOnly).toMatch(/'SHIFT_CLOSURE_RECTIFIED', 'shift'/);
+    expect(sqlOnly).not.toMatch(/GRANT[^;]*UPDATE[^;]*ON shift_attention_closures/);
+    // Every consumer ignores rectified closures.
+    expect(operations).toMatch(/c\.shift_id = s\.id AND c\.rectified_at IS NULL/);
+    expect(drafts).toMatch(/sc\.rectified_at IS NULL\) AS closed_without_service/);
+    expect(closures).toMatch(/rectifyShiftClosure/);
+    expect(closures).not.toMatch(/DELETE FROM shift_attention_closures/);
   });
 
   it("evidence of service: the 107 guard is kept verbatim plus the check-in rule", () => {
@@ -70,7 +84,7 @@ describe("154 operations center pending resolution", () => {
   });
 
   it("operations center: closures leave the list; activation cutoff instead of silent expiry", () => {
-    expect(operations).toMatch(/NOT EXISTS \(SELECT 1 FROM shift_attention_closures c WHERE c\.shift_id = s\.id\)/);
+    expect(operations).toMatch(/NOT EXISTS \(SELECT 1 FROM shift_attention_closures c WHERE c\.shift_id = s\.id AND c\.rectified_at IS NULL\)/);
     expect(operations).toMatch(/s\.scheduled_end >= \(SELECT activated_at FROM operational_pending_activation\)/);
     expect(operations).toMatch(/s\.scheduled_end > now\(\) - interval '7 days'/);
     expect(operations).toMatch(/app_incident_is_serious\(i\.severity\) AS serious/);

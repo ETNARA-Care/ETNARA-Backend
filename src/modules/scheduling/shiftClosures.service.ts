@@ -34,6 +34,7 @@ export const omittedVisitCorrectionSchema = z.object({
   organizationWorkerMembershipId: z.string().uuid(),
   reason: z.string().trim().min(20).max(2000),
 });
+export const rectifyClosureSchema = z.object({ reason: z.string().trim().min(20).max(2000) });
 export const listClosuresSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   before: z.string().datetime().optional(),
@@ -55,6 +56,14 @@ const DB_CODES: Record<string, number> = {
   SHIFT_CLOSURE_ALREADY_CLOSED: 409,
   SHIFT_CLOSURE_REASON_INVALID: 400,
   SHIFT_CLOSURE_NOTE_REQUIRED: 400,
+  SHIFT_CLOSURE_RECTIFY_FORBIDDEN: 403,
+  SHIFT_CLOSURE_ALREADY_RECTIFIED: 409,
+  SHIFT_CLOSURE_RECTIFY_REASON_REQUIRED: 400,
+};
+const dbError = (error: { message?: string }) => {
+  const code = /SHIFT_CLOSURE_[A-Z_]+/.exec(error?.message ?? "")?.[0];
+  if (code && DB_CODES[code]) throw new ShiftClosureError(code, DB_CODES[code]);
+  throw error;
 };
 
 function assertUuid(value: string, label: string) {
@@ -74,23 +83,36 @@ export interface ShiftClosure {
   note: string;
   closedAt: string;
   closedByEmail: string | null;
+  /** Rectification of a closure made by mistake (the original stays as history). */
+  rectifiedAt: string | null;
+  rectifiedByEmail: string | null;
+  rectificationReason: string | null;
 }
 
 const iso = (v: string | Date | null) => (v ? new Date(v).toISOString() : null);
 
-type ClosureRow = { id: string; shift_id: string; outcome: ShiftClosure["outcome"]; reason_code: ShiftClosure["reasonCode"]; note: string; closed_at: string; closed_by_email: string | null };
+type ClosureRow = { id: string; shift_id: string; outcome: ShiftClosure["outcome"]; reason_code: ShiftClosure["reasonCode"]; note: string; closed_at: string; closed_by_email: string | null;
+  rectified_at: string | null; rectified_by_email: string | null; rectification_reason: string | null };
 const toClosure = (r: ClosureRow): ShiftClosure => ({
   id: r.id, shiftId: r.shift_id, outcome: r.outcome, reasonCode: r.reason_code, note: r.note,
   closedAt: iso(r.closed_at)!, closedByEmail: r.closed_by_email,
+  rectifiedAt: iso(r.rectified_at), rectifiedByEmail: r.rectified_by_email, rectificationReason: r.rectification_reason,
 });
+const CLOSURE_COLUMNS = sql`c.id, c.shift_id, c.outcome, c.reason_code, c.note, c.closed_at, u.email AS closed_by_email,
+  c.rectified_at, ru.email AS rectified_by_email, c.rectification_reason`;
 
-async function readClosure(trx: unknown, organizationId: string, shiftId: string): Promise<ShiftClosure | null> {
-  const r = (await sql<ClosureRow>`
-    SELECT c.id, c.shift_id, c.outcome, c.reason_code, c.note, c.closed_at, u.email AS closed_by_email
-    FROM shift_attention_closures c LEFT JOIN users u ON u.id = c.closed_by_user_id
+/** Every closure of the shift, newest first: the active one (if any) and the rectified history. */
+async function readClosures(trx: unknown, organizationId: string, shiftId: string): Promise<ShiftClosure[]> {
+  return (await sql<ClosureRow>`
+    SELECT ${CLOSURE_COLUMNS}
+    FROM shift_attention_closures c
+    LEFT JOIN users u ON u.id = c.closed_by_user_id LEFT JOIN users ru ON ru.id = c.rectified_by_user_id
     WHERE c.shift_id = ${shiftId} AND c.organization_id = ${organizationId}
-  `.execute(trx as never)).rows[0];
-  return r ? toClosure(r) : null;
+    ORDER BY c.closed_at DESC
+  `.execute(trx as never)).rows.map(toClosure);
+}
+async function readClosure(trx: unknown, organizationId: string, shiftId: string): Promise<ShiftClosure | null> {
+  return (await readClosures(trx, organizationId, shiftId)).find((c) => !c.rectifiedAt) ?? null;
 }
 
 /** POST /shifts/:shiftId/close-without-service */
@@ -102,12 +124,29 @@ export async function closeShiftWithoutService(
     await assertManager(trx);
     await sql`SELECT app_close_shift_without_service(${shiftId}::uuid, ${input.reasonCode}, ${input.note})`
       .execute(trx)
-      .catch((error: { message?: string }) => {
-        const code = /SHIFT_CLOSURE_[A-Z_]+/.exec(error?.message ?? "")?.[0];
-        if (code && DB_CODES[code]) throw new ShiftClosureError(code, DB_CODES[code]);
-        throw error;
-      });
+      .catch(dbError);
     return (await readClosure(trx, organizationId, shiftId))!;
+  });
+}
+
+/**
+ * POST /shift-closures/:closureId/rectify — a closure made by mistake (ORGANIZATION_ADMIN only).
+ * Nothing is deleted: the original closure keeps its content and gains who/when/why it was
+ * rectified (audited). The shift becomes pending again in the operations center.
+ */
+export async function rectifyShiftClosure(
+  userId: string, organizationId: string, closureId: string, input: z.infer<typeof rectifyClosureSchema>,
+): Promise<ShiftClosure> {
+  assertUuid(closureId, "closureId");
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await sql`SELECT app_rectify_shift_closure(${closureId}::uuid, ${input.reason})`.execute(trx).catch(dbError);
+    const r = (await sql<ClosureRow>`
+      SELECT ${CLOSURE_COLUMNS}
+      FROM shift_attention_closures c
+      LEFT JOIN users u ON u.id = c.closed_by_user_id LEFT JOIN users ru ON ru.id = c.rectified_by_user_id
+      WHERE c.id = ${closureId} AND c.organization_id = ${organizationId}
+    `.execute(trx)).rows[0];
+    return toClosure(r);
   });
 }
 
@@ -123,6 +162,10 @@ export interface ShiftAttention {
   allowedReasons: ShiftClosure["reasonCode"][];
   acceptedCaregivers: { membershipId: string; name: string; checkedIn: boolean }[];
   closure: ShiftClosure | null;
+  /** Closures made by mistake and rectified (kept as history), newest first. */
+  rectifiedClosures: ShiftClosure[];
+  /** Only an ORGANIZATION_ADMIN rectifies a closure. */
+  canRectify: boolean;
   /** A real check-in arrived after the closure (e.g. an offline check-in made in time). */
   closureContradicted: boolean;
 }
@@ -147,7 +190,9 @@ export async function getShiftAttention(userId: string, organizationId: string, 
       WHERE a.shift_id = ${shiftId} AND a.organization_id = ${organizationId} AND a.response_status = 'accepted'
       ORDER BY w.display_name
     `.execute(trx)).rows;
-    const closure = await readClosure(trx, organizationId, shiftId);
+    const all = await readClosures(trx, organizationId, shiftId);
+    const closure = all.find((c) => !c.rectifiedAt) ?? null;
+    const admin = (await sql<{ ok: boolean }>`SELECT app_is_org_admin() AS ok`.execute(trx)).rows[0]?.ok === true;
     const outcome: ShiftClosure["outcome"] = caregivers.length ? "not_performed" : "not_covered";
     const open = shift.ended && ["unassigned", "confirmed"].includes(shift.status) && !closure;
     return {
@@ -161,6 +206,8 @@ export async function getShiftAttention(userId: string, organizationId: string, 
       allowedReasons: CLOSURE_REASONS.filter((r) => (outcome === "not_covered" ? r !== "caregiver_no_show" : r !== "no_caregiver_available")),
       acceptedCaregivers: caregivers.map((c) => ({ membershipId: c.membership_id, name: c.name || "Cuidador", checkedIn: c.checked_in })),
       closure,
+      rectifiedClosures: all.filter((c) => c.rectifiedAt),
+      canRectify: admin && Boolean(closure),
       closureContradicted: Boolean(closure) && shift.has_check_in,
     };
   });
@@ -180,14 +227,15 @@ export async function listShiftClosures(
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);
     const rows = (await sql<ClosureRow & { scheduled_start: string; scheduled_end: string; recipient_name: string | null; contradicted: boolean }>`
-      SELECT c.id, c.shift_id, c.outcome, c.reason_code, c.note, c.closed_at, u.email AS closed_by_email,
+      SELECT ${CLOSURE_COLUMNS},
         s.scheduled_start, s.scheduled_end,
         COALESCE(NULLIF(trim(cr.preferred_name), ''), NULLIF(trim(concat_ws(' ', cr.first_name, cr.last_name)), '')) AS recipient_name,
-        app_shift_has_check_in(s.id) AS contradicted
+        (c.rectified_at IS NULL AND app_shift_has_check_in(s.id)) AS contradicted
       FROM shift_attention_closures c
       JOIN shifts s ON s.id = c.shift_id AND s.organization_id = c.organization_id
       LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
       LEFT JOIN users u ON u.id = c.closed_by_user_id
+      LEFT JOIN users ru ON ru.id = c.rectified_by_user_id
       WHERE c.organization_id = ${organizationId}
         AND (${input.before ?? null}::timestamptz IS NULL OR c.closed_at < ${input.before ?? null}::timestamptz)
       ORDER BY c.closed_at DESC

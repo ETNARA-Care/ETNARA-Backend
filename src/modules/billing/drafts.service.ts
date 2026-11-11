@@ -160,7 +160,7 @@ async function shiftRows(trx: Trx, organizationId: string, where: { clientId: st
       COALESCE(ft.billing_client_id, pc.billing_client_id) AS client_id,
       ts.caregiver_name, COALESCE(ts.approved_count, 0) AS approved_count, COALESCE(ts.open_count, 0) AS open_count,
       ts.check_in_at, ts.check_out_at, ts.approved_minutes, ts.periods,
-      EXISTS (SELECT 1 FROM shift_attention_closures sc WHERE sc.shift_id = s.id AND sc.organization_id = s.organization_id) AS closed_without_service
+      EXISTS (SELECT 1 FROM shift_attention_closures sc WHERE sc.shift_id = s.id AND sc.organization_id = s.organization_id AND sc.rectified_at IS NULL) AS closed_without_service
     FROM shifts s
     LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
     LEFT JOIN shift_finance_terms ft ON ft.shift_id = s.id
