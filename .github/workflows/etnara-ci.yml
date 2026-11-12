@@ -225,6 +225,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 150
 
+      - name: PostgreSQL 151 rollback (136 functions restored literally; schema identical to 150; every row unchanged; re-apply; idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 151
+
+      - name: PostgreSQL «Escribir a mi agencia» (151) — caregiver opens her own conversation, all admins + authorized supervisors, audited grant/revoke, immediate loss of access, family threads separate, isolation
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCaregiverInitiatedMessages.ts
+
       - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
