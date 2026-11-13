@@ -89,6 +89,20 @@
     "consent_records": [
       "SELECT"
     ],
+    "contract_document_versions": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "contract_documents": [
+      "INSERT",
+      "SELECT"
+    ],
+    "contract_signature_challenges": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "coverage_campaigns": [
       "INSERT",
       "SELECT",
@@ -249,6 +263,10 @@
       "SELECT"
     ],
     "organization_care_event_types": [
+      "SELECT"
+    ],
+    "organization_contract_acceptances": [
+      "INSERT",
       "SELECT"
     ],
     "organization_credential_reviews": [
@@ -494,6 +512,7 @@
     "app_billing_can",
     "app_billing_live_claims",
     "app_can_review_shift_reports",
+    "app_contract_authority_declaration",
     "app_create_activity_photo",
     "app_create_photo_consent_form",
     "app_delete_activity_photo",
