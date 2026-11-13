@@ -11,6 +11,8 @@ import {
   revokeTeamInvitation,
   setStaffRole,
   setStaffRoleSchema,
+  setCaregiverMessageHandler,
+  setCaregiverMessageHandlerSchema,
 } from "./team.service.js";
 
 const router = Router();
@@ -73,6 +75,19 @@ router.post("/organizations/:organizationId/team/roles", requireAuth, async (req
   if (!body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
   try {
     res.status(200).json(await setStaffRole(req.auth!.userId, org.data, body.data));
+  } catch (error) {
+    handleError(error, res);
+  }
+});
+
+// 151: authorize/revoke a supervisor for caregivers' internal messages (administrators only).
+router.post("/organizations/:organizationId/team/message-handlers", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuid.safeParse(req.params.organizationId);
+  if (!org.success) return void res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+  const body = setCaregiverMessageHandlerSchema.safeParse(req.body);
+  if (!body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  try {
+    res.status(200).json(await setCaregiverMessageHandler(req.auth!.userId, org.data, body.data));
   } catch (error) {
     handleError(error, res);
   }

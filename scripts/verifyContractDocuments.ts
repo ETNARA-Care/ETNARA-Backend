@@ -13,13 +13,11 @@
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
-import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import pg from "pg";
+import { pdfToText } from "./lib/pdfText.js";
 
 const adminUrl = process.env.MIGRATIONS_DATABASE_URL;
 if (!adminUrl || process.env.ETNARA_DISPOSABLE_DB !== "true") throw new Error("Requires MIGRATIONS_DATABASE_URL and ETNARA_DISPOSABLE_DB=true");
@@ -69,8 +67,8 @@ async function main() {
       return await fn();
     } finally { await rt.query("ROLLBACK"); }
   };
-  const pdfDir = mkdtempSync(join(tmpdir(), "contracts-pdf-"));
-  const pdfText = (buf: Buffer) => { const f = join(pdfDir, `${randomUUID()}.pdf`); writeFileSync(f, buf); return execFileSync("pdftotext", ["-layout", f, "-"]).toString("utf8"); };
+  // Texto del PDF sin binarios del sistema (mismo lector que F3, scripts/lib/pdfText.ts; falla cerrado).
+  const pdfText = (buf: Buffer) => pdfToText(buf);
 
   const { hashPassword } = await import("../src/security/password.js");
   const { createApp } = await import("../src/app.js");
@@ -212,7 +210,7 @@ async function main() {
   check("9. La administración ve la versión vigente «pending», con texto completo, versión, huella y declaración de autoridad", listA.body.contracts?.length === 1 && listA.body.contracts[0].acceptance === "pending" && listA.body.contracts[0].isNewVersion === false && getA.body.version?.body === body1b && getA.body.version?.version_label === "1.0" && getA.body.version?.authorityDeclaration === DECL, [listA.body.contracts?.[0]?.acceptance, getA.status]);
   const dPdf = await call("GET", `${O(orgA)}/versions/${v1Id}/document.pdf`, A.admin.token);
   const dTxt = await call("GET", `${O(orgA)}/versions/${v1Id}/document.txt`, A.admin.token);
-  const dPdfText = dPdf.status === 200 ? pdfText(dPdf.raw) : "";
+  const dPdfText = dPdf.status === 200 ? await pdfText(dPdf.raw) : "";
   check("9b. Descarga previa a la aceptación: PDF (título, versión, huella, aviso de prueba) y texto exacto cuya SHA-256 = la huella",
     dPdf.status === 200 && dPdf.raw.subarray(0, 4).toString() === "%PDF" && dPdf.headers.get("x-content-sha256") === sha256(body1b) && dPdfText.includes("DOCUMENTO FICTICIO DE PRUEBA") && dPdfText.includes(sha256(body1b)) && dPdfText.includes("Versión 1.0")
     && dTxt.status === 200 && sha256(dTxt.raw) === sha256(body1b) && /attachment/.test(dTxt.headers.get("content-disposition") ?? ""), [dPdf.status, dTxt.status]);
@@ -274,7 +272,7 @@ async function main() {
 
   // Constancia
   const cert = await call("GET", `${O(orgA)}/acceptances/${ev.id}/certificate.pdf`, A.admin.token);
-  const certText = cert.status === 200 ? pdfText(cert.raw) : "";
+  const certText = cert.status === 200 ? await pdfText(cert.raw) : "";
   if (process.env.CONTRACTS_DEBUG_PDF) console.log(certText);
   check("14. Constancia PDF: organización, documento, versión, huella, representante y cargo, cuenta que firmó, verificación por código, fecha y declaraciones",
     cert.status === 200 && certText.includes("Constancia de aceptación electrónica") && certText.includes(`Agencia Ficticia A ${tag}`) && certText.includes(h1) && certText.includes("Ana Ficticia Prueba, Presidenta (ficticia)")
@@ -453,7 +451,7 @@ async function main() {
   check("26b. Con evidencia oficial, la reversión ordinaria se NIEGA y no borra nada", refused.includes("CONTRACT_ROLLBACK_REFUSED_OFFICIAL_EVIDENCE") && JSON.stringify(await counts()) === JSON.stringify(before26b) && (await q(`SELECT count(*)::int n FROM schema_migrations WHERE filename='152_contract_documents.sql'`)).rows[0].n === 1, refused);
 
   // ---------------------------------------------------------------- resultado
-  server.close(); await pool.end(); await rt.end(); await db.end(); rmSync(pdfDir, { recursive: true, force: true });
+  server.close(); await pool.end(); await rt.end(); await db.end();
   const failed = results.filter((r) => !r.pass);
   for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"} | ${r.check}${r.pass ? "" : ` | ${r.detail}`}`);
   console.log(`\n${results.length - failed.length}/${results.length} PASS`);
