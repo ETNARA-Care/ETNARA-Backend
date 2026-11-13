@@ -14,6 +14,7 @@ import {
 } from "./messaging.service.js";
 import {
   openCaregiverConversation,
+  openMyAgencyConversation,
   listCaregiverConversations,
   CaregiverConversationError,
 } from "./caregiverConversations.service.js";
@@ -179,6 +180,25 @@ router.post(
     }
     try {
       const result = await openCaregiverConversation(req.auth!.userId, orgIdParsed.data, membershipParsed.data);
+      res.status(result.created ? 201 : 200).json(result);
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+// 151 — «Escribir a mi agencia»: la cuidadora abre su propia conversación directa (la misma si ya existe).
+router.post(
+  "/organizations/:organizationId/my-agency-conversation",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const result = await openMyAgencyConversation(req.auth!.userId, orgIdParsed.data);
       res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });

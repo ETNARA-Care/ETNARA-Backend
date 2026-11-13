@@ -80,6 +80,9 @@
       "SELECT",
       "UPDATE"
     ],
+    "caregiver_message_handlers": [
+      "SELECT"
+    ],
     "closed_campaigns": [
       "SELECT"
     ],
@@ -545,6 +548,7 @@
     "app_notify_shift_location_changed",
     "app_notify_shifts_not_en_route",
     "app_open_caregiver_thread",
+    "app_open_my_agency_thread",
     "app_org_admin_gap_notify",
     "app_org_billing_enabled",
     "app_org_feature_enabled",
@@ -603,6 +607,7 @@
     "app_revoke_photo_consent",
     "app_self_has_active_family_access",
     "app_self_has_active_worker_access",
+    "app_set_caregiver_message_handler",
     "app_set_family_photo_receipt",
     "app_shift_has_open_check_in",
     "app_shift_journey_state",

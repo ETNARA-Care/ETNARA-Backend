@@ -225,6 +225,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 150
 
+      - name: PostgreSQL 151 rollback (136 functions restored literally; schema identical to 150; every row unchanged; re-apply; idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 151
+
+      - name: PostgreSQL «Escribir a mi agencia» (151) — caregiver opens her own conversation, all admins + authorized supervisors, audited grant/revoke, immediate loss of access, family threads separate, isolation
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCaregiverInitiatedMessages.ts
+
       - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -272,9 +284,6 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyBillingF22.ts
-
-      - name: Install pdftotext (reads the Informe de Turno PDF in the F3 check)
-        run: command -v pdftotext || (sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils)
 
       - name: PostgreSQL Informe de Turno F3 (family reads approved reports, authorized sections, PDF, revocation, isolation)
         env:
@@ -437,6 +446,10 @@ jobs:
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts
           npx tsx scripts/verifyStaffRolesAndExistingAccounts.ts
+          # Etapa 0 (9-nov): Central never receives the agency administrator's activation link; list, resend with
+          # token rotation, revoke, audit without secrets, limits. In-memory email provider (nothing is sent). Both modes.
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyCentralAdminInvitations.ts
+          npx tsx scripts/verifyCentralAdminInvitations.ts
           # Supervisor vs admin on personnel, credentials, compliance and team (B4), and deactivating /
           # reactivating a caregiver (paso 1B). Both modes since 137 closed RLS gap G4 (managers read an
           # inactive caregiver of their agency).
