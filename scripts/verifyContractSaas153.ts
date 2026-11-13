@@ -10,14 +10,13 @@
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
-import { execFileSync } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { applyPendingMigrations } from "./lib/runMigrations.js";
+import { pdfToText } from "./lib/pdfText.js";
 
 const serverUrl = process.env.MIGRATIONS_DATABASE_URL;
 let adminUrl = serverUrl;
@@ -64,8 +63,8 @@ async function main() {
   delete process.env.CONTRACTS_OFFICIAL_PUBLISHING;
   delete process.env.CONTRACTS_ENFORCEMENT;
   delete process.env.CONTRACTS_TEST_SIGNING;
-  const pdfDir = mkdtempSync(join(tmpdir(), "contracts153-"));
-  const pdfText = (buf: Buffer) => { const f = join(pdfDir, `${randomUUID()}.pdf`); writeFileSync(f, buf); return execFileSync("pdftotext", ["-layout", f, "-"]).toString("utf8"); };
+  // Texto del PDF sin binarios del sistema (mismo lector que F3, scripts/lib/pdfText.ts; falla cerrado).
+  const pdfText = (buf: Buffer) => pdfToText(buf);
 
   const { hashPassword } = await import("../src/security/password.js");
   const { createApp } = await import("../src/app.js");
@@ -330,7 +329,7 @@ async function main() {
   // ================================================================ Caso 14: historial y constancias
   const hist = await call("GET", `${O(orgN)}/acceptances`, N.admin.token);
   const cert = await call("GET", `${O(orgN)}/acceptances/${ev.id}/certificate.pdf`, N.admin.token);
-  const ct = cert.status === 200 ? pdfText(cert.raw) : "";
+  const ct = cert.status === 200 ? await pdfText(cert.raw) : "";
   check("14. Historial con las 3 aceptaciones (casilla, método, descarga previa, designación) y constancia PDF con casilla, declaración, designación y descarga previa",
     hist.body.acceptances?.length === 3 && hist.body.acceptances.every((a: Json) => a.consent_method === "CHECKBOXES_AND_EMAIL_CODE" && a.designated_signatory === true)
     && cert.status === 200 && ct.includes("He leído el contrato completo, tuve oportunidad de descargarlo") && ct.includes("autoridad legal suficiente") && ct.includes("Representante designada por la organización ante ETNARA: sí") && ct.includes("Documento descargado antes de aceptar"), [hist.body.acceptances?.length, cert.status]);
@@ -420,7 +419,7 @@ async function main() {
   await q("ROLLBACK").catch(() => undefined);
   check("RB2. Con evidencia oficial (versión oficial aprobada y publicada), la reversión de 153 se NIEGA y no borra nada", refused.includes("CONTRACT_ROLLBACK_REFUSED_OFFICIAL_EVIDENCE") && JSON.stringify(await counts()) === JSON.stringify(b1), refused);
 
-  server.close(); await pool.end(); await db.end(); rmSync(pdfDir, { recursive: true, force: true });
+  server.close(); await pool.end(); await db.end();
   await srv.query(`DROP DATABASE ${own} WITH (FORCE)`); await srv.end();
   const failed = results.filter((r) => !r.pass);
   for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"} | ${r.check}${r.pass ? "" : ` | ${r.detail}`}`);
