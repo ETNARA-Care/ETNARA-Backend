@@ -10,6 +10,11 @@ import {
   platformContractOverview, platformCreateDocument, platformCreateVersion, platformListAcceptances, platformListContracts,
   platformPublishVersion, platformRetireVersion, platformUpdateDraft,
 } from "./contracts.service.js";
+import {
+  orgContractStatus, orgListSignatories, platformCreateSubscriptionOrder, platformDesignateSignatory, platformGetVersion,
+  platformListSignatories, platformRecordLegalApproval, platformRevokeSignatory, platformSetEnforcement,
+  FOUNDING_PROGRAM, platformRecordCommercialApproval, platformUpdateOrderTerms,
+} from "./contractsSaas.service.js";
 
 const router = Router();
 const uuid = z.string().uuid();
@@ -39,8 +44,12 @@ const docBody = z.object({
   title: z.string().trim().min(3).max(200),
   kind: z.enum(["SERVICE_AGREEMENT", "TERMS_OF_USE", "PRIVACY_NOTICE", "DATA_PROCESSING", "BUSINESS_ASSOCIATE", "OTHER"]),
   isTest: z.boolean(),
+  requiredForOperation: z.boolean().optional(),
 }).strict();
-const versionBody = z.object({ versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), body: z.string().min(50).max(200000), requiresNewAcceptance: z.boolean().optional() }).strict();
+const versionBody = z.object({
+  versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), body: z.string().min(50).max(200000), requiresNewAcceptance: z.boolean().optional(),
+  sourceFileName: z.string().min(1).max(200).optional(), sourceFileSha256: sha.optional(),
+}).strict();
 const draftBody = z.object({ versionLabel: versionBody.shape.versionLabel.optional(), body: versionBody.shape.body.optional(), requiresNewAcceptance: z.boolean().optional() }).strict()
   .refine((v) => v.versionLabel !== undefined || v.body !== undefined || v.requiresNewAcceptance !== undefined);
 
@@ -67,6 +76,72 @@ router.post("/platform/contracts/versions/:versionId/retire", requireAuth, async
   const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
   try { res.json({ version: await platformRetireVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
 });
+// ---- 153: vista previa, aprobación jurídica, representantes, Orden de Suscripción y reglas de acceso
+router.get("/platform/contracts/versions/:versionId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  try { res.json({ version: await platformGetVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
+});
+const legalBody = z.object({ reference: z.string().trim().min(10).max(500), contentSha256: sha }).strict();
+router.post("/platform/contracts/versions/:versionId/legal-approval", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = legalBody.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformRecordLegalApproval(req.auth!.userId, v.data, b.data.reference, b.data.contentSha256) }); } catch (x) { fail(x, res); }
+});
+const signatoryBody = z.object({ userId: uuid, fullName: z.string().trim().min(5).max(150).regex(/\S+\s+\S+/), title: z.string().trim().min(2).max(100), basis: z.string().trim().min(10).max(500) }).strict();
+router.get("/platform/contracts/organizations/:organizationId/signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ signatories: await platformListSignatories(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/organizations/:organizationId/signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), b = signatoryBody.safeParse(req.body); if (!o.success || !b.success) return void bad(res);
+  try { res.status(201).json({ signatory: await platformDesignateSignatory(req.auth!.userId, o.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/organizations/:organizationId/signatories/:signatoryId/revoke", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), s = uuid.safeParse(req.params.signatoryId), b = z.object({ reason: z.string().trim().min(5).max(500) }).strict().safeParse(req.body);
+  if (!o.success || !s.success || !b.success) return void bad(res);
+  try { res.json({ signatory: await platformRevokeSignatory(req.auth!.userId, o.data, s.data, b.data.reason) }); } catch (x) { fail(x, res); }
+});
+const money = z.number().nonnegative().max(100000).nullable().optional();
+const line = z.string().trim().min(2).max(300);
+/** Condiciones individuales de la Orden (todas propuestas). No hay precio predeterminado. */
+const orderTerms = z.object({
+  planName: z.string().trim().min(2).max(120), features: z.array(line).max(40), limits: z.string().trim().max(500).nullable().optional(),
+  proposedMonthlyPriceUsd: money,
+  promotions: z.array(z.object({ description: line, durationDays: z.number().int().min(1).max(366).nullable().optional() }).strict()).max(10).optional(),
+  addOns: z.array(z.object({ name: line, proposedMonthlyPriceUsd: money }).strict()).max(20).optional(),
+  conditions: z.array(z.string().trim().min(2).max(1000)).max(20).optional(),
+  foundingProgram: z.boolean().optional(),
+}).strict();
+const orderBody = z.object({ isTest: z.boolean(), versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), requiredForOperation: z.boolean().optional(), terms: orderTerms }).strict();
+router.get("/platform/contracts/founding-program", requireAuth, async (req: AuthenticatedRequest, res) => {
+  // Solo Central (el contexto de plataforma lo verifica la consulta de la lista de contratos).
+  try { await platformListContracts(req.auth!.userId); res.json({ program: FOUNDING_PROGRAM }); } catch (x) { fail(x, res); }
+});
+router.put("/platform/contracts/versions/:versionId/order-terms", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = orderTerms.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformUpdateOrderTerms(req.auth!.userId, v.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/versions/:versionId/commercial-approval", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId), b = legalBody.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformRecordCommercialApproval(req.auth!.userId, v.data, b.data.reference, b.data.contentSha256) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/organizations/:organizationId/subscription-orders", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), b = orderBody.safeParse(req.body); if (!o.success || !b.success) return void bad(res);
+  try { res.status(201).json({ order: await platformCreateSubscriptionOrder(req.auth!.userId, o.data, b.data) }); } catch (x) { fail(x, res); }
+});
+const enforcementBody = z.object({ mode: z.enum(["off", "notice", "restrict_new_operations", "contract_only"]), enforceFrom: z.string().datetime().nullable(), reason: z.string().trim().min(5).max(500) }).strict();
+router.put("/platform/contracts/organizations/:organizationId/enforcement", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), b = enforcementBody.safeParse(req.body); if (!o.success || !b.success) return void bad(res);
+  try { res.json({ enforcement: await platformSetEnforcement(req.auth!.userId, o.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/contracts/status", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ status: await orgContractStatus(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/contracts/signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ signatories: await orgListSignatories(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+
 router.get("/platform/contracts/overview", requireAuth, async (req: AuthenticatedRequest, res) => {
   try { res.json(await platformContractOverview(req.auth!.userId)); } catch (x) { fail(x, res); }
 });

@@ -89,6 +89,9 @@
     "consent_records": [
       "SELECT"
     ],
+    "contract_document_downloads": [
+      "INSERT"
+    ],
     "contract_document_versions": [
       "INSERT",
       "SELECT",
@@ -268,6 +271,14 @@
     "organization_contract_acceptances": [
       "INSERT",
       "SELECT"
+    ],
+    "organization_contract_enforcement": [
+      "INSERT"
+    ],
+    "organization_contract_signatories": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
     ],
     "organization_credential_reviews": [
       "INSERT",
@@ -512,7 +523,12 @@
     "app_billing_can",
     "app_billing_live_claims",
     "app_can_review_shift_reports",
+    "app_contract_acceptance_checkbox_text",
+    "app_contract_acceptance_facts",
     "app_contract_authority_declaration",
+    "app_contract_enforcement_state",
+    "app_contract_org_has_operational_data",
+    "app_contract_signatory_rule",
     "app_create_activity_photo",
     "app_create_photo_consent_form",
     "app_delete_activity_photo",

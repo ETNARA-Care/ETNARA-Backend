@@ -303,6 +303,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 152
 
+      - name: PostgreSQL 153 SaaS contract v1.0 (14 cases — official draft not publishable without legal approval tied to the hash, designated signatories, per-agency Subscription Order, founding cap, consent evidence, access rules off by default and never on caregivers or running shifts, suspension, rollback refusal)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContractSaas153.ts
+
+      - name: PostgreSQL 153 rollback (schema identical to 152, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 153
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
