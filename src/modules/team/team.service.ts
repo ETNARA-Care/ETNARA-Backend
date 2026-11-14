@@ -19,7 +19,7 @@ export class TeamForbiddenError extends Error {
 }
 
 export class TeamInvitationError extends Error {
-  constructor(public readonly code: "ALREADY_A_MEMBER" | "INVITATION_NOT_FOUND" | "MEMBER_NOT_FOUND" | "NO_ACCOUNT_YET" | "CANNOT_REMOVE_OWN_ADMIN" | "LAST_ADMIN") {
+  constructor(public readonly code: "ALREADY_A_MEMBER" | "INVITATION_NOT_FOUND" | "MEMBER_NOT_FOUND" | "NO_ACCOUNT_YET" | "CANNOT_REMOVE_OWN_ADMIN" | "LAST_ADMIN" | "NOT_A_SUPERVISOR") {
     super(code);
     this.name = "TeamInvitationError";
   }
@@ -44,6 +44,8 @@ export interface TeamMember {
   isYou: boolean;
   /** Set when this person also works shifts as a caregiver here. */
   workerMembershipId: string | null;
+  /** 151: answers caregivers' internal messages. Always for administrators; supervisors only when authorized. */
+  caregiverMessages: boolean;
 }
 
 export interface TeamInvitation {
@@ -57,9 +59,11 @@ export interface TeamInvitation {
 export async function listTeam(userId: string, organizationId: string): Promise<{ members: TeamMember[]; invitations: TeamInvitation[] }> {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertOrgAdmin(trx);
-    const members = await sql<{ membership_id: string; email: string; user_id: string; roles: string[]; worker_membership_id: string | null }>`
+    const members = await sql<{ membership_id: string; email: string; user_id: string; roles: string[]; worker_membership_id: string | null; message_handler: boolean }>`
       SELECT om.id AS membership_id, u.email, u.id AS user_id,
              array_agg(DISTINCT r.code ORDER BY r.code) AS roles,
+             EXISTS (SELECT 1 FROM caregiver_message_handlers h WHERE h.organization_id = om.organization_id
+                      AND h.organization_membership_id = om.id AND h.revoked_at IS NULL) AS message_handler,
              (SELECT owm.id FROM workers w JOIN organization_worker_memberships owm ON owm.worker_id = w.id
                WHERE w.user_id = u.id AND owm.organization_id = om.organization_id AND owm.status = 'active' LIMIT 1) AS worker_membership_id
       FROM organization_memberships om
@@ -88,6 +92,7 @@ export async function listTeam(userId: string, organizationId: string): Promise<
         roles: row.roles.filter((code): code is "ORGANIZATION_ADMIN" | "SUPERVISOR" => code === "ORGANIZATION_ADMIN" || code === "SUPERVISOR"),
         isYou: row.user_id === userId,
         workerMembershipId: row.worker_membership_id,
+        caregiverMessages: row.roles.includes("ORGANIZATION_ADMIN") || (row.roles.includes("SUPERVISOR") && row.message_handler),
       })),
       invitations: invitations.rows.map((row) => ({
         id: row.id,
@@ -222,5 +227,25 @@ export async function setStaffRole(userId: string, organizationId: string, input
       `.execute(trx);
     }
     return { membershipId: row.membership_id, role: input.role, enabled: input.enabled };
+  });
+}
+
+/**
+ * 151: an administrator authorizes (or revokes) a supervisor to answer caregivers' internal messages.
+ * Administrators always answer them. Audited in the database (CAREGIVER_MESSAGE_HANDLER_GRANTED/REVOKED).
+ */
+export const setCaregiverMessageHandlerSchema = z.object({ membershipId: z.string().uuid(), authorized: z.boolean() }).strict();
+export async function setCaregiverMessageHandler(userId: string, organizationId: string, input: z.infer<typeof setCaregiverMessageHandlerSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    await assertOrgAdmin(trx);
+    try {
+      const r = await sql<{ changed: boolean }>`SELECT changed FROM app_set_caregiver_message_handler(${input.membershipId}::uuid, ${input.authorized})`.execute(trx);
+      return { membershipId: input.membershipId, authorized: input.authorized, changed: r.rows[0]?.changed === true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("MESSAGE_HANDLER_NOT_SUPERVISOR")) throw new TeamInvitationError("NOT_A_SUPERVISOR");
+      if (message.includes("MESSAGE_HANDLER_FORBIDDEN")) throw new TeamForbiddenError();
+      throw error;
+    }
   });
 }

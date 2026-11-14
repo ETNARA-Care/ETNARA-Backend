@@ -225,11 +225,17 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 150
 
-      - name: PostgreSQL 154 rollback (operations center pending resolution; schema identical to before, every row unchanged, re-apply, idempotent)
+      - name: PostgreSQL 151 rollback (136 functions restored literally; schema identical to 150; every row unchanged; re-apply; idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
-        run: npx tsx scripts/verifyMigrationRollback.ts 154
+        run: npx tsx scripts/verifyMigrationRollback.ts 151
+
+      - name: PostgreSQL «Escribir a mi agencia» (151) — caregiver opens her own conversation, all admins + authorized supervisors, audited grant/revoke, immediate loss of access, family threads separate, isolation
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyCaregiverInitiatedMessages.ts
 
       - name: PostgreSQL check-out flow (regular + SmartMatch, visits open > 48 h, safe 500s)
         env:
@@ -279,14 +285,41 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyBillingF22.ts
 
-      - name: Install pdftotext (reads the Informe de Turno PDF in the F3 check)
-        run: command -v pdftotext || (sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils)
-
       - name: PostgreSQL Informe de Turno F3 (family reads approved reports, authorized sections, PDF, revocation, isolation)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyShiftReportsF3.ts
+
+      - name: PostgreSQL 152 contract module (Etapas 1–2 — test documents, hash by the database, immutable versions and evidence, e-mail code before signing, downloads and certificate, Central overview, admin-only acceptance, isolation, concurrency)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContractDocuments.ts
+
+      - name: PostgreSQL 152 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 152
+
+      - name: PostgreSQL 153 SaaS contract v1.0 (14 cases — official draft not publishable without legal approval tied to the hash, designated signatories, per-agency Subscription Order, founding cap, consent evidence, access rules off by default and never on caregivers or running shifts, suspension, rollback refusal)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContractSaas153.ts
+
+      - name: PostgreSQL 153 rollback (schema identical to 152, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 153
+
+      - name: PostgreSQL 154 rollback (operations center pending resolution; schema identical to before, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 154
 
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:

@@ -80,11 +80,31 @@
       "SELECT",
       "UPDATE"
     ],
+    "caregiver_message_handlers": [
+      "SELECT"
+    ],
     "closed_campaigns": [
       "SELECT"
     ],
     "consent_records": [
       "SELECT"
+    ],
+    "contract_document_downloads": [
+      "INSERT"
+    ],
+    "contract_document_versions": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "contract_documents": [
+      "INSERT",
+      "SELECT"
+    ],
+    "contract_signature_challenges": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
     ],
     "coverage_campaigns": [
       "INSERT",
@@ -255,6 +275,18 @@
     ],
     "organization_care_event_types": [
       "SELECT"
+    ],
+    "organization_contract_acceptances": [
+      "INSERT",
+      "SELECT"
+    ],
+    "organization_contract_enforcement": [
+      "INSERT"
+    ],
+    "organization_contract_signatories": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
     ],
     "organization_credential_reviews": [
       "INSERT",
@@ -504,6 +536,12 @@
     "app_can_close_serious_incidents",
     "app_can_review_shift_reports",
     "app_close_shift_without_service",
+    "app_contract_acceptance_checkbox_text",
+    "app_contract_acceptance_facts",
+    "app_contract_authority_declaration",
+    "app_contract_enforcement_state",
+    "app_contract_org_has_operational_data",
+    "app_contract_signatory_rule",
     "app_create_activity_photo",
     "app_create_photo_consent_form",
     "app_delete_activity_photo",
@@ -541,6 +579,7 @@
     "app_notify_shift_location_changed",
     "app_notify_shifts_not_en_route",
     "app_open_caregiver_thread",
+    "app_open_my_agency_thread",
     "app_org_admin_gap_notify",
     "app_org_billing_enabled",
     "app_org_feature_enabled",
@@ -600,6 +639,7 @@
     "app_revoke_photo_consent",
     "app_self_has_active_family_access",
     "app_self_has_active_worker_access",
+    "app_set_caregiver_message_handler",
     "app_set_family_photo_receipt",
     "app_shift_has_check_in",
     "app_shift_has_open_check_in",
