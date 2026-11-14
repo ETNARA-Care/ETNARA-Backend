@@ -21,6 +21,10 @@ import {
   RoomNotInOrgError,
   WorkerNotLinkedError,
   FamilyMustUseFamilyEndpointError,
+  correctShiftSchedule,
+  listShiftScheduleCorrections,
+  scheduleCorrectionSchema,
+  ShiftCorrectionError,
 } from "./scheduling.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { LocationNotFoundError } from "../careRecipients/serviceLocations.service.js";
@@ -73,6 +77,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof ShiftUpdateForbiddenError) {
     res.status(403).json({ error: "SHIFT_UPDATE_FORBIDDEN" });
+    return true;
+  }
+  if (err instanceof ShiftCorrectionError) {
+    res.status(err.status).json({ error: err.code });
     return true;
   }
   if (err instanceof ShiftStateLockedError) {
@@ -228,6 +236,47 @@ router.patch(
     try {
       const shift = await updateShift(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
       res.status(200).json({ shift });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+// 135: exceptional schedule correction after the start (administrators, with a reason).
+router.post(
+  "/organizations/:organizationId/shifts/:shiftId/schedule-correction",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    const bodyParsed = scheduleCorrectionSchema.safeParse(req.body);
+    if (!bodyParsed.success) {
+      res.status(400).json({ error: "INVALID_PAYLOAD" });
+      return;
+    }
+    try {
+      const result = await correctShiftSchedule(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), bodyParsed.data);
+      res.status(201).json(result);
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+router.get(
+  "/organizations/:organizationId/shifts/:shiftId/schedule-corrections",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      res.status(200).json({ corrections: await listShiftScheduleCorrections(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId)) });
     } catch (err) {
       if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
     }
