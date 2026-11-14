@@ -1,0 +1,101 @@
+# Monitor externo de disponibilidad de ETNARA Care (producción).
+# Cada 10 minutos comprueba el backend con su base de datos (/health/db) y el portal.
+# Si algo falla dos veces seguidas abre UN aviso (issue) que menciona a Rafa: GitHub lo envía por correo.
+# Cuando se recupera, comenta y cierra el aviso. Sin secretos, sin servicios externos, sin costo.
+# Prueba controlada: en el PR (o con «Run workflow» y simular_fallo) abre y cierra un aviso marcado [PRUEBA],
+# sin provocar ninguna caída real.
+name: Monitor de disponibilidad
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      simular_fallo:
+        description: "Enviar un aviso de PRUEBA (no hay caída real)"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/uptime-monitor.yml"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime-monitor
+  cancel-in-progress: false
+
+env:
+  BACKEND_URL: https://etnara-care-backend-staging-production-2a3a.up.railway.app/health/db
+  PORTAL_URL: https://app.etnaracare.com/
+  NOTIFY: "@rafaelvegafigueroa-eng"
+  ALERT_TITLE: "[ALERTA] ETNARA Care producción no responde"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Comprobar backend + base de datos y portal
+        id: probe
+        run: |
+          set -u
+          fails=""
+          probe() { # $1 nombre, $2 url, $3 texto esperado (opcional)
+            for attempt in 1 2; do
+              body=$(curl -sS --max-time 20 -w '\n%{http_code}' "$2" 2>/dev/null) || body=$'\n000'
+              code=$(printf '%s' "$body" | tail -n1)
+              text=$(printf '%s' "$body" | sed '$d')
+              if [ "$code" = "200" ] && { [ -z "${3:-}" ] || printf '%s' "$text" | grep -q "$3"; }; then
+                echo "$1: OK ($code)"; return 0
+              fi
+              echo "$1: intento $attempt falló (HTTP $code)"; [ $attempt = 1 ] && sleep 30
+            done
+            fails="$fails- $1: HTTP $code"$'\n'; return 1
+          }
+          probe "Backend y base de datos (/health/db)" "$BACKEND_URL" '"status":"ok"' || true
+          probe "Portal (app.etnaracare.com)" "$PORTAL_URL" || true
+          { echo "fails<<EOF"; printf '%s' "$fails"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Aviso de PRUEBA (sin caída real)
+        if: github.event_name == 'pull_request' || inputs.simular_fallo == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REAL: ${{ steps.probe.outputs.fails }}
+        run: |
+          now=$(date -u +'%Y-%m-%d %H:%M UTC')
+          estado=$([ -z "$REAL" ] && echo "Ambos servicios respondieron bien en esta comprobación." || printf 'Fallos reales detectados:\n%s' "$REAL")
+          url=$(gh issue create --title "[PRUEBA] Aviso de monitoreo de ETNARA Care — no hay caída real" --body "$NOTIFY esta es una **prueba controlada** del monitor de disponibilidad ($now). No hay ninguna caída.
+
+          $estado
+
+          Si recibiste este aviso por correo, las alertas funcionan. Se cerrará automáticamente.")
+          echo "Aviso de prueba: $url"
+          gh issue close "$url" --comment "Prueba completada. Cerrado automáticamente."
+
+      - name: Abrir, actualizar o cerrar el aviso real
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILS: ${{ steps.probe.outputs.fails }}
+        run: |
+          now=$(date -u +'%Y-%m-%d %H:%M UTC')
+          open=$(gh issue list --state open --search "in:title \"$ALERT_TITLE\"" --json number --jq '.[0].number // empty')
+          if [ -n "$FAILS" ]; then
+            if [ -z "$open" ]; then
+              gh issue create --title "$ALERT_TITLE" --body "$NOTIFY ETNARA Care no responde ($now), tras dos intentos con 30 s de diferencia:
+
+          $FAILS
+          Revisar Railway (despliegue, registros) y GitHub Pages. Procedimiento: manual operativo, sección «Soporte e incidentes». Este aviso se cierra solo cuando todo vuelva a responder."
+            else
+              gh issue comment "$open" --body "Sigue fallando ($now):
+          $FAILS"
+            fi
+            exit 1
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "$NOTIFY recuperado: el backend, la base de datos y el portal responden de nuevo ($now)."
+          fi
