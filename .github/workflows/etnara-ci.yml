@@ -315,6 +315,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 153
 
+      - name: PostgreSQL 154 rollback (operations center pending resolution; schema identical to before, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 154
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -454,6 +460,10 @@ jobs:
           # Overdue shifts (B5): no start after the scheduled end; agency review alert (both modes).
           DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyOverdueShifts.ts
           npx tsx scripts/verifyOverdueShifts.ts
+          # 154: legitimate resolution of «Requiere atención» (closures without service, evidence of
+          # service, audited omitted check-in correction, incidents, roles, isolation; both modes).
+          DATABASE_URL="$MIGRATIONS_DATABASE_URL" npx tsx scripts/verifyOperationalPendingResolution.ts
+          npx tsx scripts/verifyOperationalPendingResolution.ts
           npx tsx scripts/verifyCareEventIdempotency.ts
           npx tsx scripts/verifyRecipientLocationAccess.ts
           npx tsx scripts/verifyTeamAndAdminAuthority.ts

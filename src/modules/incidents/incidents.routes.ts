@@ -26,6 +26,13 @@ import {
   InvalidFileForAttachmentError,
   AssigneeNotInOrgError,
   FamilyMustUseFamilyEndpointError,
+  IncidentRuleError,
+  IncidentCloserError,
+  getIncidentResolutionRules,
+  listIncidentClosers,
+  grantIncidentCloser,
+  revokeIncidentCloser,
+  incidentCloserGrantSchema,
 } from "./incidents.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
@@ -64,6 +71,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof NotOrgManagerError) {
     res.status(403).json({ error: "REQUIRES_ORG_MANAGER" });
+    return true;
+  }
+  if (err instanceof IncidentRuleError || err instanceof IncidentCloserError) {
+    res.status(err.status).json({ error: err.code });
     return true;
   }
   if (err instanceof InvalidStatusTransitionError) {
@@ -208,6 +219,45 @@ router.post(
     }
   }
 );
+
+router.get(
+  "/organizations/:organizationId/incidents/:incidentId/resolution-rules",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const rules = await getIncidentResolutionRules(req.auth!.userId, orgIdParsed.data, String(req.params.incidentId));
+      res.status(200).json({ rules });
+    } catch (err) {
+      if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+// 154: supervisors an admin expressly authorizes to close serious incidents.
+router.get("/organizations/:organizationId/incident-closers", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuidParam.safeParse(req.params.organizationId);
+  if (!org.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try { res.status(200).json(await listIncidentClosers(req.auth!.userId, org.data)); }
+  catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
+router.post("/organizations/:organizationId/incident-closers", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuidParam.safeParse(req.params.organizationId);
+  const body = incidentCloserGrantSchema.safeParse(req.body ?? {});
+  if (!org.success || !body.success) { res.status(400).json({ error: "INVALID_PAYLOAD" }); return; }
+  try { res.status(201).json(await grantIncidentCloser(req.auth!.userId, org.data, body.data)); }
+  catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
+router.post("/organizations/:organizationId/incident-closers/:membershipId/revoke", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuidParam.safeParse(req.params.organizationId);
+  if (!org.success) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try { res.status(200).json(await revokeIncidentCloser(req.auth!.userId, org.data, String(req.params.membershipId))); }
+  catch (err) { if (!handleError(err, res)) res.status(500).json({ error: "INTERNAL_ERROR" }); }
+});
 
 const assignSchema = z.object({ assignedToUserId: z.string().uuid() });
 

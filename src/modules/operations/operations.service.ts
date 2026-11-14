@@ -93,10 +93,16 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
       AND s.scheduled_start < now() + interval '7 days'
       AND (
         s.scheduled_end > now()
-        -- Ended in the last 7 days without ever starting: the agency must review it
-        -- (nothing is cancelled or changed automatically).
-        OR (s.scheduled_end > now() - interval '7 days' AND s.status IN ('unassigned', 'confirmed'))
+        -- Ended without ever starting: the agency must review it (nothing is cancelled or
+        -- changed automatically). 154: a shift that ended after the activation stays until it
+        -- is legitimately resolved (a check-in, or a closure without service); one that ended
+        -- before it keeps the old 7-day window, so old history does not pile up.
+        OR (s.status IN ('unassigned', 'confirmed')
+            AND (s.scheduled_end > now() - interval '7 days'
+                 OR s.scheduled_end >= (SELECT activated_at FROM operational_pending_activation)))
       )
+      -- 154: closed without service (who, when, reason are kept in the closure).
+      AND NOT EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL)
   `.execute(trx as never);
 
   const credentials = await sql<any>`
@@ -111,7 +117,7 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
   `.execute(trx as never);
 
   const incidents = await sql<any>`
-    SELECT i.id, i.created_at, i.severity,
+    SELECT i.id, i.created_at, i.severity, app_incident_is_serious(i.severity) AS serious,
       COALESCE(NULLIF(trim(cr.preferred_name), ''), trim(concat_ws(' ', cr.first_name, cr.last_name))) recipient
     FROM incidents i
     JOIN care_recipients cr ON cr.id = i.care_recipient_id
@@ -215,7 +221,8 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
     alerts.push({
       key,
       category: "open_incident",
-      severity: String(incident.severity).toLowerCase().includes("high") ? "critical" : "warning",
+      // Same rule the database uses to require documented follow-up (154).
+      severity: incident.serious ? "critical" : "warning",
       title: "Incidente pendiente",
       detail: `${incident.recipient || "Residente"} · ${incident.severity}`,
       relatedEntityType: "incident",
