@@ -141,6 +141,8 @@ interface ShiftRow {
   scheduled_start: string; scheduled_end: string; service_id: string | null; service_name: string | null; unit: FinanceUnit | null;
   client_id: string | null; caregiver_name: string | null;
   approved_count: number; open_count: number; check_in_at: string | null; check_out_at: string | null; approved_minutes: number | null;
+  /** 154: closed without service in the operations center (never a service, never billed automatically). */
+  closed_without_service: boolean;
   /** D4: every approved timesheet of the shift (real period + approved minutes), oldest first. */
   periods: { id: string; check_in_at: string; check_out_at: string; approved_minutes: number }[] | null;
 }
@@ -157,7 +159,8 @@ async function shiftRows(trx: Trx, organizationId: string, where: { clientId: st
       COALESCE(ft.service_id, d.service_id) AS service_id, fs.name AS service_name, fs.unit AS unit,
       COALESCE(ft.billing_client_id, pc.billing_client_id) AS client_id,
       ts.caregiver_name, COALESCE(ts.approved_count, 0) AS approved_count, COALESCE(ts.open_count, 0) AS open_count,
-      ts.check_in_at, ts.check_out_at, ts.approved_minutes, ts.periods
+      ts.check_in_at, ts.check_out_at, ts.approved_minutes, ts.periods,
+      EXISTS (SELECT 1 FROM shift_attention_closures sc WHERE sc.shift_id = s.id AND sc.organization_id = s.organization_id AND sc.rectified_at IS NULL) AS closed_without_service
     FROM shifts s
     LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id AND cr.organization_id = s.organization_id
     LEFT JOIN shift_finance_terms ft ON ft.shift_id = s.id
@@ -185,6 +188,9 @@ interface Priced { line: LineResult | null; exceptions: string[]; tax: TaxRow }
 async function priceRow(trx: Trx, organizationId: string, row: ShiftRow, clientId: string): Promise<Priced> {
   const exceptions: string[] = [];
   if (row.status === "cancelled") exceptions.push("SHIFT_CANCELLED");
+  // 154: a shift closed without service is never billed automatically (also if a late check-in
+  // contradicts the closure: that needs a manual, justified decision).
+  if (row.closed_without_service) exceptions.push("SHIFT_CLOSED_WITHOUT_SERVICE");
   // Pending or disputed hours on any timesheet of the shift: nothing is billed until they are approved (never partial).
   if (row.approved_count === 0 || row.open_count > 0) exceptions.push("HOURS_NOT_APPROVED");
   if (!row.service_id) exceptions.push("NO_SERVICE");
