@@ -321,6 +321,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 154
 
+      - name: PostgreSQL 155 rollback (SmartMatch new-opportunity push; schema identical to before, every row unchanged — the push catalogue only gains its own row — re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 155 push_notification_catalog
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -374,6 +380,12 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyPushNotifications.ts
+
+      - name: PostgreSQL SmartMatch «nueva oportunidad» (155) — bell + push to the agency's active caregivers only, general text, quiet hours, 30-min burst limit, closed/expired opportunities, push off, isolation, rollback
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySmartMatchNewOpportunityPush.ts
 
       - name: PostgreSQL resident and establishment documents (grants, RLS, agency, ETNARA Central closed by 149, history kept, no orphan files)
         env:

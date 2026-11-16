@@ -117,6 +117,9 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "La agencia canceló una oportunidad a la que te postulaste";
     case "SMARTMATCH_APPLICATION_OPPORTUNITY_EXPIRED":
       return "Venció una oportunidad a la que te postulaste";
+    // 155: published to the caregivers of the agency. Never the municipality, time or person.
+    case "SMARTMATCH_OPPORTUNITY_PUBLISHED":
+      return "Hay una nueva oportunidad en SmartMatch";
     // Gate 7 «En camino»: never an address, a location or an estimated time.
     case "FAMILY_CAREGIVER_EN_ROUTE":
       return "La cuidadora va en camino";

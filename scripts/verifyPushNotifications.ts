@@ -487,6 +487,9 @@ async function main() {
   const rollback147 = readFileSync(new URL("../ops/147_web_push_smartmatch_activities.rollback.sql", import.meta.url), "utf8");
   const rollback = readFileSync(new URL("../ops/146_web_push_notifications.rollback.sql", import.meta.url), "utf8");
   await pool.end().catch(() => undefined); server.close();
+  // 155 (SmartMatch «nueva oportunidad») sits on top of 146/147: roll it back first.
+  const rollback155 = readFileSync(new URL("../ops/155_smartmatch_new_opportunity_push.rollback.sql", import.meta.url), "utf8");
+  await q(rollback155);
   await q(rollback147);
   check("S20 147 rollback: catalogue back to the 20 rows of 146", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 20);
   await q(rollback);
@@ -499,8 +502,9 @@ async function main() {
   for (let i = 0; i < 2; i++) {
     await q(readFileSync(new URL("../migrations/146_web_push_notifications.sql", import.meta.url), "utf8"));
     await q(readFileSync(new URL("../migrations/147_web_push_smartmatch_activities.sql", import.meta.url), "utf8"));
+    await q(readFileSync(new URL("../migrations/155_smartmatch_new_opportunity_push.sql", import.meta.url), "utf8"));
   }
-  check("S20 146 + 147 re-apply cleanly twice after a rollback", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 30);
+  check("S20 146 + 147 + 155 re-apply cleanly twice after a rollback", (await q(`SELECT count(*)::int n FROM push_notification_catalog`)).rows[0].n === 31);
 
   console.log = origLog; console.error = origError;
   await runtime.end(); await db.end();

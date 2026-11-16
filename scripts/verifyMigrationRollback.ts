@@ -6,6 +6,9 @@
  *      sobre las columnas que existían antes: idéntica antes de aplicar, después y tras revertir;
  *   R3 volver a aplicarla después de revertir da el mismo esquema que una aplicación limpia;
  *   R4 aplicarla dos veces es idempotente.
+ *   Tablas de referencia opcionales (argumentos tras el número, p. ej. push_notification_catalog):
+ *   la migración puede AÑADIR filas en ellas, pero ninguna fila existente cambia ni desaparece, y
+ *   tras revertir la tabla queda exactamente como antes.
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db> \
  *     npx tsx scripts/verifyMigrationRollback.ts 150
@@ -24,6 +27,7 @@ if (process.env.NODE_ENV === "production") throw new Error("Production prohibite
 if (/railway|rlwy|amazonaws|supabase|neon\.tech/i.test(adminUrl)) throw new Error("Hosted database refused");
 const N = Number(process.argv[2]);
 if (!Number.isInteger(N) || N < 150) throw new Error("usage: verifyMigrationRollback.ts <number ≥150>");
+const REFERENCE = new Set(process.argv.slice(3));
 const ALL = join(process.cwd(), "migrations");
 const file = readdirSync(ALL).find((f) => f.startsWith(`${N}_`))!;
 const MIGRATION = readFileSync(join(ALL, file), "utf8");
@@ -57,12 +61,25 @@ async function main() {
   const fingerprint = async (c: pg.Client, cols: Map<string, string[]>) => {
     const parts: string[] = []; let rows = 0;
     for (const [t, cs] of cols) {
+      if (REFERENCE.has(t)) continue;
       const list = cs.map((x) => `x."${x}"`).join(",");
       const r = (await c.query<{ h: string | null; n: number }>(`SELECT md5(string_agg(md5(row(${list})::text), '' ORDER BY md5(row(${list})::text))) h, count(*)::int n FROM "${t}" x`)).rows[0];
       parts.push(`${t}:${r.n}:${r.h ?? "-"}`); rows += r.n;
     }
     return { hash: parts.join("|"), tables: cols.size, rows };
   };
+  /** Reference tables: the md5 of each row, to check existing rows survive (added rows allowed). */
+  const refRows = async (c: pg.Client, cols: Map<string, string[]>) => {
+    const m = new Map<string, string[]>();
+    for (const t of REFERENCE) {
+      const cs = cols.get(t); if (!cs) throw new Error(`reference table ${t} not found`);
+      const list = cs.map((x) => `x."${x}"`).join(",");
+      m.set(t, (await c.query<{ h: string }>(`SELECT md5(row(${list})::text) h FROM "${t}" x ORDER BY 1`)).rows.map((r) => r.h));
+    }
+    return m;
+  };
+  const kept = (before: Map<string, string[]>, now: Map<string, string[]>) => [...before].every(([t, rows]) => rows.every((h) => now.get(t)!.includes(h)));
+  const same = (before: Map<string, string[]>, now: Map<string, string[]>) => [...before].every(([t, rows]) => JSON.stringify(rows) === JSON.stringify(now.get(t)));
   /** Fictitious history touching what 150/151 change: institutional documents (dated, undated, with a
    *  Central decision) and a direct agency ↔ caregiver conversation with messages. */
   const seed = async (c: pg.Client) => {
@@ -89,21 +106,26 @@ async function main() {
     execFileSync("npx", ["tsx", "scripts/seedDemo.ts"], { env: { ...process.env, DATABASE_URL: a.url, DEMO_PASSWORD: randomUUID() }, stdio: "ignore" });
     const cols = await columnsOf(a.c);
     const fpBefore = await fingerprint(a.c, cols);
+    const refBefore = await refRows(a.c, cols);
     await migrate(a.c, upToN);
     const fpAfter = await fingerprint(a.c, cols);
+    const refAfter = await refRows(a.c, cols);
     await a.c.query(MIGRATION);
     const twice = await snapshot(a.c);
-    check(`R4 ${N} is idempotent and changes no existing data on apply`, twice === sN && fpAfter.hash === fpBefore.hash, `schema=${twice === sN} data=${fpAfter.hash === fpBefore.hash}`);
+    const refTwice = await refRows(a.c, cols);
+    check(`R4 ${N} is idempotent and changes no existing data on apply`, twice === sN && fpAfter.hash === fpBefore.hash && kept(refBefore, refAfter) && same(refAfter, refTwice),
+      `schema=${twice === sN} data=${fpAfter.hash === fpBefore.hash} reference=${kept(refBefore, refAfter)}/${same(refAfter, refTwice)}`);
     await a.c.query(ROLLBACK);
     const fpRolled = await fingerprint(a.c, cols);
+    const refRolled = await refRows(a.c, cols);
     const sRolled = await snapshot(a.c);
     const registered = (await a.c.query(`SELECT 1 FROM schema_migrations WHERE filename=$1`, [file])).rowCount;
     check(`R1 the rollback leaves the schema identical to ${N - 1} and unregisters ${N}`, sRolled === sPrev && registered === 0,
       `identical=${sRolled === sPrev} registered=${registered} ${sRolled === sPrev ? "" : JSON.stringify({ onlyPrev: (JSON.parse(sPrev) as string[]).filter((k) => !sRolled.includes(JSON.stringify(k))).slice(0, 4), onlyRolled: (JSON.parse(sRolled) as string[]).filter((k) => !sPrev.includes(JSON.stringify(k))).slice(0, 4) })}`);
     check(`R2 every row of every table (demo + fictitious documents, Central decision, direct conversation) is identical before ${N}, after it and after the rollback`,
-      fpBefore.hash === fpRolled.hash && fpBefore.hash === fpAfter.hash, `tables=${fpBefore.tables} rows=${fpBefore.rows}`);
+      fpBefore.hash === fpRolled.hash && fpBefore.hash === fpAfter.hash && same(refBefore, refRolled), `tables=${fpBefore.tables} rows=${fpBefore.rows} reference=${same(refBefore, refRolled)}`);
     await migrate(a.c, upToN);
-    check(`R3 applying ${N} again after the rollback gives the same schema as a clean ${N}`, (await snapshot(a.c)) === sN && (await fingerprint(a.c, cols)).hash === fpBefore.hash);
+    check(`R3 applying ${N} again after the rollback gives the same schema as a clean ${N}`, (await snapshot(a.c)) === sN && (await fingerprint(a.c, cols)).hash === fpBefore.hash && same(refAfter, await refRows(a.c, cols)));
     for (const x of [refPrev, refN, a]) await x.c.end();
   } finally {
     for (const d of dbs) await server.query(`DROP DATABASE IF EXISTS ${d} WITH (FORCE)`).catch(() => undefined);

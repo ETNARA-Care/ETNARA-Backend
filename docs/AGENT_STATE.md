@@ -2,6 +2,11 @@
 
 ## Current Status
 
+## 2026-11-16 — 155: SmartMatch «Hay una nueva oportunidad» (bell + push) — rama claude/smartmatch-push-new-opportunity, PR borrador, sin desplegar
+- Al publicar una oportunidad interna, aviso a cada cuidador activo de esa agencia (rol WORKER + membresía de trabajador activa). Push solo si la agencia tiene PUSH_NOTIFICATIONS; respeta silencio nocturno; máx. 1 push cada 30 min por persona (el resto, solo campana); al cubrirse/cancelarse/vencer se marcan leídos y se descartan los push pendientes. Texto fijo, sin municipio, horario ni persona.
+- Archivos: migrations/155, ops/155 rollback (desregistra 155), notifications.service (texto), pushTarget (/caregiver/smartmatch), verifySmartMatchNewOpportunityPush (21/21), verifyPushNotifications S20 (92/92), verifyMigrationRollback acepta tablas de referencia (155 4/4, 154 4/4), tests/push155, CI.
+- Siguiente: revisión de Rafa; fusión/despliegue solo con su autorización; probar en Casa Demo con SMARTMATCH y PUSH_NOTIFICATIONS encendidos.
+
 ## 2026-11-09 — Etapa 0: invitaciones de administrador sin token para ETNARA Central (rama claude/session-continuation-q649y3, sin migraciones, sin desplegar)
 - **Qué cambia:** `POST /platform/organizations/:id/admin-invitations` ya no devuelve `activationToken`; `emailDelivery` queda reducido a `{status, error?: EMAIL_NOT_CONFIGURED|EMAIL_SEND_FAILED}` (nunca el mensaje ni el id del proveedor).
 - **Nuevo** (`platformAdminInvitations.service.ts`):

@@ -27,6 +27,8 @@ export function notificationTargetPath(n: TargetInput): string | null {
       return shift ? `/agency/shifts/${shift}` : "/agency/shifts";
     case "caregiver":
       if (n.type === "SHIFT_UNASSIGNED") return "/caregiver/shifts";
+      // 155: a new SmartMatch opportunity opens the caregiver's «Disponibles» list.
+      if (n.type === "SMARTMATCH_OPPORTUNITY_PUBLISHED") return "/caregiver/smartmatch";
       return shift ? `/caregiver/shifts/${shift}` : "/caregiver/shifts";
     case "applicant":
       // 147: quien se postuló (puede ser de otra agencia) ve sus propias solicitudes.
