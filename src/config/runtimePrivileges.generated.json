@@ -106,6 +106,10 @@
       "SELECT",
       "UPDATE"
     ],
+    "contract_source_files": [
+      "INSERT",
+      "SELECT"
+    ],
     "coverage_campaigns": [
       "INSERT",
       "SELECT",
@@ -372,6 +376,11 @@
       "SELECT",
       "UPDATE"
     ],
+    "role_terms_versions": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "roles": [
       "SELECT"
     ],
@@ -466,6 +475,10 @@
       "UPDATE"
     ],
     "units": [
+      "SELECT"
+    ],
+    "user_role_terms_acceptances": [
+      "INSERT",
       "SELECT"
     ],
     "user_roles": [
@@ -637,6 +650,8 @@
     "app_reset_credential_review_pending",
     "app_review_activity_photo",
     "app_revoke_photo_consent",
+    "app_role_terms_checkbox_text",
+    "app_role_terms_user_has_role",
     "app_self_has_active_family_access",
     "app_self_has_active_worker_access",
     "app_set_caregiver_message_handler",

@@ -1,5 +1,5 @@
 // Módulo contractual, Etapa 1 (152). Con CONTRACTS_MODULE apagado todas las rutas responden 404.
-import { Router, type NextFunction, type Response } from "express";
+import express, { Router, type NextFunction, type Response } from "express";
 import { z } from "zod";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
@@ -15,12 +15,17 @@ import {
   platformListSignatories, platformRecordLegalApproval, platformRevokeSignatory, platformSetEnforcement,
   FOUNDING_PROGRAM, platformRecordCommercialApproval, platformUpdateOrderTerms,
 } from "./contractsSaas.service.js";
+import {
+  ROLE_TERMS_ROLES, SOURCE_FILE_MAX_BYTES, acceptRoleTerms, listRoleTermsAcceptances, myRoleTerms, orgDownloadSourceFile, platformCreateRoleTerms,
+  platformDownloadSourceFile, platformDraftRoleTermsFromAnnex, platformListRoleTerms, platformPublishRoleTerms, platformRecordRoleTermsLegalApproval,
+  platformRecordVerifiedLegalApproval, platformRetireRoleTerms, platformUpdateRoleTermsDraft, platformUploadSourceFile, roleTermsPdf,
+} from "./contractsOfficial.service.js";
 
 const router = Router();
 const uuid = z.string().uuid();
 const sha = z.string().regex(/^[0-9a-f]{64}$/);
 
-router.use(["/platform/contracts", "/organizations/:organizationId/contracts"], (_req, res: Response, next: NextFunction) => {
+router.use(["/platform/contracts", "/organizations/:organizationId/contracts", "/organizations/:organizationId/role-terms"], (_req, res: Response, next: NextFunction) => {
   if (!contractsModuleEnabled()) { res.status(404).json({ error: "NOT_FOUND" }); return; }
   next();
 });
@@ -82,9 +87,65 @@ router.get("/platform/contracts/versions/:versionId", requireAuth, async (req: A
   try { res.json({ version: await platformGetVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
 });
 const legalBody = z.object({ reference: z.string().trim().min(10).max(500), contentSha256: sha }).strict();
+// 156: aprobación con datos completos, verificada contra la huella del texto y la del Word original guardado.
+const verifiedLegalBody = z.object({
+  approverName: z.string().trim().min(5).max(150).regex(/^[^|]+$/), approvedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  documentReference: z.string().trim().min(3).max(300).regex(/^[^|]+$/), contentSha256: sha, sourceFileSha256: sha,
+}).strict();
 router.post("/platform/contracts/versions/:versionId/legal-approval", requireAuth, async (req: AuthenticatedRequest, res) => {
-  const v = uuid.safeParse(req.params.versionId), b = legalBody.safeParse(req.body); if (!v.success || !b.success) return void bad(res);
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  const full = verifiedLegalBody.safeParse(req.body);
+  if (full.success) {
+    try { res.json({ version: await platformRecordVerifiedLegalApproval(req.auth!.userId, v.data, full.data) }); } catch (x) { fail(x, res); }
+    return;
+  }
+  const b = legalBody.safeParse(req.body); if (!b.success) return void bad(res);
   try { res.json({ version: await platformRecordLegalApproval(req.auth!.userId, v.data, b.data.reference, b.data.contentSha256) }); } catch (x) { fail(x, res); }
+});
+// 156: Word original (.docx) de un borrador; Central lo carga una sola vez y puede volver a descargarlo.
+const docxBody = express.raw({ type: () => true, limit: SOURCE_FILE_MAX_BYTES });
+router.post("/platform/contracts/versions/:versionId/source-file", requireAuth, docxBody, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId);
+  const name = typeof req.headers["x-file-name"] === "string" ? decodeURIComponent(req.headers["x-file-name"]) : "";
+  if (!v.success || !Buffer.isBuffer(req.body) || !name) return void bad(res);
+  try { res.status(201).json({ sourceFile: await platformUploadSourceFile(req.auth!.userId, v.data, name, req.body) }); } catch (x) { fail(x, res); }
+});
+router.get("/platform/contracts/versions/:versionId/source-file", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
+  try { sendFile(res, await platformDownloadSourceFile(req.auth!.userId, v.data)); } catch (x) { fail(x, res); }
+});
+// 156: términos individuales por función (Anexo E). Solo líneas íntegras del contrato fuente.
+const termsLabel = z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/);
+router.get("/platform/contracts/role-terms", requireAuth, async (req: AuthenticatedRequest, res) => {
+  try { res.json({ roleTerms: await platformListRoleTerms(req.auth!.userId) }); } catch (x) { fail(x, res); }
+});
+const annexDraftBody = z.object({ sourceContractVersionId: uuid, versionLabel: termsLabel }).strict();
+router.post("/platform/contracts/role-terms/drafts-from-annex", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const b = annexDraftBody.safeParse(req.body); if (!b.success) return void bad(res);
+  try { res.status(201).json({ roleTerms: await platformDraftRoleTermsFromAnnex(req.auth!.userId, b.data.sourceContractVersionId, b.data.versionLabel) }); } catch (x) { fail(x, res); }
+});
+const termsBody = z.object({ role: z.enum(ROLE_TERMS_ROLES as [string, ...string[]]), versionLabel: termsLabel, title: z.string().trim().min(3).max(200), body: z.string().min(50).max(50000), sourceContractVersionId: uuid }).strict();
+router.post("/platform/contracts/role-terms", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const b = termsBody.safeParse(req.body); if (!b.success) return void bad(res);
+  try { res.status(201).json({ roleTerms: await platformCreateRoleTerms(req.auth!.userId, b.data as never) }); } catch (x) { fail(x, res); }
+});
+const termsDraftBody = z.object({ title: termsBody.shape.title.optional(), body: termsBody.shape.body.optional(), versionLabel: termsLabel.optional() }).strict()
+  .refine((v) => v.title !== undefined || v.body !== undefined || v.versionLabel !== undefined);
+router.patch("/platform/contracts/role-terms/:termsId", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const t = uuid.safeParse(req.params.termsId), b = termsDraftBody.safeParse(req.body); if (!t.success || !b.success) return void bad(res);
+  try { res.json({ roleTerms: await platformUpdateRoleTermsDraft(req.auth!.userId, t.data, b.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/role-terms/:termsId/legal-approval", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const t = uuid.safeParse(req.params.termsId), b = legalBody.safeParse(req.body); if (!t.success || !b.success) return void bad(res);
+  try { res.json({ roleTerms: await platformRecordRoleTermsLegalApproval(req.auth!.userId, t.data, b.data.reference, b.data.contentSha256) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/role-terms/:termsId/publish", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const t = uuid.safeParse(req.params.termsId); if (!t.success) return void bad(res);
+  try { res.json({ roleTerms: await platformPublishRoleTerms(req.auth!.userId, t.data) }); } catch (x) { fail(x, res); }
+});
+router.post("/platform/contracts/role-terms/:termsId/retire", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const t = uuid.safeParse(req.params.termsId); if (!t.success) return void bad(res);
+  try { res.json({ roleTerms: await platformRetireRoleTerms(req.auth!.userId, t.data) }); } catch (x) { fail(x, res); }
 });
 const signatoryBody = z.object({ userId: uuid, fullName: z.string().trim().min(5).max(150).regex(/\S+\s+\S+/), title: z.string().trim().min(2).max(100), basis: z.string().trim().min(10).max(500) }).strict();
 router.get("/platform/contracts/organizations/:organizationId/signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -203,6 +264,32 @@ for (const format of ["pdf", "txt"] as const) {
     try { sendFile(res, await orgDocumentFile(req.auth!.userId, o.data, v.data, format)); } catch (x) { fail(x, res); }
   });
 }
+router.get("/organizations/:organizationId/contracts/versions/:versionId/document.docx", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), v = uuid.safeParse(req.params.versionId); if (!o.success || !v.success) return void bad(res);
+  try { sendFile(res, await orgDownloadSourceFile(req.auth!.userId, o.data, v.data)); } catch (x) { fail(x, res); }
+});
+// 156: términos de la función de cada persona (administración, cuidadores, familiares).
+router.get("/organizations/:organizationId/role-terms", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json(await myRoleTerms(req.auth!.userId, o.data)); } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/role-terms/acceptances", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ acceptances: await listRoleTermsAcceptances(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
+});
+const termsAcceptBody = z.object({ contentSha256: sha, confirm: z.literal(true) }).strict();
+router.post("/organizations/:organizationId/role-terms/:termsId/accept", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), t = uuid.safeParse(req.params.termsId), b = termsAcceptBody.safeParse(req.body);
+  if (!o.success || !t.success || !b.success) return void bad(res);
+  try {
+    res.status(201).json({ acceptance: await acceptRoleTerms(req.auth!.userId, o.data, t.data, b.data.contentSha256,
+      { ip: req.ip ?? null, userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : null }) });
+  } catch (x) { fail(x, res); }
+});
+router.get("/organizations/:organizationId/role-terms/:termsId/document.pdf", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId), t = uuid.safeParse(req.params.termsId); if (!o.success || !t.success) return void bad(res);
+  try { sendFile(res, await roleTermsPdf(req.auth!.userId, o.data, t.data)); } catch (x) { fail(x, res); }
+});
 router.get("/organizations/:organizationId/contracts/acceptances/:acceptanceId/certificate.pdf", requireAuth, async (req: AuthenticatedRequest, res) => {
   const o = uuid.safeParse(req.params.organizationId), a = uuid.safeParse(req.params.acceptanceId); if (!o.success || !a.success) return void bad(res);
   try { sendFile(res, await orgAcceptanceCertificate(req.auth!.userId, o.data, a.data)); } catch (x) { fail(x, res); }

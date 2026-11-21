@@ -327,6 +327,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 155 push_notification_catalog
 
+      - name: PostgreSQL 156 Official contract v1.1 (immutable original Word with SHA-256, legal approval tied to text and Word hashes and complete reference before publishing, role terms verbatim from Annex E, individual acceptance per role, history never overwritten, enforcement and billing off, the 16 local cases, rollback refusal)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContract156.ts
+
+      - name: PostgreSQL 156 rollback (schema identical to 155, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 156
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
