@@ -11,11 +11,18 @@ describe("157: interruptor «Contratos» por agencia", () => {
   });
   it("todas las rutas de contratos y términos de una agencia pasan por él, también las lecturas", () => {
     for (const [path, method] of [[`/organizations/${O}/contracts`, "GET"], [`/organizations/${O}/contracts/versions/${V}/accept`, "POST"],
-      [`/organizations/${O}/contracts/acceptances/${V}/certificate.pdf`, "GET"], [`/organizations/${O}/contracts/versions/${V}/document.docx`, "GET"],
-      [`/organizations/${O}/role-terms`, "GET"], [`/organizations/${O}/role-terms/${V}/accept`, "POST"], [`/organizations/${O}/CONTRACTS`, "GET"]] as const) {
+      [`/organizations/${O}/contracts/versions/${V}`, "GET"], [`/organizations/${O}/contracts/versions/${V}/document.docx`, "GET"],
+      [`/organizations/${O}/contracts/status`, "GET"], [`/organizations/${O}/role-terms`, "GET"], [`/organizations/${O}/role-terms/${V}/accept`, "POST"],
+      [`/organizations/${O}/contracts/acceptances`, "POST"], [`/organizations/${O}/CONTRACTS`, "GET"]] as const) {
       const g = gatedFeatureFor(path, method);
       expect(g, path).toMatchObject({ organizationId: O, feature: "CONTRACTS" });
       expect(g?.readOnlyPass, path).toBeUndefined();
+    }
+  });
+  it("apagado, solo lectura de las aceptaciones ya hechas: historial, constancia y el historial propio de términos", () => {
+    for (const path of [`/organizations/${O}/contracts/acceptances`, `/organizations/${O}/contracts/acceptances/${V}/certificate.pdf`, `/organizations/${O}/role-terms/acceptances`]) {
+      expect(gatedFeatureFor(path, "GET"), path).toMatchObject({ feature: "CONTRACTS", readOnlyPass: true });
+      expect(gatedFeatureFor(path, "POST")?.readOnlyPass, path).toBeUndefined();
     }
   });
   it("las rutas de Central no dependen del interruptor de ninguna agencia", () => {

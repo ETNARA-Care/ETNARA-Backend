@@ -417,6 +417,8 @@ export async function orgAcceptanceCertificate(userId: string, organizationId: s
       acceptedByLogin: a.accepted_by_login, verifiedEmail: maskEmail(a.verified_email), verificationMethod: a.verification_method, acceptedAt: a.accepted_at, ipAddress: a.ip_text,
       acceptanceCheckboxText: a.acceptance_checkbox_text ?? null, documentDownloadedAt: a.document_downloaded_at ?? null, designatedSignatory: !!a.signatory_designation_id,
     });
+    // 157: cada descarga de una constancia queda auditada (también en modo de solo consulta).
+    await audit(trx, userId, organizationId, "CONTRACT_CERTIFICATE_DOWNLOADED", "organization_contract_acceptance", a.id, { content_sha256: a.content_sha256 });
     const fileName = `constancia-${String(a.code).replace(/[^A-Za-z0-9._-]/g, "_")}-v${a.version_label}.pdf`.replace(/[^A-Za-z0-9._-]/g, "_");
     return { body: pdf, headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${fileName}"` } };
   });

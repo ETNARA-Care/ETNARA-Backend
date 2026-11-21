@@ -39,6 +39,12 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; 
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
   // Contratos por agencia (157): contrato, constancias, Word, firma y términos por función. Se suma a
   // CONTRACTS_MODULE (global): con el módulo apagado las rutas siguen respondiendo 404.
+  // Con el interruptor apagado, SOLO LECTURA de las aceptaciones ya hechas: el historial y la constancia
+  // PDF de cada una (y el historial propio de términos). Quién puede leerlas lo deciden el servicio
+  // (administración activa de esa agencia) y RLS; cada descarga de constancia queda auditada.
+  { pattern: new RegExp(`^/organizations/(${UUID})/contracts/acceptances$`, "i"), feature: "CONTRACTS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/contracts/acceptances/${UUID}/certificate\\.pdf$`, "i"), feature: "CONTRACTS", passWhenOff: ["GET"] },
+  { pattern: new RegExp(`^/organizations/(${UUID})/role-terms/acceptances$`, "i"), feature: "CONTRACTS", passWhenOff: ["GET"] },
   { pattern: new RegExp(`^/organizations/(${UUID})/contracts(/|$)`, "i"), feature: "CONTRACTS" },
   { pattern: new RegExp(`^/organizations/(${UUID})/role-terms(/|$)`, "i"), feature: "CONTRACTS" },
 ];

@@ -182,14 +182,33 @@ async function main() {
   // ---------------------------------------------------------------- apagar el interruptor
   const nAcc0 = (await q(`SELECT count(*)::int n FROM organization_contract_acceptances WHERE organization_id=$1`, [orgA])).rows[0].n;
   const off = await call("PUT", F(orgA), central.token, { enabled: false, reason: "Fin del ensayo (ficticio)" });
-  const offList = await call("GET", O(orgA), A.rep.token), offCert = await call("GET", `${O(orgA)}/acceptances/${accId}/certificate.pdf`, A.rep.token);
+  const offList = await call("GET", O(orgA), A.rep.token), offView = await call("GET", `${O(orgA)}/versions/${ov.id}`, A.rep.token);
+  const offDocx = await call("GET", `${O(orgA)}/versions/${ov.id}/document.docx`, A.rep.token), offStatus = await call("GET", `${O(orgA)}/status`, A.rep.token);
+  const offCode = await call("POST", `${O(orgA)}/versions/${ov.id}/signature-code`, A.rep.token, { contentSha256: ov.content_sha256, ...SIGN });
   const offTerms = await call("GET", T(orgA), A.worker.token);
   const offAccept = await call("POST", `${T(orgA)}/${(drafts.body.roleTerms ?? [])[1]?.id}/accept`, A.worker.token, { contentSha256: (drafts.body.roleTerms ?? [])[1]?.content_sha256, confirm: true });
+  check("K11. Apagado: sin lista de contratos ni pendientes, sin documento ni Word, sin estado, sin códigos ni aceptaciones nuevas, sin términos (404)",
+    off.status === 200 && [offList, offView, offDocx, offStatus, offCode, offTerms, offAccept].every((r) => r.status === 404 && r.body.error === "FEATURE_NOT_ENABLED"),
+    [off.status, offList.status, offView.status, offDocx.status, offStatus.status, offCode.status, offTerms.status, offAccept.status]);
+  const audit0 = (await q(`SELECT count(*)::int n FROM audit_log WHERE action='CONTRACT_CERTIFICATE_DOWNLOADED' AND organization_id=$1`, [orgA])).rows[0].n;
+  const roHist = await call("GET", `${O(orgA)}/acceptances`, A.rep.token);
+  const roCert = await call("GET", `${O(orgA)}/acceptances/${accId}/certificate.pdf`, A.rep.token);
+  const audit1 = (await q(`SELECT count(*)::int n FROM audit_log WHERE action='CONTRACT_CERTIFICATE_DOWNLOADED' AND organization_id=$1 AND actor_user_id=$2`, [orgA, A.rep.userId])).rows[0].n;
+  check("K11b. Apagado, SOLO LECTURA: la administración de la agencia consulta su historial (1) y descarga la constancia PDF; la descarga queda auditada",
+    roHist.status === 200 && (roHist.body.acceptances ?? []).length === 1 && roCert.status === 200 && roCert.raw.subarray(0, 4).toString() === "%PDF" && audit1 === audit0 + 1, [roHist.status, (roHist.body.acceptances ?? []).length, roCert.status, audit0, audit1]);
+  const roWorker = await call("GET", `${O(orgA)}/acceptances`, A.worker.token), roWorkerCert = await call("GET", `${O(orgA)}/acceptances/${accId}/certificate.pdf`, A.worker.token);
+  const roOther = await call("GET", `${O(orgA)}/acceptances`, B.rep.token), roOtherCert = await call("GET", `${O(orgA)}/acceptances/${accId}/certificate.pdf`, B.rep.token);
+  const roOtherOwn = await call("GET", `${O(orgB)}/acceptances/${accId}/certificate.pdf`, B.rep.token);
+  const roTermsHist = await call("GET", `${T(orgA)}/acceptances`, A.worker.token);
+  check("K11c. Solo lectura limitada: el cuidador no ve las constancias de la agencia (403); otra agencia no las ve ni por su propia ruta (403/404); el cuidador solo consulta su propio historial de términos",
+    roWorker.status === 403 && roWorkerCert.status === 403 && roOther.status === 403 && roOtherCert.status === 403 && [403, 404].includes(roOtherOwn.status)
+    && roTermsHist.status === 200 && (roTermsHist.body.acceptances ?? []).every((x: Json) => x.user_id === A.worker.userId),
+    [roWorker.status, roWorkerCert.status, roOther.status, roOtherCert.status, roOtherOwn.status, roTermsHist.status]);
+  const roPost = await call("POST", `${O(orgA)}/acceptances`, A.rep.token, {});
   const centralSees = await call("GET", `${P_}/versions/${ov.id}/acceptances`, central.token);
   const nAcc1 = (await q(`SELECT count(*)::int n FROM organization_contract_acceptances WHERE organization_id=$1`, [orgA])).rows[0].n;
-  check("K11. Apagado: la agencia deja de ver y aceptar (404), pero la aceptación y la constancia siguen en la base y Central las ve",
-    off.status === 200 && offList.status === 404 && offCert.status === 404 && offTerms.status === 404 && offAccept.status === 404
-    && nAcc0 === 1 && nAcc1 === 1 && (centralSees.body.acceptances ?? []).length === 1, [off.status, offList.status, offCert.status, offTerms.status, offAccept.status, nAcc0, nAcc1, centralSees.status]);
+  check("K11d. La lectura no abre escritura (POST sigue en 404) y nada se borró: la aceptación sigue en la base y Central la ve",
+    roPost.status === 404 && nAcc0 === 1 && nAcc1 === 1 && (centralSees.body.acceptances ?? []).length === 1, [roPost.status, nAcc0, nAcc1, centralSees.status]);
   // La base también lo exige a la aplicación (aunque alguien saltara la ruta).
   const rt = new pg.Client({ connectionString: process.env.DATABASE_URL }); await rt.connect();
   const dbBlock = await errCode((async () => {
