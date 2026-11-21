@@ -627,6 +627,7 @@
     "app_photo_storage_identity",
     "app_photo_uploader_can_view",
     "app_platform_billing_admins",
+    "app_platform_contract_eligible_signatories",
     "app_platform_designate_billing_manager",
     "app_platform_org_has_legal_holds",
     "app_precheck_activity_photo",

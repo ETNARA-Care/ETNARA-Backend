@@ -351,6 +351,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 157
 
+      - name: PostgreSQL 158 Central contract tools (test documents scoped to one agency, eligible signatories only active admins of that agency, Central-only, isolation with the switch on in two agencies, test signing still required, retire with an audited reason keeps every version, acceptance and certificate, signatory revocation, compatibility, rollback refusal)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContract158.ts
+
+      - name: PostgreSQL 158 rollback (schema identical to 157, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 158
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
