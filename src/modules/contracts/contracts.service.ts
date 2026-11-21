@@ -67,7 +67,8 @@ const versionFields = sql.raw(`v.id, v.document_id, v.version_label, v.status, v
 // ------------------------------------------------------------------ ETNARA Central
 export async function platformListContracts(userId: string) {
   return withPlatformContext(userId, async (trx) => {
-    const docs = await sql<any>`SELECT id, code, title, kind, is_test, created_at FROM contract_documents ORDER BY created_at`.execute(trx);
+    const docs = await sql<any>`SELECT d.id, d.code, d.title, d.kind, d.is_test, d.created_at, d.organization_id, o.name AS organization_name
+      FROM contract_documents d LEFT JOIN organizations o ON o.id = d.organization_id ORDER BY d.created_at`.execute(trx);
     const versions = await sql<any>`SELECT ${versionFields},
         (SELECT count(*)::int FROM organization_contract_acceptances a WHERE a.document_version_id = v.id) AS acceptances
       FROM contract_document_versions v ORDER BY v.created_at`.execute(trx);
@@ -75,16 +76,23 @@ export async function platformListContracts(userId: string) {
   });
 }
 
-export async function platformCreateDocument(userId: string, input: { code: string; title: string; kind: string; isTest: boolean; requiredForOperation?: boolean }) {
+export async function platformCreateDocument(userId: string, input: { code: string; title: string; kind: string; isTest: boolean; requiredForOperation?: boolean; organizationId?: string }) {
   return withPlatformContext(userId, async (trx) => {
     try {
       if (input.kind === "SUBSCRIPTION_ORDER") throw new ContractRuleError("CONTRACT_ORDER_USE_DEDICATED_ROUTE", 422);
-      const r = await sql<any>`INSERT INTO contract_documents (code, title, kind, is_test, required_for_operation, created_by_user_id)
-        VALUES (${input.code}, ${input.title}, ${input.kind}, ${input.isTest}, ${input.requiredForOperation ?? false}, ${userId})
+      // 158: solo un documento de PRUEBA puede dirigirse a una agencia (la base también lo exige).
+      const org = input.organizationId ?? null;
+      if (org) {
+        if (!input.isTest) throw new ContractRuleError("CONTRACT_SCOPE_TEST_ONLY", 422);
+        const o = (await sql<any>`SELECT id FROM organizations WHERE id = ${org} AND archived_at IS NULL`.execute(trx)).rows[0];
+        if (!o) throw new ContractNotFoundError();
+      }
+      const r = await sql<any>`INSERT INTO contract_documents (code, title, kind, is_test, required_for_operation, organization_id, created_by_user_id)
+        VALUES (${input.code}, ${input.title}, ${input.kind}, ${input.isTest}, ${input.requiredForOperation ?? false}, ${org}, ${userId})
         RETURNING id, code, title, kind, is_test, required_for_operation, organization_id, created_at`.execute(trx);
-      await audit(trx, userId, null, "CONTRACT_DOCUMENT_CREATED", "contract_document", r.rows[0].id, { code: input.code, kind: input.kind, is_test: input.isTest });
+      await audit(trx, userId, org, "CONTRACT_DOCUMENT_CREATED", "contract_document", r.rows[0].id, { code: input.code, kind: input.kind, is_test: input.isTest, organization_id: org });
       return r.rows[0];
-    } catch (err) { if (err instanceof ContractRuleError) throw err; mapDbError(err); }
+    } catch (err) { if (err instanceof ContractRuleError || err instanceof ContractNotFoundError) throw err; mapDbError(err); }
   });
 }
 
@@ -145,16 +153,28 @@ export async function platformPublishVersion(userId: string, versionId: string) 
   });
 }
 
-export async function platformRetireVersion(userId: string, versionId: string) {
+export async function platformRetireVersion(userId: string, versionId: string, reason?: string) {
   return withPlatformContext(userId, async (trx) => {
-    const cur = await sql<any>`SELECT status FROM contract_document_versions WHERE id = ${versionId} FOR UPDATE`.execute(trx);
+    const cur = await sql<any>`SELECT v.status, d.organization_id FROM contract_document_versions v JOIN contract_documents d ON d.id = v.document_id
+      WHERE v.id = ${versionId} FOR UPDATE OF v`.execute(trx);
     if (!cur.rows[0]) throw new ContractNotFoundError();
     if (cur.rows[0].status !== "published") throw new ContractRuleError("CONTRACT_VERSION_INVALID_TRANSITION");
     try {
+      // Retirar NO borra: la versión, sus aceptaciones y constancias se conservan (solo deja de estar vigente).
       await sql`UPDATE contract_document_versions SET status = 'retired', retired_by_user_id = ${userId} WHERE id = ${versionId}`.execute(trx);
-      await audit(trx, userId, null, "CONTRACT_VERSION_RETIRED", "contract_document_version", versionId, {});
+      await audit(trx, userId, cur.rows[0].organization_id ?? null, "CONTRACT_VERSION_RETIRED", "contract_document_version", versionId, reason ? { reason } : {});
       return (await sql<any>`SELECT ${versionFields} FROM contract_document_versions v WHERE v.id = ${versionId}`.execute(trx)).rows[0];
     } catch (err) { mapDbError(err); }
+  });
+}
+
+/** 158: administradoras activas de la agencia que Central puede designar como representante. */
+export async function platformEligibleSignatories(userId: string, organizationId: string) {
+  return withPlatformContext(userId, async (trx) => {
+    const o = (await sql<any>`SELECT id FROM organizations WHERE id = ${organizationId}`.execute(trx)).rows[0];
+    if (!o) throw new ContractNotFoundError();
+    return (await sql<{ user_id: string; email: string }>`SELECT user_id, email FROM public.app_platform_contract_eligible_signatories(${organizationId}::uuid)`.execute(trx)).rows
+      .map((r) => ({ userId: r.user_id, email: r.email }));
   });
 }
 

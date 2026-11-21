@@ -2,6 +2,13 @@
 
 ## Current Status
 
+## 2026-11-21 — 158: herramientas de Central para contratos — rama claude/central-contratos-admin, PR borrador, sin desplegar
+- Objetivo: administrar contratos desde ETNARA Central sin consola de base de datos. Reutiliza las rutas y controles del módulo (152/153/156/157); no lo reconstruye.
+- 158: un documento de PRUEBA puede dirigirse a una agencia (`contract_documents_scope`; los oficiales siguen siendo generales y la Orden exige su agencia). El aislamiento ya lo aplicaba la base desde 153 (lectura de versiones, guarda de aceptaciones, documentos obligatorios). `app_platform_contract_eligible_signatories(org)`: solo superadministración; administradoras activas (misma regla que la designación); devuelve cuenta y correo.
+- API: `POST /platform/contracts/documents` acepta `organizationId` (solo isTest; 422 CONTRACT_SCOPE_TEST_ONLY); `GET /platform/contracts` trae agencia del documento; `POST …/retire` acepta `reason` (auditado, nunca borra); `GET /platform/contracts/organizations/:org/eligible-signatories`.
+- Archivos: migrations/158, ops/158 rollback (se niega con documentos dirigidos), contracts.service, contracts.routes, verifyContract158 (16/16), tests/contractsCentral158, manifiesto, CI. CI local completo 76/76; 152/153/156/157 sin cambios en su resultado.
+- Siguiente: revisión de Rafa. Nada se fusiona, despliega, migra en producción ni activa sin su autorización.
+
 ## 2026-11-21 — 157: interruptor «Contratos» por agencia — rama claude/contratos-interruptor-agencia, PR borrador, sin desplegar
 - CONTRACTS se suma a los interruptores de Central (108): apagado por defecto, solo Central, con motivo y auditoría. orgFeatureGate: /organizations/:org/contracts y /role-terms → 404 FEATURE_NOT_ENABLED si la agencia no lo tiene (lecturas incluidas).
 - La base (app_runtime) exige el interruptor para nuevos códigos, aceptaciones, descargas registradas y aceptaciones de términos (CONTRACT_ORGANIZATION_NOT_ENABLED). Apagarlo no borra contratos ni constancias; Central sigue viéndolos.

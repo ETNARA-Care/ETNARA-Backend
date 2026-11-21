@@ -8,7 +8,7 @@ import {
   ContractForbiddenError, ContractNotFoundError, ContractRuleError, contractsModuleEnabled,
   orgAcceptVersion, orgAcceptanceCertificate, orgDocumentFile, orgGetVersion, orgListAcceptances, orgListContracts, orgRequestSignatureCode,
   platformContractOverview, platformCreateDocument, platformCreateVersion, platformListAcceptances, platformListContracts,
-  platformPublishVersion, platformRetireVersion, platformUpdateDraft,
+  platformEligibleSignatories, platformPublishVersion, platformRetireVersion, platformUpdateDraft,
 } from "./contracts.service.js";
 import {
   orgContractStatus, orgListSignatories, platformCreateSubscriptionOrder, platformDesignateSignatory, platformGetVersion,
@@ -50,6 +50,8 @@ const docBody = z.object({
   kind: z.enum(["SERVICE_AGREEMENT", "TERMS_OF_USE", "PRIVACY_NOTICE", "DATA_PROCESSING", "BUSINESS_ASSOCIATE", "OTHER"]),
   isTest: z.boolean(),
   requiredForOperation: z.boolean().optional(),
+  // 158: solo para documentos de prueba dirigidos a una agencia.
+  organizationId: z.string().uuid().optional(),
 }).strict();
 const versionBody = z.object({
   versionLabel: z.string().regex(/^[0-9A-Za-z][0-9A-Za-z.\-]{0,19}$/), body: z.string().min(50).max(200000), requiresNewAcceptance: z.boolean().optional(),
@@ -77,9 +79,11 @@ router.post("/platform/contracts/versions/:versionId/publish", requireAuth, asyn
   const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
   try { res.json({ version: await platformPublishVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
 });
+// 158: motivo opcional (Central lo pide siempre); queda en la auditoría. Retirar nunca borra evidencias.
+const retireBody = z.object({ reason: z.string().trim().min(5).max(500).optional() }).strict();
 router.post("/platform/contracts/versions/:versionId/retire", requireAuth, async (req: AuthenticatedRequest, res) => {
-  const v = uuid.safeParse(req.params.versionId); if (!v.success) return void bad(res);
-  try { res.json({ version: await platformRetireVersion(req.auth!.userId, v.data) }); } catch (x) { fail(x, res); }
+  const v = uuid.safeParse(req.params.versionId), b = retireBody.safeParse(req.body ?? {}); if (!v.success || !b.success) return void bad(res);
+  try { res.json({ version: await platformRetireVersion(req.auth!.userId, v.data, b.data.reason) }); } catch (x) { fail(x, res); }
 });
 // ---- 153: vista previa, aprobación jurídica, representantes, Orden de Suscripción y reglas de acceso
 router.get("/platform/contracts/versions/:versionId", requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -146,6 +150,10 @@ router.post("/platform/contracts/role-terms/:termsId/publish", requireAuth, asyn
 router.post("/platform/contracts/role-terms/:termsId/retire", requireAuth, async (req: AuthenticatedRequest, res) => {
   const t = uuid.safeParse(req.params.termsId); if (!t.success) return void bad(res);
   try { res.json({ roleTerms: await platformRetireRoleTerms(req.auth!.userId, t.data) }); } catch (x) { fail(x, res); }
+});
+router.get("/platform/contracts/organizations/:organizationId/eligible-signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = uuid.safeParse(req.params.organizationId); if (!o.success) return void bad(res);
+  try { res.json({ eligible: await platformEligibleSignatories(req.auth!.userId, o.data) }); } catch (x) { fail(x, res); }
 });
 const signatoryBody = z.object({ userId: uuid, fullName: z.string().trim().min(5).max(150).regex(/\S+\s+\S+/), title: z.string().trim().min(2).max(100), basis: z.string().trim().min(10).max(500) }).strict();
 router.get("/platform/contracts/organizations/:organizationId/signatories", requireAuth, async (req: AuthenticatedRequest, res) => {
