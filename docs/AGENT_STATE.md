@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-21 — 157: interruptor «Contratos» por agencia — rama claude/contratos-interruptor-agencia, PR borrador, sin desplegar
+- CONTRACTS se suma a los interruptores de Central (108): apagado por defecto, solo Central, con motivo y auditoría. orgFeatureGate: /organizations/:org/contracts y /role-terms → 404 FEATURE_NOT_ENABLED si la agencia no lo tiene (lecturas incluidas).
+- La base (app_runtime) exige el interruptor para nuevos códigos, aceptaciones, descargas registradas y aceptaciones de términos (CONTRACT_ORGANIZATION_NOT_ENABLED). Apagarlo no borra contratos ni constancias; Central sigue viéndolos.
+- No salta controles globales: CONTRACTS_MODULE, aprobación jurídica, publicación oficial, designación, firmas de prueba y CONTRACTS_ENFORCEMENT intactos.
+- Archivos: migrations/157, ops/157 rollback, orgFeatureRules, platformOrganizationFeatures, contracts.service (mapeo), verifyContract157 (16/16), fixtures de 152/153/156 con CONTRACTS encendido, tests/contractsSwitch157, manifiesto, CI.
+
 ## 2026-11-21 — 156: Contrato Oficial v1.1 — Word original, aprobación verificada y términos por función — rama claude/contrato-oficial-156, PR borrador, sin desplegar
 - Word original (.docx) por versión en `contract_source_files`: SHA-256 calculado por la base, igual al declarado, inmutable (sin UPDATE/DELETE/TRUNCATE). Lo carga Central; lo descarga la administración de la agencia (registro «docx» + auditoría).
 - Aprobación jurídica verificada: `POST …/legal-approval` con nombre, fecha y referencia + huellas del texto y del Word; la base fija `legal_approved_source_sha256`. Un SERVICE_AGREEMENT oficial no se publica sin referencia completa ni Word aprobado guardado.

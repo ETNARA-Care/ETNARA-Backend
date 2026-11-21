@@ -93,7 +93,16 @@ async function main() {
   }
 
   // ---------------------------------------------------------------- personas y agencias ficticias
-  const org = async (name: string) => (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
+  // 157: el módulo contractual se usa solo en agencias con el interruptor «Contratos» (aquí, todas las de la prueba).
+  // Esta verificación usa la base compartida del CI: el interruptor CONTRACTS de sus agencias se retira al terminar
+  // (otras verificaciones posteriores revierten migraciones anteriores a 157 sobre esta misma base).
+  const contractsSwitchOrgs: string[] = [];
+  const org = async (name: string) => {
+    const id = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
+    if ((await q(`SELECT 1 FROM pg_constraint WHERE conname='organization_features_feature_code_check' AND pg_get_constraintdef(oid) LIKE '%CONTRACTS%'`)).rowCount)
+      { await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) VALUES ($1,'CONTRACTS',true)`, [id]); contractsSwitchOrgs.push(id); }
+    return id;
+  };
   const orgA = await org(`Agencia Ficticia A ${tag}`), orgB = await org(`Agencia Ficticia B ${tag}`);
   type P = { email: string; userId: string; token: string; membership: string; orgId: string };
   async function person(key: string, orgId: string, roles: string[]): Promise<P> {
@@ -451,6 +460,7 @@ async function main() {
   check("26b. Con evidencia oficial, la reversión ordinaria se NIEGA y no borra nada", refused.includes("CONTRACT_ROLLBACK_REFUSED_OFFICIAL_EVIDENCE") && JSON.stringify(await counts()) === JSON.stringify(before26b) && (await q(`SELECT count(*)::int n FROM schema_migrations WHERE filename='152_contract_documents.sql'`)).rows[0].n === 1, refused);
 
   // ---------------------------------------------------------------- resultado
+  if (contractsSwitchOrgs.length) await q(`DELETE FROM organization_features WHERE feature_code='CONTRACTS' AND organization_id = ANY($1)`, [contractsSwitchOrgs]);
   server.close(); await pool.end(); await rt.end(); await db.end();
   const failed = results.filter((r) => !r.pass);
   for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"} | ${r.check}${r.pass ? "" : ` | ${r.detail}`}`);

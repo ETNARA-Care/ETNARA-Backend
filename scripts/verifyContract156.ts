@@ -84,7 +84,13 @@ async function main() {
   }
 
   // ---------------------------------------------------------------- agencias y personas ficticias
-  const org = async (name: string) => (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
+  // 157: el módulo contractual se usa solo en agencias con el interruptor «Contratos» (aquí, todas las de la prueba).
+  const org = async (name: string) => {
+    const id = (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,'HOME_CARE_AGENCY','active') RETURNING id`, [name])).rows[0].id;
+    if ((await q(`SELECT 1 FROM pg_constraint WHERE conname='organization_features_feature_code_check' AND pg_get_constraintdef(oid) LIKE '%CONTRACTS%'`)).rowCount)
+      await q(`INSERT INTO organization_features (organization_id,feature_code,enabled) VALUES ($1,'CONTRACTS',true)`, [id]);
+    return id;
+  };
   const orgN = await org(`Agencia Nueva Ficticia ${tag}`), orgE = await org(`Agencia Existente Ficticia ${tag}`), orgX = await org(`Agencia Otra Ficticia ${tag}`);
   type P = { email: string; userId: string; token: string; membership: string; orgId: string };
   async function person(key: string, orgId: string, roles: string[]): Promise<P> {
