@@ -7,8 +7,9 @@ const base = {
   visibility: "INTERNAL",
   regionLabel: "Caguas",
   roleLabel: "Cuidador/a",
-  startsAt: "2026-11-21T12:00:00.000Z",
-  endsAt: "2026-11-21T16:00:00.000Z",
+  // Fechas relativas: con fechas fijas la prueba caducó el 21-nov-2026 (el inicio no puede quedar en el pasado).
+  startsAt: new Date(Date.now() + 2 * 86400_000).toISOString(),
+  endsAt: new Date(Date.now() + 2 * 86400_000 + 4 * 3600_000).toISOString(),
 };
 const ok = (patch: Record<string, unknown>) => smartMatchPublishSchema.safeParse({ ...base, ...patch }).success;
 

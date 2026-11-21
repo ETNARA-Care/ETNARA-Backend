@@ -2,6 +2,13 @@
 
 ## Current Status
 
+## 2026-11-21 — 156: Contrato Oficial v1.1 — Word original, aprobación verificada y términos por función — rama claude/contrato-oficial-156, PR borrador, sin desplegar
+- Word original (.docx) por versión en `contract_source_files`: SHA-256 calculado por la base, igual al declarado, inmutable (sin UPDATE/DELETE/TRUNCATE). Lo carga Central; lo descarga la administración de la agencia (registro «docx» + auditoría).
+- Aprobación jurídica verificada: `POST …/legal-approval` con nombre, fecha y referencia + huellas del texto y del Word; la base fija `legal_approved_source_sha256`. Un SERVICE_AGREEMENT oficial no se publica sin referencia completa ni Word aprobado guardado.
+- Términos por función (`role_terms_versions`, `user_role_terms_acceptances`): solo líneas íntegras del contrato fuente (Anexo E); confirmación jurídica propia + contrato fuente aprobado para publicar; aceptación individual por función (SUPERVISOR → Administración, WORKER → Cuidadores, FAMILY → Familiares); historial sin sobrescritura. No bloquea nada.
+- Archivos: migrations/156, ops/156 rollback, contracts.roleTerms.ts, contractsOfficial.service.ts, contracts.routes.ts, contracts.service.ts, verifyContract156 (29/29; 33/33 con el Oficial v1.1 local), tests/contractOfficial156, manifiesto de privilegios, CI. Aparte: fechas relativas en tests/smartmatchGate5Privacy (caducaban el 21-nov).
+- Siguiente: revisión de Rafa; nada se fusiona, despliega ni publica sin su autorización.
+
 ## 2026-11-16 — 155: SmartMatch «Hay una nueva oportunidad» (bell + push) — rama claude/smartmatch-push-new-opportunity, PR borrador, sin desplegar
 - Al publicar una oportunidad interna, aviso a cada cuidador activo de esa agencia (rol WORKER + membresía de trabajador activa). Push solo si la agencia tiene PUSH_NOTIFICATIONS; respeta silencio nocturno; máx. 1 push cada 30 min por persona (el resto, solo campana); al cubrirse/cancelarse/vencer se marcan leídos y se descartan los push pendientes. Texto fijo, sin municipio, horario ni persona.
 - Archivos: migrations/155, ops/155 rollback (desregistra 155), notifications.service (texto), pushTarget (/caregiver/smartmatch), verifySmartMatchNewOpportunityPush (21/21), verifyPushNotifications S20 (92/92), verifyMigrationRollback acepta tablas de referencia (155 4/4, 154 4/4), tests/push155, CI.

@@ -36,6 +36,8 @@ const DB_RULES = new Set([
   "CONTRACT_LEGAL_APPROVAL_REQUIRED", "CONTRACT_LEGAL_APPROVAL_REFERENCE_REQUIRED", "CONTRACT_SIGNATORY_NOT_DESIGNATED", "CONTRACT_SIGNATORY_IMMUTABLE",
   "CONTRACT_PLACEHOLDER_TEXT_NOT_ALLOWED", "CONTRACT_DRAFT_MARKED_NOT_SIGNABLE", "CONTRACT_COMMERCIAL_APPROVAL_REQUIRED",
   "CONTRACT_COMMERCIAL_APPROVAL_REFERENCE_REQUIRED", "CONTRACT_ORDER_TERMS_INVALID",
+  // 156
+  "CONTRACT_LEGAL_APPROVAL_REFERENCE_INCOMPLETE", "CONTRACT_SOURCE_FILE_REQUIRED", "CONTRACT_SOURCE_FILE_IMMUTABLE",
 ]);
 const UNPROCESSABLE = new Set(["CONTRACT_TEST_BANNER_REQUIRED", "CONTRACT_OFFICIAL_CANNOT_BE_MARKED_TEST", "CONTRACT_ORDER_TERMS_INVALID"]);
 /** Traduce los errores de la base a errores de dominio sin exponer su texto. */
@@ -261,7 +263,10 @@ export async function orgGetVersion(userId: string, organizationId: string, vers
       designation: designation ? { fullName: designation.full_name, title: designation.title } : null,
       legallyApproved: v.is_test || v.legal_status === "legally_approved",
     };
-    return { ...v, acceptanceCheckboxText: checkbox, signer, authorityDeclaration: decl, acceptanceStatementTemplate: acceptanceStatement(v.organization_name, v.title, v.version_label, v.content_sha256, { fullName: "{nombre completo}", title: "{cargo}" }) };
+    // 156: Word original aprobado (si está guardado), para descargarlo íntegro.
+    const sf = (await sql<any>`SELECT file_name, byte_size, sha256 FROM contract_source_files WHERE document_version_id = ${versionId}`.execute(trx)).rows[0];
+    const sourceFile = sf ? { fileName: sf.file_name, byteSize: sf.byte_size, sha256: sf.sha256 } : null;
+    return { ...v, sourceFile, acceptanceCheckboxText: checkbox, signer, authorityDeclaration: decl, acceptanceStatementTemplate: acceptanceStatement(v.organization_name, v.title, v.version_label, v.content_sha256, { fullName: "{nombre completo}", title: "{cargo}" }) };
   });
 }
 
