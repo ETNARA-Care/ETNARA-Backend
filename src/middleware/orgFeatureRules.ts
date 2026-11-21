@@ -1,5 +1,5 @@
 /** Which routes belong to a pilot feature (pure; used by orgFeatureGate). */
-export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS";
+export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS" | "CONTRACTS";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 // 145: case-insensitive, like Express routing (a path with other capitals must not skip the gate).
@@ -37,6 +37,10 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; 
   { pattern: new RegExp(`^/organizations/(${UUID})/me/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
   // F3 (129): the family's approved reports of her resident.
   { pattern: new RegExp(`^/organizations/(${UUID})/care-recipients/${UUID}/shift-reports(/|$)`, "i"), feature: "SHIFT_REPORTS" },
+  // Contratos por agencia (157): contrato, constancias, Word, firma y términos por función. Se suma a
+  // CONTRACTS_MODULE (global): con el módulo apagado las rutas siguen respondiendo 404.
+  { pattern: new RegExp(`^/organizations/(${UUID})/contracts(/|$)`, "i"), feature: "CONTRACTS" },
+  { pattern: new RegExp(`^/organizations/(${UUID})/role-terms(/|$)`, "i"), feature: "CONTRACTS" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {

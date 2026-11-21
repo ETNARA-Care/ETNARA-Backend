@@ -44,7 +44,7 @@ const UNPROCESSABLE = new Set(["CONTRACT_TEST_BANNER_REQUIRED", "CONTRACT_OFFICI
 export function mapDbError(err: unknown): never {
   const e = err as { code?: string; message?: string; constraint?: string };
   const msg = e?.message ?? "";
-  if (msg === "CONTRACT_SIGNATORY_NOT_DESIGNATED") throw new ContractRuleError(msg, 403);
+  if (msg === "CONTRACT_SIGNATORY_NOT_DESIGNATED" || msg === "CONTRACT_ORGANIZATION_NOT_ENABLED") throw new ContractRuleError(msg, 403);
   if (msg === "CONTRACT_ACCEPTANCE_ADMIN_REQUIRED" || msg === "CONTRACT_IDENTITY_NOT_VERIFIED" || (e?.code === "42501" && /row-level security/.test(msg))) throw new ContractForbiddenError();
   if (DB_RULES.has(msg)) throw new ContractRuleError(msg, UNPROCESSABLE.has(msg) ? 422 : 409);
   if (e?.code === "23505") {

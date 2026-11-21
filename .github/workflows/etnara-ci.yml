@@ -339,6 +339,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 156
 
+      - name: PostgreSQL 157 per-agency Contracts switch (off by default, only Central with a reason, disabled agencies get 404 and the database refuses new evidence, never bypasses CONTRACTS_MODULE, legal approval, official publishing, designation, test signing or enforcement; turning it off keeps every contract and certificate)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyContract157.ts
+
+      - name: PostgreSQL 157 rollback (schema identical to 156, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 157
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
