@@ -363,6 +363,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 158
 
+      - name: PostgreSQL 159 one caregiver profile per person on invitation acceptance (LaCasita - existing profile in another agency, admin who is also caregiver, several agencies, already caregiver, provisional profile with credentials, identity, admin permissions intact, isolation, family and new accounts unchanged, audit, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyWorkerProfileLink159.ts
+
+      - name: PostgreSQL 159 rollback (schema identical to 158, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 159
+
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
