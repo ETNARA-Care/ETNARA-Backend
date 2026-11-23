@@ -82,7 +82,11 @@ function translateDatabaseError(error: unknown): never {
     "ROLE_NOT_CONFIGURED",
     "WORKER_NOT_ACTIVE",
     "WORKER_ALREADY_LINKED",
+    "WORKER_ALREADY_IN_ORGANIZATION",
+    "WORKER_PROFILE_CONFLICT",
   ].find((code) => message.includes(code));
+  // 159: red de seguridad — nunca un 500 por el perfil único de cuidador (workers.user_id UNIQUE).
+  if (!known && message.includes("workers_user_id_key")) throw new AccessInvitationError("WORKER_PROFILE_CONFLICT");
   if (known) throw new AccessInvitationError(known);
   throw error;
 }

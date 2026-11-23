@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-23 — 159: una persona, un perfil de cuidador al aceptar invitaciones (LaCasita) — rama claude/159-perfil-unico-invitaciones, PR borrador, sin desplegar
+- Causa (producción, 23-nov): workers.user_id UNIQUE; la invitación de cuidador intentaba vincular una ficha nueva a una cuenta que ya tenía perfil → workers_user_id_key → 500 (12 veces).
+- 159 redefine solo la rama de cuidador de app_activate_access_invitation (046): con perfil propio, la membresía de la organización pasa a apuntar al perfil único (auditado WORKER_PROFILE_LINKED_ON_ACCEPT); ya cuidadora en la organización → WORKER_ALREADY_IN_ORGANIZATION; ficha provisional no vacía → WORKER_PROFILE_CONFLICT. Nada se borra. Backend traduce ambos códigos y convierte workers_user_id_key en WORKER_PROFILE_CONFLICT (nunca 500).
+- Archivos: migrations/159, ops/159 rollback (restaura 046 exacta), accessInvitations.service, verifyWorkerProfileLink159 (19/19), rollback 4/4, tests/workerProfileLink159, CI. Manifiesto sin cambios.
+- Siguiente: revisión de Rafa. Nada se fusiona, despliega ni migra en producción sin su autorización.
+
 ## 2026-11-21 — 158: herramientas de Central para contratos — rama claude/central-contratos-admin, PR borrador, sin desplegar
 - Objetivo: administrar contratos desde ETNARA Central sin consola de base de datos. Reutiliza las rutas y controles del módulo (152/153/156/157); no lo reconstruye.
 - 158: un documento de PRUEBA puede dirigirse a una agencia (`contract_documents_scope`; los oficiales siguen siendo generales y la Orden exige su agencia). El aislamiento ya lo aplicaba la base desde 153 (lectura de versiones, guarda de aceptaciones, documentos obligatorios). `app_platform_contract_eligible_signatories(org)`: solo superadministración; administradoras activas (misma regla que la designación); devuelve cuenta y correo.
