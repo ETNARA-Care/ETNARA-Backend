@@ -174,6 +174,3 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public;
 
 REVOKE ALL ON FUNCTION app_activate_access_invitation(text, text, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_activate_access_invitation(text, text, uuid) TO app_runtime;
-
-REVOKE ALL ON FUNCTION app_activate_access_invitation(text, text, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_activate_access_invitation(text, text, uuid) TO app_runtime;
