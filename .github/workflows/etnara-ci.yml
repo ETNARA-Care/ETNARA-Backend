@@ -417,6 +417,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyEstablishmentDocumentDates.ts
 
+      - name: PostgreSQL 161 independent caregiver - self-declared documents, own eligibility with audited confirmation, provider reports to the family (no agency inheritance, schedule conflicts, permissions, family isolation, agencies and homes unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySelfDeclared161.ts
+
+      - name: PostgreSQL 161 rollback (schema identical to 160, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 161
+
       - name: PostgreSQL activity photos upload (EXIF removal, review, consent, family, concurrency)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

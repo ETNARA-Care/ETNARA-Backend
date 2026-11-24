@@ -259,18 +259,13 @@ async function main() {
   const iso = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
   const sh1 = await call("POST", `/organizations/${I}/shifts`, tI, { careRecipientId: recId, scheduledStart: iso(-10), scheduledEnd: iso(120), requiredRole: "INDEPENDENT_CAREGIVER" });
   const shiftId = (sh1.body.shift ?? sh1.body)?.id as string;
-  const blocked = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
-  const leftovers = await q(`SELECT 1 FROM assignments WHERE shift_id=$1`, [shiftId]);
-  const myCompliance = await call("GET", `/organizations/${I}/workers/${myMem}/compliance`, tI);
-  const blockedCode = String(blocked.body.error ?? "");
-  check("B1. Crea su turno; autoasignarse sin requisitos configurados sigue BLOQUEADO por la elegibilidad actual (PR C lo resolverá), con su resumen legible",
-    sh1.status === 201 && blocked.status === 409 && (blockedCode === "NO_APPLICABLE_REQUIREMENT_SET" || blockedCode.startsWith("WORKER_NOT_ELIGIBLE")) && myCompliance.status === 200 && leftovers.rowCount === 0,
-    [sh1.status, blocked.status, blocked.body, myCompliance.status]);
-  // Fixture SOLO de prueba: una política propia sin requisitos obligatorios deja la elegibilidad en «elegible».
-  // El PR C sustituye esto por los documentos autodeclarados; aquí solo se demuestra el flujo del portal.
-  const fixtureSet = async (o: string) => (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id, worker_role, name) VALUES ($1,'INDEPENDENT_CAREGIVER','Fixture de prueba 160B') RETURNING id`, [o])).rows[0].id;
-  await fixtureSet(I);
+  // 161 (PR C): sin política PROPIA no hay requisitos que evaluar (ni del catálogo de la plataforma): se asigna.
   const self = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
+  const myCompliance = await call("GET", `/organizations/${I}/workers/${myMem}/compliance`, tI);
+  check("B1. Crea su turno; sin requisitos propios configurados se autoasigna (161) y su resumen es legible",
+    sh1.status === 201 && self.status === 201 && myCompliance.status === 200 && myCompliance.body.eligibility === "eligible", [sh1.status, self.status, self.body.error, myCompliance.body]);
+  // Fixture SOLO de prueba para la práctica de Ana (abajo): política propia sin requisitos obligatorios.
+  const fixtureSet = async (o: string) => (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id, worker_role, name) VALUES ($1,'INDEPENDENT_CAREGIVER','Fixture de prueba 160B') RETURNING id`, [o])).rows[0].id;
   const again = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
   const mine = await call("GET", `/organizations/${I}/me/shifts`, tI);
   const selfAudit = await q(`SELECT 1 FROM audit_log WHERE action='SHIFT_SELF_ASSIGNED' AND organization_id=$1`, [I]);

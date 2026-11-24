@@ -41,7 +41,18 @@ export interface RequirementResult {
   requiresOrganizationReview: boolean;
   satisfied: boolean;
   reason: string;
+  /** 161: fecha de vencimiento del documento considerado (para «Vence pronto» en el independiente). */
+  expiresAt?: string | null;
+  /** 161: el documento considerado lo registró su titular (autodeclarado). */
+  selfDeclared?: boolean;
 }
+
+/**
+ * 161: estado de un cuidador independiente con requisitos propios faltantes o vencidos. No es «no elegible»:
+ * puede asignarse tras una confirmación expresa y auditada (que NO es autorización legal para trabajar).
+ * Solo se produce en organizaciones INDEPENDENT_PROVIDER.
+ */
+export const SELF_DECLARATION_CONFIRMATION_STATUS = "confirmation_required";
 
 export interface EligibilityResult {
   eligibilityStatus: string;
@@ -130,6 +141,18 @@ export async function evaluateWorkerEligibilityInTransaction(
     const membership = membershipRow.rows[0];
     if (!membership) throw new MembershipNotFoundError();
 
+    // 161: en un cuidador independiente la política es SOLO la suya y es opcional (nunca la del catálogo de la
+    // plataforma ni la de otra organización). Sin política propia no hay requisitos que evaluar.
+    const independent = (await sql<{ v: boolean }>`SELECT public.app_org_is_independent(${organizationId}::uuid) AS v`.execute(trx)).rows[0]?.v === true;
+    if (independent) {
+      const own = await sql<{ id: string }>`
+        SELECT id FROM requirement_sets WHERE organization_id = ${organizationId}
+          AND (worker_role IS NULL OR lower(worker_role) = lower(${membership.internal_role}))
+        ORDER BY (worker_role IS NOT NULL) DESC, created_at LIMIT 1`.execute(trx);
+      if (!own.rows[0]) {
+        return { eligibilityStatus: membership.status === "active" ? "eligible" : "not_eligible", requirementSetId: "", requirements: [] };
+      }
+    }
     const requirementSetId = await findApplicableRequirementSet(trx, organizationId, membership.internal_role);
 
     // Membership inactive -> not_eligible immediately, regardless of
@@ -168,8 +191,9 @@ export async function evaluateWorkerEligibilityInTransaction(
         status: string;
         expires_at: string | null;
         document_id: string | null;
+        declared_by_holder: boolean;
       }>`
-        SELECT id, status, expires_at, document_id FROM credentials
+        SELECT id, status, expires_at::text AS expires_at, document_id, declared_by_holder FROM credentials
         WHERE worker_id = ${membership.worker_id} AND credential_type_id = ${req.credential_type_id}
           AND status != 'revoked'
         ORDER BY created_at DESC
@@ -189,7 +213,10 @@ export async function evaluateWorkerEligibilityInTransaction(
           reason = "CREDENTIAL_NOT_ACTIVE";
         } else if (!notExpired) {
           reason = "CREDENTIAL_EXPIRED";
-        } else if (req.requires_organization_review) {
+        } else if (!independent && (req.requires_organization_review || credential.declared_by_holder)) {
+          // 161: un documento AUTODECLARADO (registrado por su titular en su práctica independiente) nunca cuenta
+          // para una agencia u hogar sin la revisión aprobada de ESA organización, aunque su requisito no la pida:
+          // la agencia no hereda nada de la modalidad independiente.
           // Private caregiver credential documents are reviewed by the
           // organization that employs/contracts the caregiver. ETNARA Platform
           // has no runtime document-inspection path and therefore must never be
@@ -237,13 +264,17 @@ export async function evaluateWorkerEligibilityInTransaction(
         requiresOrganizationReview: req.requires_organization_review,
         satisfied,
         reason,
+        expiresAt: credential?.expires_at ?? null,
+        selfDeclared: credential?.declared_by_holder ?? false,
       });
 
       if (req.is_mandatory && !satisfied) allMandatorySatisfied = false;
     }
 
-    const eligibilityStatus = allMandatorySatisfied ? "eligible" : "not_eligible";
-    await persistEligibility(trx, membershipId, organizationId, requirementSetId, eligibilityStatus);
+    // 161: el independiente con faltantes o vencidos queda en «confirmación requerida» (no aprobado ni
+    // verificado por nadie); el registro histórico usa el valor existente not_eligible.
+    const eligibilityStatus = allMandatorySatisfied ? "eligible" : independent ? SELF_DECLARATION_CONFIRMATION_STATUS : "not_eligible";
+    await persistEligibility(trx, membershipId, organizationId, requirementSetId, eligibilityStatus === SELF_DECLARATION_CONFIRMATION_STATUS ? "not_eligible" : eligibilityStatus);
 
     return { eligibilityStatus, requirementSetId, requirements: requirementResults };
   }

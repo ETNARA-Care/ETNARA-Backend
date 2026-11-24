@@ -4,7 +4,7 @@ import { OrganizationAccessDeniedError } from "../organizationContext/organizati
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError } from "../../context/errors.js";
-import { evaluateWorkerEligibilityInTransaction } from "../eligibility/eligibility.service.js";
+import { evaluateWorkerEligibilityInTransaction, SELF_DECLARATION_CONFIRMATION_STATUS } from "../eligibility/eligibility.service.js";
 
 type Trx = Parameters<Parameters<typeof withTenantContext>[1]>[0];
 
@@ -26,6 +26,19 @@ export class WorkerNotEligibleError extends Error {
     this.name = "WorkerNotEligibleError";
   }
 }
+/** 161: el independiente tiene requisitos propios faltantes o vencidos; debe confirmar expresamente (auditado). */
+export class SelfDeclarationConfirmationRequiredError extends Error {
+  constructor(public readonly missing: Array<{ credentialTypeCode: string; reason: string; expiresAt: string | null }>) {
+    super("SELF_DECLARATION_CONFIRMATION_REQUIRED");
+    this.name = "SelfDeclarationConfirmationRequiredError";
+  }
+}
+
+/** 161: texto fijo que la persona confirma; se guarda en la auditoría tal cual. */
+export const SELF_DECLARATION_NOTICE =
+  "ETNARA Care no verifica ni certifica documentos. Esta confirmación no sustituye los requisitos legales que te correspondan.";
+export const SELF_DECLARATION_STATEMENT = "Confirmo que cumplo los requisitos de este servicio.";
+
 export class ShiftCancelledError extends Error {
   constructor() {
     super("SHIFT_CANCELLED");
@@ -209,7 +222,7 @@ export async function assignWorkerToShiftInTransaction(
   organizationId: string,
   shiftId: string,
   input: CreateAssignmentInput,
-  options: { exceptSmartMatchOpportunityId?: string } = {}
+  options: { exceptSmartMatchOpportunityId?: string; selfDeclarationConfirmedBy?: string } = {}
 ) {
   assertUuid(shiftId, "shiftId");
   {
@@ -242,7 +255,15 @@ export async function assignWorkerToShiftInTransaction(
     await lockWorkerSchedule(trx, membership.id);
 
     const eligibility = await evaluateWorkerEligibilityInTransaction(trx, organizationId, input.organizationWorkerMembershipId);
-    if (eligibility.eligibilityStatus !== "eligible") {
+    // 161: solo un independiente llega a «confirmación requerida». Sin la confirmación expresa de la propia
+    // persona no se asigna; con ella se asigna y queda auditado más abajo. Agencias y hogares: igual que siempre.
+    const selfDeclarationMissing = eligibility.eligibilityStatus === SELF_DECLARATION_CONFIRMATION_STATUS
+      ? eligibility.requirements.filter((r) => r.isMandatory && !r.satisfied).map((r) => ({ credentialTypeCode: r.credentialTypeCode, reason: r.reason, expiresAt: r.expiresAt ?? null }))
+      : null;
+    if (selfDeclarationMissing && !(options.selfDeclarationConfirmedBy && membership.user_id === options.selfDeclarationConfirmedBy)) {
+      throw new SelfDeclarationConfirmationRequiredError(selfDeclarationMissing);
+    }
+    if (eligibility.eligibilityStatus !== "eligible" && !selfDeclarationMissing) {
       throw new WorkerNotEligibleError(eligibility.eligibilityStatus);
     }
 
@@ -284,6 +305,15 @@ export async function assignWorkerToShiftInTransaction(
     await sql`UPDATE shifts SET status = 'confirmed', updated_at = now() WHERE id = ${shiftId} AND status = 'unassigned'`.execute(
       trx
     );
+    if (selfDeclarationMissing) {
+      // 161: la confirmación queda en la asignación (para iniciar la visita) y en la auditoría.
+      await sql`UPDATE assignments SET self_declaration_confirmed_at = now() WHERE id = ${result.rows[0].id}`.execute(trx);
+      await sql`
+        INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, previous_value, new_value)
+        VALUES (${options.selfDeclarationConfirmedBy ?? null}, ${organizationId}, ${organizationId}, 'SELF_DECLARATION_CONFIRMED', 'assignment', ${result.rows[0].id}, NULL,
+                ${JSON.stringify({ shiftId, membershipId: input.organizationWorkerMembershipId, missing: selfDeclarationMissing, statement: SELF_DECLARATION_STATEMENT, notice: SELF_DECLARATION_NOTICE })}::jsonb)
+      `.execute(trx);
+    }
 
     await sql`
       WITH closed_campaigns AS (
@@ -473,7 +503,7 @@ export class SelfAssignNotAvailableError extends Error {
  * alrededor de la elegibilidad: agencias y hogares no pueden usar este endpoint y su flujo no cambia.
  * PR C: aquí se evaluará la confirmación de documentos autodeclarados antes de asignar.
  */
-export async function selfAssignMyShift(userId: string, organizationId: string, shiftId: string): Promise<AssignmentRow> {
+export async function selfAssignMyShift(userId: string, organizationId: string, shiftId: string, input: { confirmSelfDeclaration?: boolean } = {}): Promise<AssignmentRow> {
   assertUuid(shiftId, "shiftId");
   const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
     const independent = await sql<{ independent: boolean }>`SELECT public.app_org_is_independent(${organizationId}::uuid) AS independent`.execute(trx);
@@ -486,7 +516,8 @@ export async function selfAssignMyShift(userId: string, organizationId: string, 
     const membership = own.rows[0];
     if (!membership) throw new MembershipNotInOrgError();
 
-    const { assignment } = await assignWorkerToShiftInTransaction(trx, organizationId, shiftId, { organizationWorkerMembershipId: membership.id });
+    const { assignment } = await assignWorkerToShiftInTransaction(trx, organizationId, shiftId, { organizationWorkerMembershipId: membership.id },
+      input.confirmSelfDeclaration === true ? { selfDeclarationConfirmedBy: userId } : {});
 
     // Igual que al aceptar: su agenda confirmada en todas sus organizaciones (solo ella conoce el resultado).
     await lockPersonSchedule(trx, membership.worker_id);

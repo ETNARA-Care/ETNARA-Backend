@@ -99,11 +99,11 @@ interface ReportRow {
   id: string; shift_id: string; organization_worker_membership_id: string; care_recipient_id: string; version: number; status: string;
   content: Json; family_sections: Json | null; agency_summary: string | null; generated_at: string; approved_at: string | null;
   approved_by_user_id: string | null; approver_email: string | null; review_deadline_at: string | null; caregiver_note: string | null;
-  caregiver_note_at: string | null; submitted_at: string | null;
+  caregiver_note_at: string | null; submitted_at: string | null; published_by_provider: boolean;
 }
 const REPORT_COLUMNS = sql`r.id, r.shift_id, r.organization_worker_membership_id, r.care_recipient_id, r.version, r.status, r.content,
   r.family_sections, r.agency_summary, r.generated_at, r.approved_at, r.approved_by_user_id, u.email AS approver_email,
-  r.review_deadline_at, r.caregiver_note, r.caregiver_note_at, r.submitted_at`;
+  r.review_deadline_at, r.caregiver_note, r.caregiver_note_at, r.submitted_at, r.published_by_provider`;
 
 /** A draft never sent by the caregiver before her 24 h ended: still DRAFT, unchanged; the agency reviews it. */
 const windowExpired = (r: ReportRow) => r.status === "DRAFT" && r.review_deadline_at !== null && new Date(r.review_deadline_at).getTime() < Date.now();
@@ -114,7 +114,7 @@ function toReport(r: ReportRow, history?: Json[]) {
     version: r.version, status: r.status, content: r.content, familySections: r.family_sections, agencySummary: r.agency_summary,
     generatedAt: iso(r.generated_at), approvedAt: iso(r.approved_at), approvedBy: r.approved_by_user_id ? { userId: r.approved_by_user_id, email: r.approver_email } : null,
     reviewDeadlineAt: iso(r.review_deadline_at), caregiverNote: r.caregiver_note, caregiverNoteAt: iso(r.caregiver_note_at),
-    submittedAt: iso(r.submitted_at), caregiverWindowExpired: windowExpired(r),
+    submittedAt: iso(r.submitted_at), caregiverWindowExpired: windowExpired(r), publishedByProvider: r.published_by_provider === true,
     ...(history ? { history } : {}),
   };
 }
@@ -227,6 +227,36 @@ export async function approveShiftReport(userId: string, organizationId: string,
       family_sections = ${JSON.stringify(familySections)}::jsonb, agency_summary = ${input.agencySummary ?? null}
       WHERE id = ${reportId}`.execute(trx);
     await appendEvent(trx, organizationId, reportId, userId, "APPROVED", { familySections, summary: Boolean(input.agencySummary), fromStatus: r.status });
+    const fresh = await lockReport(trx, organizationId, reportId);
+    return { report: toReport(fresh, await historyOf(trx, reportId)) };
+  });
+}
+
+/**
+ * 161: POST /shift-reports/:id/publish-as-provider. El cuidador independiente publica a la familia el informe de
+ * SU visita como «Informe del proveedor» (sin revisión ni aprobación de terceros). Solo su única persona operativa
+ * y solo para sus propios informes; la base de datos (161) exige lo mismo. Agencias y hogares no cambian: su
+ * informe sigue necesitando la aprobación de otra persona (SHIFT_REPORT_SELF_APPROVAL).
+ */
+export async function publishShiftReportAsProvider(userId: string, organizationId: string, reportId: string, input: z.infer<typeof approveSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const operator = (await sql<{ ok: boolean }>`SELECT public.app_is_independent_operator(${userId}::uuid, ${organizationId}::uuid) AS ok`.execute(trx)).rows[0]?.ok;
+    if (!operator) throw new ShiftReportError("SHIFT_REPORT_PROVIDER_PUBLISH_INDEPENDENT_ONLY", 403);
+    const r = await lockReport(trx, organizationId, reportId);
+    const own = await sql`SELECT 1 FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.id = ${r.organization_worker_membership_id} AND w.user_id = ${userId}`.execute(trx);
+    if (!own.rows[0]) throw new ShiftReportError("SHIFT_REPORT_NOT_OWN", 403);
+    if (r.status === "APPROVED" || r.status === "SUPERSEDED") throw new ShiftReportError("SHIFT_REPORT_ALREADY_APPROVED", 409);
+    if (!["DRAFT", "SUBMITTED", "RETURNED"].includes(r.status)) throw new ShiftReportError("SHIFT_REPORT_NOT_DRAFT", 409);
+    if (new Date(input.expectedGeneratedAt).getTime() !== new Date(r.generated_at).getTime()) throw new ShiftReportError("SHIFT_REPORT_CHANGED", 409);
+    // Nunca «Cuidador: —»: sin nombre profesional en el informe no se publica (la base lo exige también).
+    const named = await sql<{ ok: boolean }>`SELECT COALESCE(btrim(content->'caregiver'->>'name'), '') <> '' AS ok FROM shift_reports WHERE id = ${reportId}`.execute(trx);
+    if (!named.rows[0]?.ok) throw new ShiftReportError("PROVIDER_NAME_REQUIRED", 409);
+    const familySections: FamilySections = { ...FAMILY_SECTION_DEFAULTS, ...input.familySections } as FamilySections;
+    await sql`UPDATE shift_reports SET status = 'APPROVED', approved_at = now(), approved_by_user_id = ${userId}, published_by_provider = true,
+      family_sections = ${JSON.stringify(familySections)}::jsonb, agency_summary = ${input.agencySummary ?? null}
+      WHERE id = ${reportId}`.execute(trx);
+    await appendEvent(trx, organizationId, reportId, userId, "APPROVED", { familySections, summary: Boolean(input.agencySummary), fromStatus: r.status, publishedByProvider: true });
     const fresh = await lockReport(trx, organizationId, reportId);
     return { report: toReport(fresh, await historyOf(trx, reportId)) };
   });
