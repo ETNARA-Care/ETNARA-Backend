@@ -2,7 +2,8 @@
  * 163 · Interruptor de la modalidad «Cuidador independiente» en ETNARA Central. 24-nov-2026.
  * Datos FICTICIOS, base PROPIA desechable, ningún correo real (Resend interceptado). App real por HTTP como app_runtime.
  * Cubre: solo administración de plataforma; motivo obligatorio; auditoría (anterior, nuevo, persona, fecha, motivo)
- * en un registro solo de añadir; encender bloqueado sin INDEPENDENT_MODALITY_ACTIVATION_ALLOWED=on; apagar siempre;
+ * en un registro solo de añadir; encender bloqueado sin INDEPENDENT_MODALITY_ACTIVATION_ALLOWED=on y sin una autorización
+ * de activación vigente en la base (segundo candado: un solo uso, vencimiento, solo por operación); apagar siempre;
  * el interruptor gobierna el registro de nuevos independientes y no corta a los ya registrados; agencias y hogares
  * sin cambios; protecciones en la base (sin escritura directa, bandera falsificada, administración revocada);
  * reversión y reaplicación.
@@ -119,7 +120,44 @@ async function main() {
   process.env.INDEPENDENT_MODALITY_ACTIVATION_ALLOWED = "on";
   const noReason = await call("PATCH", PI, tC, { enabled: true }), shortReason = await call("PATCH", PI, tC, { enabled: true, reason: "corto" });
   check("M5. Sin motivo (o con menos de 10 caracteres) no se cambia nada (400)", noReason.status === 400 && shortReason.status === 400 && (await state()) === false && (await events()).length === 0, [noReason.status, shortReason.status]);
+  // ---- Segundo candado (base de datos): sin autorización de activación vigente nadie enciende ------------------------
+  const authRow = async () => (await q(`SELECT id, consumed_at, consumed_by_user_id, revoked_at, revoked_reason FROM platform_modality_activation_authorizations ORDER BY created_at DESC LIMIT 1`)).rows[0] as Json | undefined;
+  const locked0 = await call("PATCH", PI, tC, { enabled: true, reason });
+  const owner0 = await suErr(`UPDATE platform_modalities SET enabled=true WHERE code='INDEPENDENT_PROVIDER'`);
+  const ownerIns = await suErr(`INSERT INTO platform_modalities (code, enabled) VALUES ('INDEPENDENT_PROVIDER', true) ON CONFLICT (code) DO UPDATE SET enabled = true`);
+  const g0b = await call("GET", P, tC);
+  check("L1. Candado: con la variable del servidor y Central, pero sin autorización en la base → 409 MODALITY_ACTIVATION_LOCKED; tampoco el propietario de la base enciende con UPDATE o INSERT",
+    locked0.status === 409 && locked0.body.error === "MODALITY_ACTIVATION_LOCKED" && owner0.includes("MODALITY_ACTIVATION_LOCKED") && ownerIns.includes("MODALITY_ACTIVATION_LOCKED")
+    && (await state()) === false && (await events()).length === 0 && g0b.body.modalities?.[0]?.databaseUnlocked === false && g0b.body.modalities?.[0]?.canEnable === false,
+    [locked0, owner0, ownerIns, g0b.body]);
+  const rtOps = await (async () => { try { await rt.query(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','x','intento desde la aplicación',5)`); return "OK"; } catch (e) { return (e as Error).message; } })();
+  const badWindow = await suErr(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','Operación','Ventana demasiado larga',1441)`);
+  const noReasonOps = await suErr(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','Operación','corto',5)`);
+  check("L2. Solo una operación crea autorizaciones: la aplicación no puede (sin permiso); ventana máxima 24 h; motivo obligatorio",
+    /permission denied/.test(rtOps) && badWindow.includes("MODALITY_AUTHORIZATION_WINDOW_INVALID") && /check constraint|violates/.test(noReasonOps), [rtOps, badWindow, noReasonOps]);
+  // Autorización vencida: no sirve.
+  await q(`INSERT INTO platform_modality_activation_authorizations (modality_code, authorized_by, reason, created_at, expires_at) VALUES ('INDEPENDENT_PROVIDER','Prueba','Autorización ya vencida (prueba)', now() - interval '2 hours', now() - interval '1 hour')`);
+  const expired = await call("PATCH", PI, tC, { enabled: true, reason });
+  check("L3. Una autorización vencida no abre el candado", expired.status === 409 && expired.body.error === "MODALITY_ACTIVATION_LOCKED" && (await state()) === false, expired);
+  // Autorización retirada antes de usarla: no sirve.
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','Prueba','Autorización que se retirará (prueba)',5)`);
+  const twice = await suErr(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','Prueba','Segunda autorización abierta (prueba)',5)`);
+  const revokedN = Number((await q(`SELECT app_ops_revoke_modality_activation('INDEPENDENT_PROVIDER','Retirada en la prueba') n`)).rows[0].n);
+  const afterRevoke = await call("PATCH", PI, tC, { enabled: true, reason });
+  check("L4. Solo una autorización abierta a la vez; una retirada no abre el candado", twice.includes("MODALITY_AUTHORIZATION_ALREADY_OPEN") && revokedN === 1 && afterRevoke.status === 409 && (await state()) === false, [twice, revokedN, afterRevoke.status]);
+  const authDel = await suErr(`DELETE FROM platform_modality_activation_authorizations`);
+  const authTr = await suErr(`TRUNCATE platform_modality_activation_authorizations`);
+  const authEdit = await suErr(`UPDATE platform_modality_activation_authorizations SET reason='cambiado en la prueba', expires_at = created_at + interval '1 hour'`);
+  const authRead = await (async () => { try { await rt.query(`SELECT 1 FROM platform_modality_activation_authorizations`); return "OK"; } catch (e) { return (e as Error).message; } })();
+  check("L5. Las autorizaciones son un registro: nadie las borra, vacía ni modifica; la aplicación no las lee",
+    [authDel, authTr, authEdit].every((x) => x.includes("MODALITY_AUTHORIZATION_APPEND_ONLY")) && /permission denied/.test(authRead), [authDel, authTr, authEdit, authRead]);
+  // Autorización válida (en producción: solo con la autorización expresa de Rafa).
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','Rafa (prueba local)','Autorización de prueba con datos ficticios',10)`);
+  const g0c = await call("GET", P, tC);
+  check("L6. Con la autorización vigente Central lo muestra y permite encender", g0c.body.modalities?.[0]?.databaseUnlocked === true && g0c.body.modalities?.[0]?.canEnable === true && Boolean(g0c.body.modalities?.[0]?.databaseUnlockedUntil), g0c.body);
   const on1 = await call("PATCH", PI, tC, { enabled: true, reason });
+  const usedAuth = await authRow();
+  check("L7. Encender consume la autorización (un solo uso), registrando quién la usó", usedAuth?.consumed_at != null && usedAuth?.consumed_by_user_id === central.id, usedAuth);
   const ev1 = await events();
   check("M6. Encender (autorizado): queda encendida y auditada con valor anterior, nuevo, motivo, persona y fecha",
     on1.status === 200 && on1.body.changed === true && on1.body.modality?.enabled === true && (await state()) === true && ev1.length === 1
@@ -148,6 +186,10 @@ async function main() {
   const ev2 = await events();
   check("M10. Apagar está siempre permitido (aun sin la autorización del servidor) y queda auditado",
     off.status === 200 && off.body.modality?.enabled === false && (await state()) === false && ev2.length === 2 && ev2[1].previous_enabled === true && ev2[1].new_enabled === false, [off, ev2]);
+  process.env.INDEPENDENT_MODALITY_ACTIVATION_ALLOWED = "on";
+  const reOn = await call("PATCH", PI, tC, { enabled: true, reason: "Intento de volver a encender sin nueva autorización" });
+  delete process.env.INDEPENDENT_MODALITY_ACTIVATION_ALLOWED;
+  check("L8. Volver a encender exige una autorización NUEVA (la anterior ya se usó)", reOn.status === 409 && reOn.body.error === "MODALITY_ACTIVATION_LOCKED" && (await state()) === false, reOn);
   const reg1 = await call("POST", "/platform/organizations", tC, { name: `Independiente 3 ${tag}`, organizationType: "INDEPENDENT_PROVIDER" });
   const rtIns = await (async () => { try { await rt.query("BEGIN"); await rt.query(`INSERT INTO organizations (name,organization_type,status) VALUES ('x','INDEPENDENT_PROVIDER','active')`); return "OK"; } catch (e) { return (e as Error).message; } finally { await rt.query("ROLLBACK"); } })();
   check("M11. Apagada: no hay nuevos registros independientes ni por Central ni directamente en la base", reg1.status === 409 && rtIns.includes("INDEPENDENT_MODALITY_DISABLED"), [reg1.status, rtIns]);
@@ -208,12 +250,14 @@ async function main() {
   const { readFileSync } = await import("node:fs");
   const kept = (await events()).length, st = await state();
   await q(readFileSync(join(process.cwd(), "ops/163_platform_modality_switch_central.rollback.sql"), "utf8"));
-  const fns = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities')`)).rows[0].n);
-  check("M20. Reversión: retira las funciones, no cambia el estado de la modalidad y conserva el registro de cambios", fns === 0 && (await state()) === st && (await events()).length === kept, [fns, st, kept]);
+  const fns = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities','app_platform_modality_activation_lock','app_ops_authorize_modality_activation','app_ops_revoke_modality_activation')`)).rows[0].n);
+  const authKept = Number((await q(`SELECT count(*) n FROM platform_modality_activation_authorizations`)).rows[0].n);
+  check("M20. Reversión: retira las funciones y el candado, no cambia el estado de la modalidad y conserva el registro de cambios y las autorizaciones", fns === 0 && (await state()) === st && (await events()).length === kept && authKept === 3, [fns, st, kept, authKept]);
   const mig = readFileSync(join(process.cwd(), "migrations/163_platform_modality_switch_central.sql"), "utf8");
   await q(mig); await q(mig);
-  const fns2 = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities')`)).rows[0].n);
-  check("M21. Reaplicar la 163 (dos veces) deja el mismo estado y no toca el registro (idempotente)", fns2 === 2 && (await state()) === st && (await events()).length === kept, [fns2]);
+  const fns2 = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities','app_platform_modality_activation_lock','app_ops_authorize_modality_activation','app_ops_revoke_modality_activation')`)).rows[0].n);
+  const relocked = await suErr(`UPDATE platform_modalities SET enabled=true WHERE code='INDEPENDENT_PROVIDER'`);
+  check("M21. Reaplicar la 163 (dos veces) deja el mismo estado, el candado vuelve a cerrar y no toca el registro (idempotente)", fns2 === 5 && relocked.includes("MODALITY_ACTIVATION_LOCKED") && (await state()) === st && (await events()).length === kept, [fns2, relocked]);
 
   await rt.end(); await db.end();
   await srv.query(`DROP DATABASE ${own} WITH (FORCE)`); await srv.end();

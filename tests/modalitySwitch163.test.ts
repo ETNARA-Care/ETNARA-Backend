@@ -30,6 +30,15 @@ describe("163 · Central switch for the independent caregiver modality", () => {
     expect(m163).toMatch(/BEFORE UPDATE OR DELETE ON platform_modality_events/);
   });
 
+  it("second lock: enabling needs a single-use, expiring authorization created only by operations", () => {
+    expect(m163).toMatch(/CREATE TRIGGER platform_modalities_activation_lock\s+BEFORE INSERT OR UPDATE OF enabled ON platform_modalities/);
+    expect(m163).toMatch(/RAISE EXCEPTION 'MODALITY_ACTIVATION_LOCKED'/);
+    expect(m163).toMatch(/REVOKE ALL ON FUNCTION public\.app_ops_authorize_modality_activation\(text, text, text, integer\) FROM app_runtime/);
+    expect(m163).toMatch(/expires_at <= created_at \+ interval '24 hours'/);
+    expect(m163).toMatch(/SET consumed_at = now\(\)/);
+    expect(rollback).toMatch(/DROP TRIGGER IF EXISTS platform_modalities_activation_lock/);
+  });
+
   it("rollback keeps the modality state and the audit records", () => {
     expect(rollback).not.toMatch(/platform_modalities\s+SET/i);
     expect(rollback).not.toMatch(/^\s*DROP TABLE/m);

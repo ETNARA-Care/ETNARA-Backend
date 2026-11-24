@@ -11,7 +11,8 @@ import { MODALITY_CODES, modalityActivationAllowed, setModalitySchema } from "./
  *
  * - Solo administración de plataforma (withPlatformContext + app_is_superadmin() en la base).
  * - Cada cambio exige motivo y queda en platform_modality_events (solo añadir), con valor anterior y nuevo.
- * - ENCENDER requiere además INDEPENDENT_MODALITY_ACTIVATION_ALLOWED=on en el servidor (ausente = no). Apagar
+ * - ENCENDER requiere además INDEPENDENT_MODALITY_ACTIVATION_ALLOWED=on en el servidor (ausente = no) y una
+ *   autorización de activación vigente en la base de datos (de un solo uso, creada solo por operación). Apagar
  *   siempre está permitido.
  * - El interruptor gobierna solo el registro de nuevas organizaciones independientes; no toca las existentes.
  */
@@ -24,6 +25,7 @@ const DB_ERRORS: Record<string, number> = {
   MODALITY_REASON_REQUIRED: 400,
   MODALITY_STATE_REQUIRED: 400,
   MODALITY_NOT_FOUND: 404,
+  MODALITY_ACTIVATION_LOCKED: 409,
 };
 function translate(err: unknown): never {
   const message = err instanceof Error ? err.message : "";
@@ -32,7 +34,7 @@ function translate(err: unknown): never {
   throw err;
 }
 
-type ModalityRow = { code: string; enabled: boolean; updated_at: string; updated_by_user_id: string | null; registered_organizations: number };
+type ModalityRow = { code: string; enabled: boolean; updated_at: string; updated_by_user_id: string | null; registered_organizations: number; activation_unlocked: boolean; activation_unlocked_until: string | null };
 
 export async function listPlatformModalities(userId: string) {
   return withPlatformContext(userId, async (trx) => {
@@ -48,7 +50,10 @@ export async function listPlatformModalities(userId: string) {
         enabled: r.enabled,
         updatedAt: r.updated_at,
         registeredOrganizations: r.registered_organizations,
-        canEnable: !r.enabled && activationAllowed,
+        // Encender necesita las tres llaves: autorización vigente en la base, variable del servidor y Central.
+        canEnable: !r.enabled && activationAllowed && r.activation_unlocked,
+        databaseUnlocked: r.activation_unlocked,
+        databaseUnlockedUntil: r.activation_unlocked_until,
         canDisable: r.enabled,
         activationAllowed,
         history: events.rows.filter((e) => e.modality_code === r.code).map((e) => ({

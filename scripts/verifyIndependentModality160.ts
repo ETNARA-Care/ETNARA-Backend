@@ -109,6 +109,8 @@ async function main() {
   check("N1. No regresión: Central sigue creando agencias y hogares", cA.status === 201 && cH.status === 201 && cA.body.organization?.organization_type === "HOME_CARE_AGENCY" && cH.body.organization?.organization_type === "RESIDENTIAL_CARE_HOME", [cA.status, cH.status]);
 
   // ---- Encendido por operación (solo en esta base desechable) ---------------------------------------------
+  // 163: encender exige una autorización de activación vigente (segundo candado), también para el propietario.
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','verificador local','Prueba local con datos ficticios (163: candado)',5)`); 
   await q(`UPDATE platform_modalities SET enabled=true, updated_at=now() WHERE code='INDEPENDENT_PROVIDER'`);
   const types1 = await call("GET", "/platform/organization-types", tC);
   const c1 = await call("POST", "/platform/organizations", tC, { name: `Independiente Ficticia ${tag}`, organizationType: "INDEPENDENT_PROVIDER" });
