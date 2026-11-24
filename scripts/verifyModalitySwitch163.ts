@@ -252,7 +252,8 @@ async function main() {
   await q(readFileSync(join(process.cwd(), "ops/163_platform_modality_switch_central.rollback.sql"), "utf8"));
   const fns = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities','app_platform_modality_activation_lock','app_ops_authorize_modality_activation','app_ops_revoke_modality_activation')`)).rows[0].n);
   const authKept = Number((await q(`SELECT count(*) n FROM platform_modality_activation_authorizations`)).rows[0].n);
-  check("M20. Reversión: retira las funciones y el candado, no cambia el estado de la modalidad y conserva el registro de cambios y las autorizaciones", fns === 0 && (await state()) === st && (await events()).length === kept && authKept === 3, [fns, st, kept, authKept]);
+  const rbReg = (await q(`SELECT 1 FROM schema_migrations WHERE filename='163_platform_modality_switch_central.sql'`)).rowCount;
+  check("M20. Reversión: retira las funciones y el candado, no cambia el estado de la modalidad y conserva el registro de cambios y las autorizaciones", fns === 0 && rbReg === 0 && (await state()) === st && (await events()).length === kept && authKept === 3, [fns, rbReg, st, kept, authKept]);
   const mig = readFileSync(join(process.cwd(), "migrations/163_platform_modality_switch_central.sql"), "utf8");
   await q(mig); await q(mig);
   const fns2 = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname IN ('app_platform_set_modality','app_platform_list_modalities','app_platform_modality_activation_lock','app_ops_authorize_modality_activation','app_ops_revoke_modality_activation')`)).rows[0].n);

@@ -41,6 +41,8 @@ describe("163 · Central switch for the independent caregiver modality", () => {
 
   it("rollback keeps the modality state and the audit records", () => {
     expect(rollback).not.toMatch(/platform_modalities\s+SET/i);
-    expect(rollback).not.toMatch(/^\s*DROP TABLE/m);
+    expect(rollback).toMatch(/IF EXISTS \(SELECT 1 FROM platform_modality_events LIMIT 1\)/);
+    expect(rollback).not.toMatch(/DELETE FROM platform_modality/);
+    expect(rollback).toMatch(/DELETE FROM schema_migrations WHERE filename = '163_platform_modality_switch_central\.sql'/);
   });
 });
