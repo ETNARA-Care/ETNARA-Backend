@@ -570,6 +570,7 @@
     "app_inspect_access_invitation",
     "app_is_any_establishment_admin",
     "app_is_establishment_admin",
+    "app_is_independent_operator",
     "app_is_my_worker_membership",
     "app_is_org_admin",
     "app_is_org_manager",

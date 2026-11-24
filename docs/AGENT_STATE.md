@@ -2,6 +2,13 @@
 
 ## Current Status
 
+## 2026-11-23 — 161 PR C: documentos autodeclarados, elegibilidad propia e «Informe del proveedor» — rama claude/161-autodeclarados-informe-proveedor (apilada sobre claude/160b-mi-practica), PR borrador
+- Migración 161: credentials.declared_by_holder (origen inmutable) y shift_reports.published_by_provider; app_is_independent_operator(); guarda 149 + rama 161 (solo su titular operativa en su práctica; nadie más lo crea/edita; no se borra); requisitos de independientes sin revisión de la organización; guarda 128 + excepción «Informe del proveedor»; proyección familiar 129 + publishedByProvider. Reversión se niega si ya hay datos autodeclarados o informes del proveedor.
+- Elegibilidad: independiente = solo su política (opcional); faltante/vencido → confirmation_required. Agencias: un autodeclarado solo cuenta con SU revisión aprobada (sin herencia).
+- Autoasignación: 409 SELF_DECLARATION_CONFIRMATION_REQUIRED (lo que falta + aviso); confirmSelfDeclaration:true asigna y audita SELF_DECLARATION_CONFIRMED.
+- /practice/documents (GET/POST/PATCH) y /practice/requirements (PUT); POST /shift-reports/:id/publish-as-provider; PDF familiar sin «Aprobado por la agencia» en informes del proveedor.
+- Pruebas: verifySelfDeclared161 24/24, verifyIndependentModality160 41/41 (B1 adaptado: sin política propia ya se asigna), rollback 161 4/4, unitarias 809/809 (1 aserción de fuente actualizada: caregiverEligibilityOwnership), CI local 82/82.
+
 ## 2026-11-23 — 160 PR B «Mi práctica» (backend) — rama claude/160b-mi-practica (apilada sobre claude/160-modalidad-independiente-central), PR borrador
 - POST /organizations/:id/me/shifts/:shiftId/self-assign: el independiente asigna y acepta su turno en UNA transacción con assignWorkerToShiftInTransaction (elegibilidad intacta) + chequeo de su agenda en todas sus organizaciones; auditoría SHIFT_SELF_ASSIGNED. Agencias y hogares: 403 SELF_ASSIGN_INDEPENDENT_ONLY. Punto de enganche del PR C (confirmación de documentos autodeclarados) documentado en selfAssignMyShift.
 - modalityRules: también cierra compliance/audit, compliance/agent y my-agency-conversation en independientes.

@@ -339,6 +339,7 @@ export async function listCredentials(userId: string, organizationId: string, wo
     const result = await sql<CredentialRow & { type_code: string; document_status: string | null; organization_review_status: string | null; organization_review_notes: string | null }>`
       SELECT c.id, c.worker_id, c.credential_type_id, c.document_id, c.issuing_entity_name,
              c.issuing_entity_type, c.issued_at, c.expires_at, c.status, c.created_at, c.updated_at,
+             c.declared_by_holder, -- 161: «Registrado por la cuidadora» (solo cuenta para esta agencia tras SU revisión)
              ct.code as type_code, d.status AS document_status,
              ocr.review_status AS organization_review_status, ocr.notes AS organization_review_notes
       FROM credentials c
