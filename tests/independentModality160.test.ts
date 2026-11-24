@@ -35,9 +35,20 @@ describe("160: cuidador independiente (PR A)", () => {
     expect(fn(rollback)).toBe(before);
   });
   it("rutas de equipo cerradas para el independiente; lo propio sigue abierto", () => {
-    for (const [m, p] of [["GET", "/team"], ["POST", "/workers"], ["GET", "/credentials/review-queue"], ["GET", "/smartmatch/x"], ["GET", "/operations/center"], ["GET", "/ESTABLISHMENTS"], ["GET", "/pay-periods"]])
+    for (const [m, p] of [["GET", "/team"], ["POST", "/workers"], ["GET", "/credentials/review-queue"], ["GET", "/smartmatch/x"], ["GET", "/operations/center"], ["GET", "/ESTABLISHMENTS"], ["GET", "/pay-periods"], ["GET", "/compliance/audit"], ["POST", "/compliance/agent/briefing"], ["POST", "/my-agency-conversation"]])
       expect(teamRouteFor(`${O}${p}`, m)).not.toBeNull();
-    for (const [m, p] of [["GET", "/workers"], ["GET", "/care-recipients"], ["POST", "/care-recipients"], ["GET", "/shifts"], ["POST", "/access-invitations"], ["GET", "/me/credentials"], ["GET", "/conversations"]])
+    for (const [m, p] of [["GET", "/workers"], ["GET", "/care-recipients"], ["POST", "/care-recipients"], ["GET", "/shifts"], ["POST", "/access-invitations"], ["GET", "/me/credentials"], ["GET", "/conversations"], ["GET", "/compliance/configuration"], ["GET", "/workers/11111111-2222-3333-4444-555555555555/compliance"], ["POST", "/shifts/11111111-2222-3333-4444-555555555555/assignments"], ["POST", "/shifts/11111111-2222-3333-4444-555555555555/check-in"]])
       expect(teamRouteFor(`${O}${p}`, m)).toBeNull();
+  });
+  it("PR B: «Asignármelo» reutiliza las reglas de Turnos (elegibilidad incluida) y solo existe en independientes", () => {
+    const svc = read("src/modules/assignments/assignments.service.ts");
+    const body = svc.slice(svc.indexOf("export async function selfAssignMyShift("), svc.indexOf("/**\n * Removal"));
+    expect(body).toMatch(/app_org_is_independent/);
+    expect(body).toMatch(/throw new SelfAssignNotAvailableError\(\)/);
+    expect(body).toMatch(/assignWorkerToShiftInTransaction\(trx, organizationId, shiftId/);
+    expect(body).toMatch(/app_my_confirmed_commitment_overlaps/);
+    expect(body).not.toMatch(/evaluateWorkerEligibility|eligibilityStatus/); // no evalúa por su cuenta ni la salta
+    const assign = svc.slice(svc.indexOf("export async function assignWorkerToShiftInTransaction("), svc.indexOf("export async function listAssignments("));
+    expect(assign).toMatch(/if \(eligibility\.eligibilityStatus !== "eligible"\) \{/);
   });
 });

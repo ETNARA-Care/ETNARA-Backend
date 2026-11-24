@@ -458,6 +458,69 @@ export async function respondToMyAssignment(
   return saved.assignment;
 }
 
+/** 160 (PR B, Mi práctica): la autoasignación existe solo para un cuidador independiente. */
+export class SelfAssignNotAvailableError extends Error {
+  constructor() {
+    super("SELF_ASSIGN_INDEPENDENT_ONLY");
+    this.name = "SelfAssignNotAvailableError";
+  }
+}
+
+/**
+ * 160 (PR B, Mi práctica): el cuidador independiente se asigna y acepta su propio turno en UNA transacción.
+ * Reutiliza exactamente las reglas de Turnos (assignWorkerToShiftInTransaction: turno abierto, ficha activa,
+ * ELEGIBILIDAD, compromisos) y las de aceptar (su agenda en todas sus organizaciones). No crea una vía nueva
+ * alrededor de la elegibilidad: agencias y hogares no pueden usar este endpoint y su flujo no cambia.
+ * PR C: aquí se evaluará la confirmación de documentos autodeclarados antes de asignar.
+ */
+export async function selfAssignMyShift(userId: string, organizationId: string, shiftId: string): Promise<AssignmentRow> {
+  assertUuid(shiftId, "shiftId");
+  const saved = await withTenantContext({ userId, organizationId }, async (trx) => {
+    const independent = await sql<{ independent: boolean }>`SELECT public.app_org_is_independent(${organizationId}::uuid) AS independent`.execute(trx);
+    if (independent.rows[0]?.independent !== true) throw new SelfAssignNotAvailableError();
+    if (!(await canManageShift(trx, shiftId))) throw new OrganizationAccessDeniedError();
+    const own = await sql<{ id: string; worker_id: string }>`
+      SELECT owm.id, owm.worker_id FROM organization_worker_memberships owm JOIN workers w ON w.id = owm.worker_id
+      WHERE owm.organization_id = ${organizationId} AND w.user_id = ${userId} AND owm.status = 'active' LIMIT 1
+    `.execute(trx);
+    const membership = own.rows[0];
+    if (!membership) throw new MembershipNotInOrgError();
+
+    const { assignment } = await assignWorkerToShiftInTransaction(trx, organizationId, shiftId, { organizationWorkerMembershipId: membership.id });
+
+    // Igual que al aceptar: su agenda confirmada en todas sus organizaciones (solo ella conoce el resultado).
+    await lockPersonSchedule(trx, membership.worker_id);
+    const shift = await sql<{ scheduled_start: string; scheduled_end: string; room_id: string | null }>`
+      SELECT scheduled_start, scheduled_end, room_id FROM shifts WHERE id = ${shiftId} AND organization_id = ${organizationId}
+    `.execute(trx);
+    const overlap = await sql<{ busy: boolean }>`
+      SELECT public.app_my_confirmed_commitment_overlaps(
+        ${shift.rows[0].scheduled_start}::timestamptz, ${shift.rows[0].scheduled_end}::timestamptz, ${shiftId}::uuid) AS busy
+    `.execute(trx);
+    if (overlap.rows[0]?.busy) throw new MyScheduleConflictError();
+
+    const accepted = await sql<AssignmentRow>`
+      UPDATE assignments SET response_status = 'accepted', responded_at = now()
+      WHERE id = ${assignment.id} AND response_status = 'pending'
+      RETURNING id, organization_id, shift_id, organization_worker_membership_id, care_recipient_id,
+                role_in_shift, response_status, responded_at, response_reason, created_at
+    `.execute(trx);
+    if (!accepted.rows[0]) throw new AssignmentAlreadyRespondedError();
+    await sql`
+      INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, previous_value, new_value)
+      VALUES (${userId}, ${organizationId}, ${organizationId}, 'SHIFT_SELF_ASSIGNED', 'assignment', ${accepted.rows[0].id}, NULL,
+              ${JSON.stringify({ shiftId, membershipId: membership.id })}::jsonb)
+    `.execute(trx);
+    return { assignment: accepted.rows[0], roomId: shift.rows[0].room_id };
+  });
+  try {
+    await syncAssignedWorkerConversationAccess(userId, organizationId, userId, saved.assignment.care_recipient_id, saved.roomId);
+  } catch (error) {
+    console.error("Self-assignment saved but messaging synchronization failed", { name: error instanceof Error ? error.name : "UnknownError" });
+  }
+  return saved.assignment;
+}
+
 /**
  * Removal ("unassign"): the approved schema has NO status column on
  * assignments (no 'cancelled'/'removed' state to set) -- only

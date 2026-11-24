@@ -17,6 +17,8 @@ import {
   AssignmentNotFoundError,
   AssignmentAlreadyRespondedError,
   MyScheduleConflictError,
+  selfAssignMyShift,
+  SelfAssignNotAvailableError,
 } from "./assignments.service.js";
 import {
   removeAssignmentAudited,
@@ -84,6 +86,10 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(409).json({ error: "SCHEDULE_CONFLICT" });
     return true;
   }
+  if (err instanceof SelfAssignNotAvailableError) {
+    res.status(403).json({ error: "SELF_ASSIGN_INDEPENDENT_ONLY" });
+    return true;
+  }
   if (err instanceof MyScheduleConflictError) {
     res.status(409).json({ error: "MY_SCHEDULE_CONFLICT" });
     return true;
@@ -102,6 +108,33 @@ function handleError(err: unknown, res: Response): boolean {
   }
   return false;
 }
+
+// 160 (PR B): «Asignármelo» del cuidador independiente: asignar y aceptar en una sola transacción, con la
+// elegibilidad de siempre. Agencias y hogares reciben 403 SELF_ASSIGN_INDEPENDENT_ONLY.
+router.post(
+  "/organizations/:organizationId/me/shifts/:shiftId/self-assign",
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const orgIdParsed = uuidParam.safeParse(req.params.organizationId);
+    if (!orgIdParsed.success) {
+      res.status(400).json({ error: "INVALID_ORGANIZATION_ID" });
+      return;
+    }
+    try {
+      const assignment = await selfAssignMyShift(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
+      res.status(201).json({ assignment });
+    } catch (err) {
+      if (err instanceof NoApplicableRequirementSetError) {
+        res.status(409).json({ error: "NO_APPLICABLE_REQUIREMENT_SET" });
+        return;
+      }
+      if (!handleError(err, res)) {
+        logUnexpectedAssignmentError("selfAssignMyShift", err);
+        res.status(500).json({ error: "INTERNAL_ERROR" });
+      }
+    }
+  }
+);
 
 router.post(
   "/organizations/:organizationId/me/shifts/:shiftId/respond",
