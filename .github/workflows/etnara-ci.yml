@@ -387,18 +387,6 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 160
 
-      - name: PostgreSQL 161 independent caregiver - self-declared documents, own eligibility with audited confirmation, provider reports to the family (no agency inheritance, schedule conflicts, permissions, family isolation, agencies and homes unchanged, never 500)
-        env:
-          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
-          ETNARA_DISPOSABLE_DB: "true"
-        run: npx tsx scripts/verifySelfDeclared161.ts
-
-      - name: PostgreSQL 161 rollback (schema identical to 160, every row unchanged, re-apply, idempotent)
-        env:
-          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
-          ETNARA_DISPOSABLE_DB: "true"
-        run: npx tsx scripts/verifyMigrationRollback.ts 161
-
       - name: PostgreSQL activity photos security (isolation, tampering, approval, consent, ETNARA central)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -410,6 +398,18 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/moto-venv"
           "$RUNNER_TEMP/moto-venv/bin/pip" install --quiet "moto[server]==5.2.4"
           echo "PHOTO_TEST_PYTHON=$RUNNER_TEMP/moto-venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: PostgreSQL 161 independent caregiver - self-declared documents, own eligibility with audited confirmation, provider reports to the family (no agency inheritance, schedule conflicts, permissions, family isolation, agencies and homes unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifySelfDeclared161.ts
+
+      - name: PostgreSQL 161 rollback (schema identical to 160, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 161
 
       - name: PostgreSQL institutional document dates (D4) — upload validation, dates correction without re-upload, history, audit, isolation, roles
         env:
