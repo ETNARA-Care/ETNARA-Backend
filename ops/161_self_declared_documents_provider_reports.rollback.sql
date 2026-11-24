@@ -180,10 +180,16 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS assignments_self_declaration_guard ON assignments;
+DROP FUNCTION IF EXISTS public.app_assignment_self_declaration_guard();
+DROP TRIGGER IF EXISTS document_versions_declared_guard ON document_versions;
+DROP FUNCTION IF EXISTS public.app_declared_document_version_guard();
 DROP TRIGGER IF EXISTS requirements_independent_guard ON requirements;
 DROP FUNCTION IF EXISTS public.app_independent_requirement_guard();
+DROP FUNCTION IF EXISTS public.app_reset_declared_credential_reviews(uuid);
 DROP FUNCTION IF EXISTS public.app_is_independent_operator(uuid, uuid);
 ALTER TABLE shift_reports DROP COLUMN IF EXISTS published_by_provider;
+ALTER TABLE assignments DROP COLUMN IF EXISTS self_declaration_confirmed_at;
 ALTER TABLE credentials DROP COLUMN IF EXISTS declared_by_holder;
 DELETE FROM schema_migrations WHERE filename = '161_self_declared_documents_provider_reports.sql';
 COMMIT;

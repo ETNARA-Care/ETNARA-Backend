@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-24 — 161 revisión final de seguridad (rama claude/161-autodeclarados-informe-proveedor, PR #277 borrador)
+- Corregido: aprobación de agencia que sobrevivía a cambios de la titular (app_reset_declared_credential_reviews: datos o archivo nuevo → «pendiente» en todas las organizaciones); evidencia de un autodeclarado solo por su titular (guarda 149 + trigger en document_versions + servicio); app_is_independent_operator solo responde sobre la persona de la sesión.
+- Corregido (bloqueo de piloto): iniciar la visita volvía a exigir «eligible»; ahora acepta la confirmación expresa guardada en assignments.self_declaration_confirmed_at (solo independientes; trigger lo impide en agencias).
+- Nuevo: nombre profesional (PUT /practice/profile, auditado); «Informe del proveedor» exige nombre (servicio + base: PROVIDER_NAME_REQUIRED); adjuntos con el flujo seguro existente (/me/credentials/.../documents).
+- Pruebas: verifySelfDeclared161 33/33 (S3 local), 160 41/41, rollback 4/4, npm test 810/810, CI local 81/82 (el fallo era un error de tipos del verificador, corregido después).
+
 ## 2026-11-23 — 161 PR C: documentos autodeclarados, elegibilidad propia e «Informe del proveedor» — rama claude/161-autodeclarados-informe-proveedor (apilada sobre claude/160b-mi-practica), PR borrador
 - Migración 161: credentials.declared_by_holder (origen inmutable) y shift_reports.published_by_provider; app_is_independent_operator(); guarda 149 + rama 161 (solo su titular operativa en su práctica; nadie más lo crea/edita; no se borra); requisitos de independientes sin revisión de la organización; guarda 128 + excepción «Informe del proveedor»; proyección familiar 129 + publishedByProvider. Reversión se niega si ya hay datos autodeclarados o informes del proveedor.
 - Elegibilidad: independiente = solo su política (opcional); faltante/vencido → confirmation_required. Agencias: un autodeclarado solo cuenta con SU revisión aprobada (sin herencia).

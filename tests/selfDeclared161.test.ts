@@ -50,4 +50,16 @@ describe("161: documentos autodeclarados, elegibilidad propia e «Informe del pr
     expect(pdf).toMatch(/\["Estado", "Informe del proveedor"\]/);
     expect(pdf).toMatch(/r\.publishedByProvider \? "PUBLICADO" : "APROBADO"/);
   });
+  it("revisión final de seguridad: cambios de la titular reinician revisiones, evidencia solo suya, sin sondeo, confirmación acotada y nombre obligatorio", () => {
+    expect(mig).toMatch(/FUNCTION public\.app_reset_declared_credential_reviews\(p_credential_id uuid\)[\s\S]*SET review_status = 'pending'/);
+    expect(fnOf(mig, "public.app_credential_write_guard")).toMatch(/IF TG_OP = 'UPDATE' AND OLD\.declared_by_holder THEN[\s\S]*CREDENTIAL_SELF_DECLARATION_FORBIDDEN[\s\S]*app_reset_declared_credential_reviews/);
+    expect(mig).toMatch(/CREATE TRIGGER document_versions_declared_guard BEFORE INSERT ON document_versions/);
+    expect(mig).toMatch(/AND p_user_id = NULLIF\(current_setting\('app\.current_user_id', true\), ''\)::uuid/);
+    expect(mig).toMatch(/RAISE EXCEPTION 'SELF_DECLARATION_INDEPENDENT_ONLY'/);
+    expect(fnOf(mig, "app_shift_report_guard")).toMatch(/RAISE EXCEPTION 'PROVIDER_NAME_REQUIRED'/);
+    const ver = read("src/modules/verification/verification.service.ts");
+    expect(ver).toMatch(/eligibility\.eligibilityStatus === SELF_DECLARATION_CONFIRMATION_STATUS && Boolean\(assignmentRow\.rows\[0\]\.self_declaration_confirmed_at\)/);
+    for (const name of ["app_reset_declared_credential_reviews", "app_declared_document_version_guard", "app_assignment_self_declaration_guard", "assignments_self_declaration_guard", "self_declaration_confirmed_at"])
+      expect(rollback).toContain(name);
+  });
 });

@@ -6,7 +6,9 @@
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { CreateBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import pg from "pg";
@@ -30,14 +32,23 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     mails.push({ to: Array.isArray(b.to) ? b.to[0] : b.to, html: String(b.html ?? "") });
     return new Response(JSON.stringify({ id: randomUUID() }), { status: 200, headers: { "content-type": "application/json" } });
   }
-  if (!/^https?:\/\/127\.0\.0\.1:/.test(url)) throw new Error(`Salida de red bloqueada en la prueba: ${url}`);
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/)/.test(url)) throw new Error(`Salida de red bloqueada en la prueba: ${url}`);
   return realFetch(input as never, init);
 }) as typeof fetch;
 process.env.RESEND_API_KEY = "test-only-not-a-key";
 process.env.EMAIL_SENDER_ADDRESS ??= "pruebas@example.invalid";
 process.env.ACTIVATION_BASE_URL ??= "https://portal.example.invalid";
 
+let moto: ChildProcess | null = null;
 async function main() {
+  // S3 LOCAL (moto) para el almacenamiento seguro de documentos que ya usa ETNARA Care: nunca un servicio alojado.
+  const s3Port = Number(process.env.S161_TEST_S3_PORT ?? 4581);
+  moto = spawn(process.env.PHOTO_TEST_PYTHON ?? "python3", ["-m", "moto.server", "-H", "127.0.0.1", "-p", String(s3Port)], { stdio: "ignore" });
+  const endpoint = `http://127.0.0.1:${s3Port}`;
+  for (let i = 0; i < 50; i++) { try { await realFetch(endpoint); break; } catch { await new Promise((r) => setTimeout(r, 200)); } }
+  const bucket = `s161-${randomUUID().slice(0, 8)}`;
+  await new S3Client({ endpoint, region: "us-east-1", forcePathStyle: true, credentials: { accessKeyId: "test", secretAccessKey: "test" } }).send(new CreateBucketCommand({ Bucket: bucket }));
+  Object.assign(process.env, { STORAGE_ENDPOINT: endpoint, STORAGE_REGION: "us-east-1", STORAGE_BUCKET: bucket, STORAGE_ACCESS_KEY_ID: "test", STORAGE_SECRET_ACCESS_KEY: "test", STORAGE_FORCE_PATH_STYLE: "true" });
   const own = `etnara_s161_${randomBytes(4).toString("hex")}`;
   const srv = new pg.Client({ connectionString: serverUrl }); await srv.connect();
   await srv.query(`CREATE DATABASE ${own}`);
@@ -70,9 +81,10 @@ async function main() {
   const hash = await hashPassword(password);
   const tag = randomUUID().slice(0, 8).toLowerCase();
   const errors500: string[] = [];
-  async function call(method: string, path: string, token: string, body?: Json) {
-    const res = await realFetch(base + path, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body) });
+  async function call(method: string, path: string, token: string, body?: Json | Buffer) {
+    const isBuf = Buffer.isBuffer(body);
+    const res = await realFetch(base + path, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body !== undefined ? { "Content-Type": isBuf ? "application/pdf" : "application/json" } : {}) },
+      body: body === undefined ? undefined : isBuf ? new Uint8Array(body as Buffer) : JSON.stringify(body) });
     const text = await res.text(); let json: Json = {}; try { json = JSON.parse(text); } catch { json = { raw: text.slice(0, 40) }; }
     if (res.status >= 500) errors500.push(`${method} ${path} ${res.status}`);
     return { status: res.status, body: json, type: res.headers.get("content-type") ?? "" };
@@ -128,7 +140,7 @@ async function main() {
 
   // ---- 1. Documentos autodeclarados y estados por fechas --------------------------------------------------------
   const d0 = await call("GET", `/organizations/${L}/practice/documents`, tL);
-  const s0 = await newShift(tL, L, clientId, 60, 180);
+  const s0 = await newShift(tL, L, clientId, 300, 420);
   const sa0 = await call("POST", `/organizations/${L}/me/shifts/${s0}/self-assign`, tL, {});
   check("C1. Sin política propia: «Mis documentos» con el aviso (autodeclarados, sin verificación de ETNARA) y se asigna sin confirmación",
     d0.status === 200 && d0.body.policyConfigured === false && /ETNARA Care no verifica, aprueba ni certifica/.test(d0.body.notice) && sa0.status === 201, [d0.status, d0.body.notice, sa0.status, sa0.body.error]);
@@ -258,6 +270,12 @@ async function main() {
   const otherFam = await call("GET", `/organizations/${L}/care-recipients/${clientId}/shift-reports`, tA);
   const wrongClient = await call("GET", `/organizations/${N}/care-recipients/${recNId}/shift-reports`, tFam);
   check("C20. Acceso familiar aislado: otra organización y otra persona atendida no ven el informe", [403, 404].includes(otherFam.status) && [403, 404].includes(wrongClient.status), [otherFam.status, wrongClient.status]);
+  const client2 = (await call("POST", `/organizations/${L}/care-recipients`, tL, { firstName: "Otra", lastName: "Clienta" })).body;
+  const client2Id = (client2.careRecipient ?? client2.recipient ?? client2).id as string;
+  const famOther = await call("GET", `/organizations/${L}/care-recipients/${client2Id}/shift-reports`, tFam);
+  const famOtherOne = await call("GET", `/organizations/${L}/care-recipients/${client2Id}/shift-reports/${rep.id}`, tFam);
+  check("C34. Dentro de la misma práctica, la familia solo consulta los informes de SU persona atendida (otra clienta del mismo proveedor: no)",
+    [403, 404].includes(famOther.status) && [403, 404].includes(famOtherOne.status), [famOther.status, famOtherOne.status]);
   const republish = await call("POST", `/organizations/${L}/shift-reports/${rep.id}/publish-as-provider`, tL, { expectedGeneratedAt: rep.generated_at, familySections: { schedule: true } });
   const mutate = await asApp(lucia.id, L, `UPDATE shift_reports SET published_by_provider=false WHERE id='${rep.id}'`);
   check("C21. Publicado no cambia: ni se publica dos veces ni se le quita la marca", republish.status === 409 && mutate.includes("SHIFT_REPORT_APPROVED_IMMUTABLE"), [republish.status, mutate]);
@@ -277,6 +295,9 @@ async function main() {
   check("C22. Agencia intacta: su administradora no aprueba el informe de su propia visita, no puede «publicar como proveedor» (API ni base), no gestiona sus propias credenciales ni puede autodeclararlas",
     aSelf.status === 403 && aSelf.body.error === "SHIFT_REPORT_SELF_APPROVAL" && aProvider.status === 403 && aProviderDb.includes("SHIFT_REPORT_PROVIDER_PUBLISH_INDEPENDENT_ONLY")
     && aOwnCred.includes("CREDENTIAL_SELF_MANAGEMENT_FORBIDDEN") && aOwnDecl.includes("CREDENTIAL_SELF_DECLARATION_FORBIDDEN"), [aSelf.status, aProvider.status, aProviderDb, aOwnCred, aOwnDecl]);
+  const fakeConfirm = await asApp(adminA.id, A, `UPDATE assignments SET self_declaration_confirmed_at = now() WHERE shift_id='${shAId}'`);
+  check("C33. En una agencia nadie puede marcar una «confirmación de autodeclaración» para saltarse la elegibilidad al iniciar la visita (base de datos)",
+    fakeConfirm.includes("SELF_DECLARATION_INDEPENDENT_ONLY"), fakeConfirm);
   const reqA = await asApp(adminA.id, A, `INSERT INTO requirements (requirement_set_id, credential_type_id, is_mandatory, requires_organization_review) VALUES ('${setA}','${typeId}',false,true)`);
   const hDocs = await call("GET", `/organizations/${H}/practice/documents`, tH);
   const hSelf = await call("POST", `/organizations/${H}/me/shifts/${randomUUID()}/self-assign`, tH, {});
@@ -284,9 +305,89 @@ async function main() {
     !reqA.includes("INDEPENDENT_REQUIREMENT_NO_REVIEW") && hDocs.status === 403 && hSelf.status === 403, [reqA, hDocs.status, hSelf.status]);
   const anaEligAAfter = await call("GET", `/organizations/${A}/workers/${anaMemA}/compliance`, tA);
   check("C24. La agencia sigue aplicando SU política a Ana con normalidad (revisada → elegible)", anaEligAAfter.body.eligibility === "eligible", anaEligAAfter.body);
+  // ---- 8. Revisión final: adjuntos con el almacenamiento existente, reinicio de revisiones, acceso, nombre ----------
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
+  const upload = async (o: string, token: string, credId: string) => {
+    const init = await call("POST", `/organizations/${o}/me/credentials/${credId}/documents/upload-url`, token, { originalFilename: "certificado.pdf", contentType: "application/pdf", sizeBytes: pdf.byteLength });
+    const fileId = init.body.upload?.fileId as string | undefined;
+    const put = fileId ? await call("POST", `/organizations/${o}/me/credentials/${credId}/documents/${fileId}/content`, token, pdf) : { status: 0, body: {} as Json, type: "" };
+    const done = fileId ? await call("POST", `/organizations/${o}/me/credentials/${credId}/documents/${fileId}/complete`, token) : { status: 0, body: {} as Json, type: "" };
+    return { init, put, done, fileId };
+  };
+  const upL = await upload(L, tL, r1.body.id);
+  const lDocRow = await q<{ document_id: string | null; declared_by_holder: boolean }>(`SELECT document_id, declared_by_holder FROM credentials WHERE id=$1`, [r1.body.id]);
+  check("C26. Adjunta su archivo a un documento autodeclarado con el almacenamiento seguro existente (S3 privado); sigue siendo autodeclarado",
+    upL.init.status === 201 && upL.put.status === 200 && upL.done.status === 200 && Boolean(lDocRow.rows[0]?.document_id) && lDocRow.rows[0]?.declared_by_holder === true,
+    [upL.init.status, upL.init.body.error, upL.put.status, upL.done.status, upL.done.body.error]);
+  // Acceso al archivo: la agencia donde Ana trabaja (autorizada), sí; un hogar ajeno, una agencia sin vínculo y la familia, no.
+  const upA = await upload(N, tAnaN, anaDecl.body.id);
+  const dlAgency = await call("POST", `/organizations/${A}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/${upA.fileId}/download-url`, tA, {});
+  const dlHome = await call("POST", `/organizations/${H}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/${upA.fileId}/download-url`, tH, {});
+  const dlLucia = await call("POST", `/organizations/${L}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/${upA.fileId}/download-url`, tL, {});
+  const dlFamily = await call("POST", `/organizations/${L}/workers/${lMem.worker_id}/credentials/${r1.body.id}/documents/${upL.fileId}/download-url`, tFam, {});
+  const listFamily = await call("GET", `/organizations/${L}/workers/${lMem.worker_id}/credentials`, tFam);
+  check("C27. Documentos de una práctica: solo los ven las organizaciones autorizadas (donde la persona trabaja); ni un hogar ajeno, ni otra independiente, ni la familia",
+    upA.done.status === 200 && dlAgency.status === 200 && [403, 404].includes(dlHome.status) && [403, 404].includes(dlLucia.status) && [403, 404].includes(dlFamily.status) && [403, 404].includes(listFamily.status),
+    [upA.done.status, dlAgency.status, dlHome.status, dlLucia.status, dlFamily.status, listFamily.status]);
+  // La aprobación de la agencia no sobrevive a cambios de la titular (datos ni evidencia).
+  const revBefore = await q<{ s: string }>(`SELECT review_status::text s FROM organization_credential_reviews WHERE credential_id=$1 AND organization_id=$2`, [anaDecl.body.id, A]);
+  await q(`UPDATE organization_credential_reviews SET review_status='approved', reviewed_at=now() WHERE credential_id=$1 AND organization_id=$2`, [anaDecl.body.id, A]);
+  const eligBeforeChange = await call("GET", `/organizations/${A}/workers/${anaMemA}/compliance`, tA);
+  const change = await call("PATCH", `/organizations/${N}/practice/documents/${anaDecl.body.id}`, tAnaN, { expiresAt: day(900) });
+  const revAfter = await q<{ s: string }>(`SELECT review_status::text s FROM organization_credential_reviews WHERE credential_id=$1 AND organization_id=$2`, [anaDecl.body.id, A]);
+  const eligAfterChange = await call("GET", `/organizations/${A}/workers/${anaMemA}/compliance`, tA);
+  await q(`UPDATE organization_credential_reviews SET review_status='approved', reviewed_at=now() WHERE credential_id=$1 AND organization_id=$2`, [anaDecl.body.id, A]);
+  const reup = await upload(N, tAnaN, anaDecl.body.id);
+  const revAfterFile = await q<{ s: string }>(`SELECT review_status::text s FROM organization_credential_reviews WHERE credential_id=$1 AND organization_id=$2`, [anaDecl.body.id, A]);
+  check("C28. Si la titular cambia los datos o el archivo de un autodeclarado, la aprobación de la agencia vuelve a «pendiente» y deja de contar allí",
+    revBefore.rows[0]?.s === "pending" && eligBeforeChange.body.eligibility === "eligible" && change.status === 200 && revAfter.rows[0]?.s === "pending"
+    && eligAfterChange.body.eligibility === "not_eligible" && reup.done.status === 200 && revAfterFile.rows[0]?.s === "pending",
+    [revBefore.rows, eligBeforeChange.body.eligibility, change.status, revAfter.rows, eligAfterChange.body.eligibility, reup.done.status, revAfterFile.rows]);
+  const agencyAttach = await call("POST", `/organizations/${A}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/upload-url`, tA, { originalFilename: "x.pdf", contentType: "application/pdf", sizeBytes: pdf.byteLength });
+  const agencyAttachDone = agencyAttach.body.upload?.fileId
+    ? await (async () => { await call("POST", `/organizations/${A}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/${agencyAttach.body.upload.fileId}/content`, tA, pdf);
+        return call("POST", `/organizations/${A}/workers/${anaWorker}/credentials/${anaDecl.body.id}/documents/${agencyAttach.body.upload.fileId}/complete`, tA); })()
+    : agencyAttach as { status: number; body: Json };
+  await rt.query("BEGIN"); await rt.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [lucia.id, L]);
+  const probeOther = (await rt.query<{ v: boolean }>(`SELECT public.app_is_independent_operator($1::uuid, $2::uuid) AS v`, [ana.id, N])).rows[0].v;
+  const probeSelf = (await rt.query<{ v: boolean }>(`SELECT public.app_is_independent_operator($1::uuid, $2::uuid) AS v`, [lucia.id, L])).rows[0].v;
+  await rt.query("ROLLBACK");
+  const probe = probeOther === false && probeSelf === true ? "OK" : `other=${probeOther} self=${probeSelf}`;
+  check("C29. Nadie más adjunta archivos a un autodeclarado (tampoco su agencia), y la función del operador no sirve para sondear a otra cuenta",
+    agencyAttachDone.status !== 200 && probe === "OK", [agencyAttach.status, agencyAttachDone.status, agencyAttachDone.body.error, probe]);
+  // Nombre profesional en el «Informe del proveedor».
+  // Informe REAL de una visita terminada (inicio y final), generado por el backend sin nombre profesional.
+  const shN2 = await newShift(tL, L, clientId, 2, 62);
+  const sa2 = await call("POST", `/organizations/${L}/me/shifts/${shN2}/self-assign`, tL, { confirmSelfDeclaration: true });
+  const ci2 = await call("POST", `/organizations/${L}/shifts/${shN2}/check-in`, tL, { verificationMethodCode: "CAREGIVER_SESSION" });
+  await call("POST", `/organizations/${L}/shifts/${shN2}/care-events`, tL, { typeCode: "MEAL", careRecipientId: clientId, payload: { mealType: "Cena", amountConsumed: "Todo" } });
+  const co2 = await call("POST", `/organizations/${L}/shifts/${shN2}/check-out`, tL, {});
+  const en2 = await call("GET", `/organizations/${L}/shifts/${shN2}/shift-reports`, tL);
+  if (process.env.S161_DEBUG) console.log("visita", sa2.status, sa2.body.error, ci2.status, ci2.body.error, co2.status, co2.body.error, en2.status, en2.body.error);
+  const confirmedAt = await q<{ c: string | null }>(`SELECT self_declaration_confirmed_at c FROM assignments WHERE shift_id=$1`, [shN2]);
+  check("C32. Quien confirmó al asignarse puede iniciar y terminar esa visita (la confirmación queda en la asignación); sin confirmación, la regla de elegibilidad sigue igual",
+    sa2.status === 201 && ci2.status === 201 && co2.status === 201 && Boolean(confirmedAt.rows[0]?.c), [sa2.status, ci2.status, ci2.body.error, co2.status, confirmedAt.rows]);
+  const repN = (await q<{ id: string; generated_at: string }>(`SELECT id, generated_at FROM shift_reports WHERE shift_id=$1`, [shN2])).rows[0] ?? { id: randomUUID(), generated_at: new Date().toISOString() };
+  const pubNoName = await call("POST", `/organizations/${L}/shift-reports/${repN.id}/publish-as-provider`, tL, { expectedGeneratedAt: repN.generated_at, familySections: { schedule: true } });
+  const dbNoName = await asApp(lucia.id, L, `UPDATE shift_reports SET status='APPROVED', approved_at=now(), approved_by_user_id='${lucia.id}', published_by_provider=true, family_sections='{}'::jsonb WHERE id='${repN.id}'`);
+  const setName = await call("PUT", `/organizations/${L}/practice/profile`, tL, { professionalName: "Lucía Rivera, CNA" });
+  const docsName = await call("GET", `/organizations/${L}/practice/documents`, tL);
+  const refreshed = await call("POST", `/organizations/${L}/shift-reports/${repN.id}/refresh`, tL, {});
+  const fresh = await q<{ generated_at: string; name: string | null }>(`SELECT generated_at, content->'caregiver'->>'name' AS name FROM shift_reports WHERE id=$1`, [repN.id]);
+  const pubNamed = await call("POST", `/organizations/${L}/shift-reports/${repN.id}/publish-as-provider`, tL, { expectedGeneratedAt: fresh.rows[0].generated_at, familySections: { schedule: true } });
+  const famNamed = await call("GET", `/organizations/${L}/care-recipients/${clientId}/shift-reports/${repN.id}`, tFam);
+  const nameAudit = await q(`SELECT 1 FROM audit_log WHERE action='PRACTICE_PROFESSIONAL_NAME_SET' AND organization_id=$1`, [L]);
+  check("C30. Nunca «Cuidador: —»: sin nombre profesional no se publica (API y base); con su nombre (auditado) se actualiza el informe y la familia lo ve",
+    pubNoName.status === 409 && pubNoName.body.error === "PROVIDER_NAME_REQUIRED" && dbNoName.includes("PROVIDER_NAME_REQUIRED") && setName.status === 200
+    && docsName.body.professionalName === "Lucía Rivera, CNA" && [200, 204].includes(refreshed.status) && fresh.rows[0].name === "Lucía Rivera, CNA"
+    && pubNamed.status === 200 && JSON.stringify(famNamed.body).includes("Lucía Rivera, CNA") && nameAudit.rowCount === 1,
+    [pubNoName.status, pubNoName.body.error, dbNoName, setName.status, refreshed.status, refreshed.body, fresh.rows[0]?.name, pubNamed.status, pubNamed.body.error, famNamed.status]);
+  const otherName = await call("PUT", `/organizations/${A}/practice/profile`, tA, { professionalName: "Intento" });
+  check("C31. Solo la propia persona operativa cambia su nombre profesional (una agencia, no)", otherName.status === 403, otherName);
+
   check("C25. Nunca un 500 en todo el recorrido", errors500.length === 0, errors500);
 
-  server.close(); await pool.end(); await rt.end(); await db.end();
+  server.close(); await pool.end(); await rt.end(); await db.end(); moto?.kill();
   await srv.query(`DROP DATABASE ${own} WITH (FORCE)`); await srv.end();
 }
 
@@ -294,5 +395,6 @@ main().then(() => {
   const failed = results.filter((r) => !r.pass);
   for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.check}${r.pass ? "" : `\n      ${r.detail.slice(0, 1200)}`}`);
   console.log(`\n${results.length - failed.length}/${results.length} comprobaciones superadas`);
+  moto?.kill();
   process.exit(failed.length ? 1 : 0);
-}).catch((e) => { console.error(e); process.exit(1); });
+}).catch((e) => { console.error(e); moto?.kill(); process.exit(1); });

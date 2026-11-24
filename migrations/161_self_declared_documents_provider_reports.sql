@@ -22,13 +22,17 @@
 -- 1. Columnas -----------------------------------------------------------------------------------------------------
 ALTER TABLE credentials ADD COLUMN IF NOT EXISTS declared_by_holder boolean NOT NULL DEFAULT false;
 ALTER TABLE shift_reports ADD COLUMN IF NOT EXISTS published_by_provider boolean NOT NULL DEFAULT false;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS self_declaration_confirmed_at timestamptz NULL;
 COMMENT ON COLUMN credentials.declared_by_holder IS '161: registrado por su titular en su práctica independiente. Autodeclarado: ETNARA no lo verifica ni lo aprueba.';
+COMMENT ON COLUMN assignments.self_declaration_confirmed_at IS '161: el cuidador independiente confirmó expresamente (auditado) que cumple los requisitos de este servicio pese a faltantes o vencidos. No es autorización legal.';
 COMMENT ON COLUMN shift_reports.published_by_provider IS '161: publicado a la familia por el propio cuidador independiente («Informe del proveedor»), sin revisión de terceros.';
 
 -- 2. La única persona operativa de una organización independiente ------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.app_is_independent_operator(p_user_id uuid, p_organization_id uuid)
 RETURNS boolean AS $$
   SELECT p_user_id IS NOT NULL AND p_organization_id IS NOT NULL
+    -- Solo responde sobre la persona de la sesión: no sirve para sondear a otras cuentas.
+    AND p_user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     AND public.app_org_is_independent(p_organization_id)
     AND EXISTS (SELECT 1 FROM public.organization_memberships om
                 JOIN public.user_roles ur ON ur.organization_membership_id = om.id
@@ -39,6 +43,22 @@ RETURNS boolean AS $$
 $$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public;
 REVOKE ALL ON FUNCTION public.app_is_independent_operator(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_is_independent_operator(uuid, uuid) TO app_runtime;
+
+-- 2b. Un documento autodeclarado cambiado por su titular vuelve a «pendiente» en TODAS las organizaciones que lo
+--     hubieran revisado: ninguna agencia conserva una aprobación sobre datos o evidencia que ya cambiaron.
+CREATE OR REPLACE FUNCTION public.app_reset_declared_credential_reviews(p_credential_id uuid)
+RETURNS void AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.credentials c WHERE c.id = p_credential_id AND c.declared_by_holder
+                 AND public.app_credential_owner_user(c.worker_id) = NULLIF(current_setting('app.current_user_id', true), '')::uuid) THEN
+    RETURN;
+  END IF;
+  UPDATE public.organization_credential_reviews SET review_status = 'pending', notes = NULL, reviewed_at = NULL
+  WHERE credential_id = p_credential_id AND review_status <> 'pending';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public;
+REVOKE ALL ON FUNCTION public.app_reset_declared_credential_reviews(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_reset_declared_credential_reviews(uuid) TO app_runtime;
 
 -- 3. Guarda de credenciales: cuerpo de la 149 + rama «161» ----------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.app_credential_write_guard()
@@ -76,6 +96,16 @@ BEGIN
     END IF;
   END IF;
 
+  -- 161: un documento autodeclarado solo lo cambia su titular, también su evidencia (una agencia lo revisa, no
+  -- le adjunta archivos), y cualquier cambio de datos o de evidencia devuelve a «pendiente» todas sus revisiones.
+  IF TG_OP = 'UPDATE' AND OLD.declared_by_holder THEN
+    IF v_owner IS NULL OR v_actor IS NULL OR v_owner <> v_actor THEN
+      RAISE EXCEPTION 'CREDENTIAL_SELF_DECLARATION_FORBIDDEN' USING ERRCODE = '42501';
+    END IF;
+    IF NOT v_evidence_only OR NEW.document_id IS DISTINCT FROM OLD.document_id THEN
+      PERFORM public.app_reset_declared_credential_reviews(OLD.id);
+    END IF;
+  END IF;
   IF v_evidence_only THEN
     RETURN NEW;
   END IF;
@@ -102,6 +132,35 @@ BEGIN
 END;
 $$;
 
+-- 3b. Evidencia (archivo) de un documento autodeclarado: solo su titular la añade, y cada versión nueva devuelve a
+--     «pendiente» las revisiones de todas las organizaciones (el archivo vive en documents/document_versions).
+CREATE OR REPLACE FUNCTION public.app_declared_document_version_guard()
+RETURNS trigger AS $$
+DECLARE
+  v_credential uuid;
+  v_owner uuid;
+  v_actor uuid := NULLIF(current_setting('app.current_user_id', true), '')::uuid;
+BEGIN
+  IF current_user <> 'app_runtime' AND session_user <> 'app_runtime' THEN
+    RETURN NEW;
+  END IF;
+  SELECT c.id, public.app_credential_owner_user(c.worker_id) INTO v_credential, v_owner
+    FROM public.credentials c WHERE c.document_id = NEW.document_id AND c.declared_by_holder LIMIT 1;
+  IF v_credential IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF v_owner IS NULL OR v_actor IS NULL OR v_owner <> v_actor THEN
+    RAISE EXCEPTION 'CREDENTIAL_SELF_DECLARATION_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+  PERFORM public.app_reset_declared_credential_reviews(v_credential);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = pg_catalog, public;
+REVOKE ALL ON FUNCTION public.app_declared_document_version_guard() FROM PUBLIC;
+DROP TRIGGER IF EXISTS document_versions_declared_guard ON document_versions;
+CREATE TRIGGER document_versions_declared_guard BEFORE INSERT ON document_versions
+  FOR EACH ROW EXECUTE FUNCTION public.app_declared_document_version_guard();
+
 -- 4. Requisitos de un independiente: sin «revisión de la organización» --------------------------------------------
 CREATE OR REPLACE FUNCTION public.app_independent_requirement_guard()
 RETURNS trigger AS $$
@@ -118,6 +177,27 @@ REVOKE ALL ON FUNCTION public.app_independent_requirement_guard() FROM PUBLIC;
 DROP TRIGGER IF EXISTS requirements_independent_guard ON requirements;
 CREATE TRIGGER requirements_independent_guard BEFORE INSERT OR UPDATE ON requirements
   FOR EACH ROW EXECUTE FUNCTION public.app_independent_requirement_guard();
+
+-- 4b. La confirmación expresa en una asignación solo existe en un cuidador independiente, y es de la propia persona.
+CREATE OR REPLACE FUNCTION public.app_assignment_self_declaration_guard()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.self_declaration_confirmed_at IS NOT NULL
+     AND (TG_OP = 'INSERT' OR OLD.self_declaration_confirmed_at IS DISTINCT FROM NEW.self_declaration_confirmed_at) THEN
+    IF NOT public.app_org_is_independent(NEW.organization_id) OR NOT EXISTS (
+         SELECT 1 FROM public.organization_worker_memberships owm JOIN public.workers w ON w.id = owm.worker_id
+         WHERE owm.id = NEW.organization_worker_membership_id
+           AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid) THEN
+      RAISE EXCEPTION 'SELF_DECLARATION_INDEPENDENT_ONLY' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public;
+REVOKE ALL ON FUNCTION public.app_assignment_self_declaration_guard() FROM PUBLIC;
+DROP TRIGGER IF EXISTS assignments_self_declaration_guard ON assignments;
+CREATE TRIGGER assignments_self_declaration_guard BEFORE INSERT OR UPDATE OF self_declaration_confirmed_at ON assignments
+  FOR EACH ROW EXECUTE FUNCTION public.app_assignment_self_declaration_guard();
 
 -- 5. Guarda de informes: cuerpo de la 128 + excepción «161» ----------------------------------------------------------
 CREATE OR REPLACE FUNCTION app_shift_report_guard()
@@ -156,6 +236,11 @@ BEGIN
   IF NEW.published_by_provider AND NOT OLD.published_by_provider
      AND NOT public.app_org_is_independent(NEW.organization_id) THEN
     RAISE EXCEPTION 'SHIFT_REPORT_PROVIDER_PUBLISH_INDEPENDENT_ONLY' USING ERRCODE = '42501';
+  END IF;
+  -- 161: un «Informe del proveedor» siempre identifica a quien prestó el servicio (nunca «Cuidador: —»).
+  IF NEW.published_by_provider AND NOT OLD.published_by_provider
+     AND COALESCE(btrim(NEW.content->'caregiver'->>'name'), '') = '' THEN
+    RAISE EXCEPTION 'PROVIDER_NAME_REQUIRED' USING ERRCODE = '23514';
   END IF;
   -- Nobody approves the report of their own visit (also an admin who worked it).
   -- 161: excepción única: el cuidador independiente PUBLICA su propio informe como «Informe del proveedor»

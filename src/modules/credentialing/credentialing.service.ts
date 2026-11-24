@@ -270,6 +270,14 @@ async function assertCredentialBelongsToWorker(trx: unknown, workerId: string, c
   return result.rows[0];
 }
 
+/** 161: a un documento AUTODECLARADO solo su titular le añade evidencia (la base de datos lo exige también). */
+async function assertDeclaredEvidenceActor(trx: unknown, credentialId: string, userId: string) {
+  const r = await sql<{ declared: boolean; owner: string | null }>`
+    SELECT c.declared_by_holder AS declared, app_credential_owner_user(c.worker_id) AS owner FROM credentials c WHERE c.id = ${credentialId}
+  `.execute(trx as never);
+  if (r.rows[0]?.declared && r.rows[0].owner !== userId) throw new CredentialManagementForbiddenError();
+}
+
 async function resolveCredentialTypeId(trx: unknown, code: string): Promise<string> {
   const result = await sql<{ id: string }>`
     SELECT id FROM credential_types WHERE code = ${code} LIMIT 1
@@ -369,6 +377,7 @@ export async function initiateCredentialDocumentUpload(
     await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    await assertDeclaredEvidenceActor(trx, credentialId, userId);
     const fileId = randomUUID();
     const storageKey = `credentials/${workerId}/${credentialId}/${fileId}`;
     const result = await sql<{ id: string }>`
@@ -440,6 +449,7 @@ export async function completeCredentialDocumentUpload(
     await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    await assertDeclaredEvidenceActor(trx, credentialId, userId);
     const fileResult = await sql<{ id: string; storage_key: string; content_type: string; original_filename: string; size_bytes: string }>`
       SELECT id, storage_key, content_type, original_filename, size_bytes
       FROM stored_files

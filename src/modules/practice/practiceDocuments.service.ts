@@ -51,9 +51,9 @@ export async function getPracticeDocuments(userId: string, organizationId: strin
     const { workerId } = await assertOperator(trx, userId, organizationId);
     const today = todayPr();
     const types = (await sql<{ id: string; code: string; name: string }>`SELECT id, code, name FROM credential_types ORDER BY name`.execute(trx)).rows;
-    const docs = (await sql<{ id: string; code: string; name: string; issuing_entity_name: string | null; issued_at: string | null; expires_at: string | null; status: string; declared_by_holder: boolean; created_at: string; credential_type_id: string }>`
+    const docs = (await sql<{ id: string; code: string; name: string; issuing_entity_name: string | null; issued_at: string | null; expires_at: string | null; status: string; declared_by_holder: boolean; created_at: string; credential_type_id: string; document_id: string | null }>`
       SELECT c.id, ct.code, ct.name, c.issuing_entity_name, c.issued_at::text AS issued_at, c.expires_at::text AS expires_at, c.status::text AS status,
-             c.declared_by_holder, c.created_at, c.credential_type_id
+             c.declared_by_holder, c.created_at, c.credential_type_id, c.document_id
       FROM credentials c JOIN credential_types ct ON ct.id = c.credential_type_id
       WHERE c.worker_id = ${workerId} ORDER BY c.created_at DESC`.execute(trx)).rows;
     const set = (await sql<{ id: string }>`SELECT id FROM requirement_sets WHERE organization_id = ${organizationId}
@@ -67,15 +67,17 @@ export async function getPracticeDocuments(userId: string, organizationId: strin
       const doc = latestByType.get(r.credential_type_id) ?? null;
       return { credentialTypeCode: r.code, name: r.name, isMandatory: r.is_mandatory, status: practiceDocumentStatus(doc, today), expiresAt: doc?.expires_at ?? null, documentId: doc?.id ?? null };
     });
+    const professionalName = (await sql<{ n: string | null }>`SELECT display_name AS n FROM workers WHERE id = ${workerId}`.execute(trx)).rows[0]?.n ?? null;
     return {
       notice: PRACTICE_DOCUMENTS_NOTICE,
+      professionalName,
       policyConfigured: Boolean(set),
       expiringSoonDays: EXPIRING_SOON_DAYS,
       requirements,
       pendingMandatory: requirements.filter((r) => r.isMandatory && (r.status === "MISSING" || r.status === "EXPIRED")).map((r) => r.credentialTypeCode),
       documents: docs.map((d) => ({
         id: d.id, credentialTypeCode: d.code, name: d.name, issuingEntityName: d.issuing_entity_name, issuedAt: d.issued_at, expiresAt: d.expires_at,
-        status: practiceDocumentStatus(d, today), selfDeclared: d.declared_by_holder,
+        status: practiceDocumentStatus(d, today), selfDeclared: d.declared_by_holder, hasFile: Boolean(d.document_id),
       })),
       credentialTypes: types.map((t) => ({ code: t.code, name: t.name })),
     };
@@ -147,5 +149,23 @@ export async function savePracticeRequirements(userId: string, organizationId: s
   return saveCompliancePolicy(userId, organizationId, {
     workerRole: INDEPENDENT_WORKER_ROLE,
     requirements: codes.map((credentialTypeCode) => ({ credentialTypeCode, isMandatory: true, requiresOrganizationReview: false })),
+  });
+}
+
+export const practiceProfileSchema = z.object({ professionalName: z.string().trim().min(2).max(120) }).strict();
+
+/**
+ * 161: nombre profesional del cuidador independiente: el que verán sus clientes y sus familias en el
+ * «Informe del proveedor». Es el nombre de su perfil único (workers.display_name). Auditado.
+ */
+export async function savePracticeProfile(userId: string, organizationId: string, input: z.infer<typeof practiceProfileSchema>) {
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const { workerId } = await assertOperator(trx, userId, organizationId);
+    const prev = (await sql<{ n: string | null }>`SELECT display_name AS n FROM workers WHERE id = ${workerId} FOR UPDATE`.execute(trx)).rows[0]?.n ?? null;
+    await sql`UPDATE workers SET display_name = ${input.professionalName}, updated_at = now() WHERE id = ${workerId}`.execute(trx);
+    await sql`INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, previous_value, new_value)
+      VALUES (${userId}, ${organizationId}, ${organizationId}, 'PRACTICE_PROFESSIONAL_NAME_SET', 'worker', ${workerId},
+              ${JSON.stringify({ professionalName: prev })}::jsonb, ${JSON.stringify({ professionalName: input.professionalName })}::jsonb)`.execute(trx);
+    return { professionalName: input.professionalName };
   });
 }

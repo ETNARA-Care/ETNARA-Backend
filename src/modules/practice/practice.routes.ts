@@ -5,7 +5,7 @@ import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/
 import { ComplianceCredentialTypeNotFoundError, ComplianceManagementForbiddenError } from "../eligibility/eligibility.service.js";
 import {
   PracticeError, getPracticeDocuments, practiceRequirementsSchema, registerPracticeDocument, registerPracticeDocumentSchema,
-  savePracticeRequirements, updatePracticeDocument, updatePracticeDocumentSchema,
+  savePracticeRequirements, updatePracticeDocument, updatePracticeDocumentSchema, practiceProfileSchema, savePracticeProfile,
 } from "./practiceDocuments.service.js";
 
 /** 161 · «Mis documentos» del cuidador independiente: autodeclarados, sin verificación ni aprobación de ETNARA. */
@@ -50,6 +50,13 @@ router.put("/organizations/:organizationId/practice/requirements", requireAuth, 
   const body = practiceRequirementsSchema.safeParse(req.body ?? {});
   if (!org.success || !body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
   try { res.status(200).json({ policy: await savePracticeRequirements(req.auth!.userId, org.data, body.data) }); } catch (e) { fail(e, res); }
+});
+
+router.put("/organizations/:organizationId/practice/profile", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const org = uuid.safeParse(req.params.organizationId);
+  const body = practiceProfileSchema.safeParse(req.body ?? {});
+  if (!org.success || !body.success) return void res.status(400).json({ error: "INVALID_PAYLOAD" });
+  try { res.status(200).json(await savePracticeProfile(req.auth!.userId, org.data, body.data)); } catch (e) { fail(e, res); }
 });
 
 export default router;

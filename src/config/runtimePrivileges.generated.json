@@ -557,6 +557,7 @@
     "app_contract_signatory_rule",
     "app_create_activity_photo",
     "app_create_photo_consent_form",
+    "app_credential_owner_user",
     "app_delete_activity_photo",
     "app_escalate_operational_alert",
     "app_establishment_address",

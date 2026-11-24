@@ -249,6 +249,9 @@ export async function publishShiftReportAsProvider(userId: string, organizationI
     if (r.status === "APPROVED" || r.status === "SUPERSEDED") throw new ShiftReportError("SHIFT_REPORT_ALREADY_APPROVED", 409);
     if (!["DRAFT", "SUBMITTED", "RETURNED"].includes(r.status)) throw new ShiftReportError("SHIFT_REPORT_NOT_DRAFT", 409);
     if (new Date(input.expectedGeneratedAt).getTime() !== new Date(r.generated_at).getTime()) throw new ShiftReportError("SHIFT_REPORT_CHANGED", 409);
+    // Nunca «Cuidador: —»: sin nombre profesional en el informe no se publica (la base lo exige también).
+    const named = await sql<{ ok: boolean }>`SELECT COALESCE(btrim(content->'caregiver'->>'name'), '') <> '' AS ok FROM shift_reports WHERE id = ${reportId}`.execute(trx);
+    if (!named.rows[0]?.ok) throw new ShiftReportError("PROVIDER_NAME_REQUIRED", 409);
     const familySections: FamilySections = { ...FAMILY_SECTION_DEFAULTS, ...input.familySections } as FamilySections;
     await sql`UPDATE shift_reports SET status = 'APPROVED', approved_at = now(), approved_by_user_id = ${userId}, published_by_provider = true,
       family_sections = ${JSON.stringify(familySections)}::jsonb, agency_summary = ${input.agencySummary ?? null}

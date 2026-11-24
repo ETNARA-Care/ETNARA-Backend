@@ -306,6 +306,8 @@ export async function assignWorkerToShiftInTransaction(
       trx
     );
     if (selfDeclarationMissing) {
+      // 161: la confirmación queda en la asignación (para iniciar la visita) y en la auditoría.
+      await sql`UPDATE assignments SET self_declaration_confirmed_at = now() WHERE id = ${result.rows[0].id}`.execute(trx);
       await sql`
         INSERT INTO audit_log (actor_user_id, organization_id, target_organization_id, action, entity_type, entity_id, previous_value, new_value)
         VALUES (${options.selfDeclarationConfirmedBy ?? null}, ${organizationId}, ${organizationId}, 'SELF_DECLARATION_CONFIRMED', 'assignment', ${result.rows[0].id}, NULL,
