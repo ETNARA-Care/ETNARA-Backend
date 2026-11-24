@@ -381,6 +381,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyIndependentModality160.ts
 
+      - name: PostgreSQL 163 Central switch for the independent caregiver modality (platform admin only, reason, append-only audit, activation needs server authorization, deactivation always, existing providers unaffected, agencies and homes unchanged, database guards, rollback, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyModalitySwitch163.ts
+
+      - name: PostgreSQL 163 rollback (schema identical to before, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 163
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
