@@ -41,6 +41,11 @@ function handleError(error: unknown, res: Response) {
     res.status(statusForCode(error.code)).json({ error: error.code });
     return;
   }
+  // 160: una sola persona operativa en un cuidador independiente (lo exige la base de datos).
+  if (error instanceof Error && error.message.includes("INDEPENDENT_SINGLE_OPERATOR")) {
+    res.status(409).json({ error: "INDEPENDENT_SINGLE_OPERATOR" });
+    return;
+  }
   res.status(500).json({ error: "INTERNAL_ERROR" });
 }
 

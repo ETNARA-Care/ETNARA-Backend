@@ -2,6 +2,15 @@
 
 ## Current Status
 
+## 2026-11-23 — 160: Cuidador independiente, PR A (Central y activación) — rama claude/160-modalidad-independiente-central, PR borrador, sin desplegar
+- 159 quedó en producción (23-nov, despliegue 87598f45) y validada en LaCasita.
+- 160: platform_modalities (INDEPENDENT_PROVIDER apagada; app_runtime no puede leerla ni escribirla) + app_platform_modality_enabled(); trigger en organizations: no se crea un independiente con la modalidad apagada y el tipo es inmutable salvo app_ops_change_organization_type (solo propietario de migraciones, motivo, auditado, nunca hacia/desde INDEPENDENT_PROVIDER).
+- Una sola persona operativa (solo en INDEPENDENT_PROVIDER): guardas en user_roles, organization_worker_memberships y access_invitations → INDEPENDENT_SINGLE_OPERATOR.
+- app_activate_organization_admin_invitation = 085 + bloque «160»: en un independiente añade WORKER, perfil único (crea o reutiliza, regla de la 159) y ficha INDEPENDENT_CAREGIVER; auditoría INDEPENDENT_OPERATOR_PROVISIONED.
+- Backend: Central acepta INDEPENDENT_PROVIDER, GET /platform/organization-types, errores 409; middleware modalityGate (antes de orgFeatureGate) cierra rutas de equipo con 403 MODALITY_NOT_AVAILABLE solo en independientes.
+- Pruebas: verifyIndependentModality160 31/31 (incluye no regresión de agencias y hogares), rollback 4/4, tests/independentModality160 5/5, manifiesto regenerado (+2), CI local completa.
+- Siguiente: PR B (portal por modalidad). Hasta entonces el panel de un independiente muestra módulos de agencia (p. ej. el centro operacional responde 403). La modalidad sigue apagada en producción.
+
 ## 2026-11-23 — 159: una persona, un perfil de cuidador al aceptar invitaciones (LaCasita) — rama claude/159-perfil-unico-invitaciones, PR borrador, sin desplegar
 - Causa (producción, 23-nov): workers.user_id UNIQUE; la invitación de cuidador intentaba vincular una ficha nueva a una cuenta que ya tenía perfil → workers_user_id_key → 500 (12 veces).
 - 159 redefine solo la rama de cuidador de app_activate_access_invitation (046): con perfil propio, la membresía de la organización pasa a apuntar al perfil único (auditado WORKER_PROFILE_LINKED_ON_ACCEPT); ya cuidadora en la organización → WORKER_ALREADY_IN_ORGANIZATION; ficha provisional no vacía → WORKER_PROFILE_CONFLICT. Nada se borra. Backend traduce ambos códigos y convierte workers_user_id_key en WORKER_PROFILE_CONFLICT (nunca 500).
