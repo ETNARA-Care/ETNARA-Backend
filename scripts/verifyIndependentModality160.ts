@@ -255,6 +255,94 @@ async function main() {
   const life = await call("PATCH", `/platform/organizations/${cH.body.organization.id}/lifecycle`, tC, { action: "suspend", reason: "Prueba ficticia de ciclo de vida" });
   check("N8. Ciclo de vida desde Central (suspender) sigue funcionando: el guarda de tipo no interfiere", life.status === 200 && life.body.organization?.status === "suspended", life);
 
+  // ---- PR B «Mi práctica»: una sola persona administra y presta el servicio --------------------------------
+  const iso = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+  const sh1 = await call("POST", `/organizations/${I}/shifts`, tI, { careRecipientId: recId, scheduledStart: iso(-10), scheduledEnd: iso(120), requiredRole: "INDEPENDENT_CAREGIVER" });
+  const shiftId = (sh1.body.shift ?? sh1.body)?.id as string;
+  const blocked = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
+  const leftovers = await q(`SELECT 1 FROM assignments WHERE shift_id=$1`, [shiftId]);
+  const myCompliance = await call("GET", `/organizations/${I}/workers/${myMem}/compliance`, tI);
+  const blockedCode = String(blocked.body.error ?? "");
+  check("B1. Crea su turno; autoasignarse sin requisitos configurados sigue BLOQUEADO por la elegibilidad actual (PR C lo resolverá), con su resumen legible",
+    sh1.status === 201 && blocked.status === 409 && (blockedCode === "NO_APPLICABLE_REQUIREMENT_SET" || blockedCode.startsWith("WORKER_NOT_ELIGIBLE")) && myCompliance.status === 200 && leftovers.rowCount === 0,
+    [sh1.status, blocked.status, blocked.body, myCompliance.status]);
+  // Fixture SOLO de prueba: una política propia sin requisitos obligatorios deja la elegibilidad en «elegible».
+  // El PR C sustituye esto por los documentos autodeclarados; aquí solo se demuestra el flujo del portal.
+  const fixtureSet = async (o: string) => (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id, worker_role, name) VALUES ($1,'INDEPENDENT_CAREGIVER','Fixture de prueba 160B') RETURNING id`, [o])).rows[0].id;
+  await fixtureSet(I);
+  const self = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
+  const again = await call("POST", `/organizations/${I}/me/shifts/${shiftId}/self-assign`, tI, {});
+  const mine = await call("GET", `/organizations/${I}/me/shifts`, tI);
+  const selfAudit = await q(`SELECT 1 FROM audit_log WHERE action='SHIFT_SELF_ASSIGNED' AND organization_id=$1`, [I]);
+  check("B2. Con la elegibilidad cumplida: «Asignármelo» asigna y acepta en una sola operación (reglas de Turnos), auditado, sin duplicar; aparece en su «Mi día»",
+    self.status === 201 && self.body.assignment?.response_status === "accepted" && again.status === 409 && selfAudit.rowCount === 1 && (mine.body.shifts ?? []).some((x: Json) => x.id === shiftId),
+    [self.status, self.body.error, again.status, again.body.error, selfAudit.rowCount]);
+  const checkIn = await call("POST", `/organizations/${I}/shifts/${shiftId}/check-in`, tI, { verificationMethodCode: "CAREGIVER_SESSION" });
+  const meal = await call("POST", `/organizations/${I}/shifts/${shiftId}/care-events`, tI, { typeCode: "MEAL", careRecipientId: recId, payload: { mealType: "Almuerzo", amountConsumed: "Mitad" } });
+  const timeline = await call("GET", `/organizations/${I}/care-recipients/${recId}/care-events`, tI);
+  check("B3. Registra actividades: inicia la visita y documenta un registro de cuidado de su cliente",
+    [200, 201].includes(checkIn.status) && meal.status === 201 && timeline.status === 200, [checkIn.status, checkIn.body.error, meal.status, meal.body.error, timeline.status]);
+  const convs = await call("GET", `/organizations/${I}/conversations`, tI);
+  const extraClosed = await Promise.all([
+    call("GET", `/organizations/${I}/compliance/audit`, tI), call("POST", `/organizations/${I}/compliance/agent/briefing`, tI, {}), call("POST", `/organizations/${I}/my-agency-conversation`, tI, {}),
+  ]);
+  check("B4. Mensajes con familias disponibles; auditoría y agente de cumplimiento de agencia y «escribir a mi agencia» cerrados (403 MODALITY_NOT_AVAILABLE)",
+    convs.status === 200 && extraClosed.every((r) => r.status === 403 && r.body.error === "MODALITY_NOT_AVAILABLE"), [convs.status, extraClosed.map((r) => r.status)]);
+  const agencyCompliance = await call("GET", `/organizations/${A}/compliance/audit`, tA);
+  const agencyChat = await call("POST", `/organizations/${A}/my-agency-conversation`, await login(ana, A), {});
+  check("B5. Agencia: su auditoría de cumplimiento y la conversación de la cuidadora con su agencia siguen igual", agencyCompliance.status === 200 && [200, 201].includes(agencyChat.status), [agencyCompliance.status, agencyChat.status, agencyChat.body.error]);
+
+  // ---- PR B: persona que también trabaja para una agencia (Ana: CNA en la agencia A e independiente en I2) ----
+  const tAna2 = await login(ana, I2);
+  const anaMemI2 = (await q<{ id: string }>(`SELECT id FROM organization_worker_memberships WHERE organization_id=$1`, [I2])).rows[0].id;
+  await fixtureSet(I2);
+  const recI2 = (await call("POST", `/organizations/${I2}/care-recipients`, tAna2, { firstName: "Cliente", lastName: "Ficticio" })).body;
+  const recI2Id = (recI2.careRecipient ?? recI2.recipient ?? recI2)?.id as string;
+  // Agencia A: política con revisión de la agencia para su credencial.
+  const setA = (await q<{ id: string }>(`INSERT INTO requirement_sets (organization_id, worker_role, name) VALUES ($1,'CNA','Política ficticia agencia A') RETURNING id`, [A])).rows[0].id;
+  await q(`INSERT INTO requirements (requirement_set_id, credential_type_id, is_mandatory, requires_organization_review) VALUES ($1,$2,true,true)`, [setA, credType]);
+  const recA = (await call("POST", `/organizations/${A}/care-recipients`, tA, { firstName: "Persona", lastName: "Agencia" })).body;
+  const recAId = (recA.careRecipient ?? recA.recipient ?? recA)?.id as string;
+  const shA = (await call("POST", `/organizations/${A}/shifts`, tA, { careRecipientId: recAId, scheduledStart: iso(24 * 60), scheduledEnd: iso(24 * 60 + 240), requiredRole: "CNA" })).body;
+  const shAId = (shA.shift ?? shA)?.id as string;
+  const aBlocked = await call("POST", `/organizations/${A}/shifts/${shAId}/assignments`, tA, { organizationWorkerMembershipId: anaMemA });
+  const anaCred = (await q<{ id: string }>(`SELECT id FROM credentials WHERE worker_id=$1`, [anaWorker])).rows[0].id;
+  const anaSelfReview = await call("POST", `/organizations/${I2}/workers/${anaMemI2}/credentials/${anaCred}/review`, tAna2, { reviewStatus: "approved" });
+  // Aprobar por la ruta exige un documento adjunto (regla vigente): en esta prueba la aprobación de la administradora
+  // de la agencia se registra directamente, igual que la escribiría el servicio.
+  const review = await suErr(`INSERT INTO organization_credential_reviews (credential_id, organization_id, reviewed_by_user_id, review_status, reviewed_at) VALUES ($1,$2,$3,'approved',now())`, [anaCred, A, adminA.id]).then((r) => ({ status: r === "OK" ? 200 : 500, body: { error: r } }));
+  const aOk = await call("POST", `/organizations/${A}/shifts/${shAId}/assignments`, tA, { organizationWorkerMembershipId: anaMemA });
+  check("B6. Agencia intacta: sin la revisión de la agencia Ana NO es elegible allí; su práctica independiente no puede revisarse a sí misma; tras la revisión de la agencia, sí",
+    aBlocked.status === 409 && String(aBlocked.body.error ?? "").startsWith("WORKER_NOT_ELIGIBLE") && anaSelfReview.status === 403 && review.status === 200 && aOk.status === 201,
+    [aBlocked.status, aBlocked.body.error, anaSelfReview.status, anaSelfReview.body.error, review.status, review.body.error, aOk.status, aOk.body.error]);
+  const anaAcceptA = await call("POST", `/organizations/${A}/me/shifts/${shAId}/respond`, await login(ana, A), { decision: "accepted" });
+  const shI2a = (await call("POST", `/organizations/${I2}/shifts`, tAna2, { careRecipientId: recI2Id, scheduledStart: iso(24 * 60 + 60), scheduledEnd: iso(24 * 60 + 180) })).body;
+  const shI2aId = (shI2a.shift ?? shI2a)?.id as string;
+  const overlap = await call("POST", `/organizations/${I2}/me/shifts/${shI2aId}/self-assign`, tAna2, {});
+  const overlapLeft = await q(`SELECT 1 FROM assignments WHERE shift_id=$1`, [shI2aId]);
+  const overlapShift = await q<{ status: string }>(`SELECT status::text FROM shifts WHERE id=$1`, [shI2aId]);
+  const shI2b = (await call("POST", `/organizations/${I2}/shifts`, tAna2, { careRecipientId: recI2Id, scheduledStart: iso(48 * 60), scheduledEnd: iso(48 * 60 + 120) })).body;
+  const shI2bId = (shI2b.shift ?? shI2b)?.id as string;
+  const free = await call("POST", `/organizations/${I2}/me/shifts/${shI2bId}/self-assign`, tAna2, {});
+  check("B7. Su agenda es una sola: no puede asignarse en su práctica un turno que choca con el aceptado en la agencia (nada queda a medias); uno libre, sí",
+    anaAcceptA.status === 200 && overlap.status === 409 && overlap.body.error === "MY_SCHEDULE_CONFLICT" && overlapLeft.rowCount === 0 && overlapShift.rows[0].status === "unassigned" && free.status === 201,
+    [anaAcceptA.status, overlap.status, overlap.body.error, overlapLeft.rowCount, overlapShift.rows[0]?.status, free.status, free.body.error]);
+  const agencySelf = await call("POST", `/organizations/${A}/me/shifts/${shAId}/self-assign`, tA, {});
+  const hogarSelf = await call("POST", `/organizations/${H}/me/shifts/${randomUUID()}/self-assign`, tH, {});
+  check("B10. «Asignármelo» no existe en agencias ni hogares (403 SELF_ASSIGN_INDEPENDENT_ONLY): su flujo de asignar → aceptar no cambia",
+    agencySelf.status === 403 && agencySelf.body.error === "SELF_ASSIGN_INDEPENDENT_ONLY" && hogarSelf.status === 403 && hogarSelf.body.error === "SELF_ASSIGN_INDEPENDENT_ONLY", [agencySelf, hogarSelf]);
+  const crossA = await call("GET", `/organizations/${I2}/care-recipients`, tA);
+  const agencyList = await call("GET", `/organizations/${A}/care-recipients`, tA);
+  const i2List = await call("GET", `/organizations/${I2}/care-recipients`, tAna2);
+  const i2Shifts = await call("GET", `/organizations/${I2}/shifts`, tAna2);
+  check("B8. Aislamiento: la agencia no entra a la práctica de Ana ni ve sus clientes; la práctica no lista clientes ni turnos de la agencia",
+    crossA.status === 403 && !JSON.stringify(agencyList.body).includes(recI2Id) && i2List.status === 200 && !JSON.stringify(i2List.body).includes(recAId)
+    && !JSON.stringify(i2Shifts.body).includes(shAId) && JSON.stringify(i2Shifts.body).includes(shI2bId),
+    [crossA.status, agencyList.status, i2List.status, i2Shifts.status]);
+  check("B9. La agencia sigue sin ver la ficha de su práctica independiente y su ficha de agencia no cambió",
+    (await q(`SELECT 1 FROM organization_worker_memberships WHERE id=$1 AND organization_id=$2 AND status='active' AND internal_role='CNA'`, [anaMemA, A])).rowCount === 1
+    && !(await call("GET", `/organizations/${A}/workers`, tA)).body.workers?.some?.((w: Json) => w.id === anaMemI2));
+
   // ---- Apagar de nuevo: lo creado sigue, no se crean más ----------------------------------------------------
   await q(`UPDATE platform_modalities SET enabled=false WHERE code='INDEPENDENT_PROVIDER'`);
   const c3 = await call("POST", "/platform/organizations", tC, { name: `Otra Independiente ${tag}`, organizationType: "INDEPENDENT_PROVIDER" });

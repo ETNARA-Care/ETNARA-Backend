@@ -28,6 +28,12 @@ const RULES: { pattern: RegExp; methods: string[] }[] = [
   { pattern: new RegExp(`${ORG}/financial-rates(/|$)`, "i"), methods: ALL },                        // tarifas de pago del personal
   { pattern: new RegExp(`${ORG}/establishments(/|$)`, "i"), methods: ALL },                         // establecimientos residenciales
   { pattern: new RegExp(`${ORG}/my-admin-establishments$`, "i"), methods: ALL },
+  // PR B (Mi práctica): vistas del centro de cumplimiento de agencia (auditoría y agente sobre el personal) y la
+  // conversación «con mi agencia», que en un independiente sería consigo misma. La configuración de requisitos
+  // propia (compliance/configuration) y el resumen de la propia ficha (workers/:id/compliance) siguen abiertos (PR C).
+  { pattern: new RegExp(`${ORG}/compliance/audit$`, "i"), methods: ALL },
+  { pattern: new RegExp(`${ORG}/compliance/agent(/|$)`, "i"), methods: ALL },
+  { pattern: new RegExp(`${ORG}/my-agency-conversation$`, "i"), methods: ALL },
 ];
 
 /** Devuelve la organización si la ruta es de equipo y está cerrada para un independiente; null en otro caso. */

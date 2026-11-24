@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-23 — 160 PR B «Mi práctica» (backend) — rama claude/160b-mi-practica (apilada sobre claude/160-modalidad-independiente-central), PR borrador
+- POST /organizations/:id/me/shifts/:shiftId/self-assign: el independiente asigna y acepta su turno en UNA transacción con assignWorkerToShiftInTransaction (elegibilidad intacta) + chequeo de su agenda en todas sus organizaciones; auditoría SHIFT_SELF_ASSIGNED. Agencias y hogares: 403 SELF_ASSIGN_INDEPENDENT_ONLY. Punto de enganche del PR C (confirmación de documentos autodeclarados) documentado en selfAssignMyShift.
+- modalityRules: también cierra compliance/audit, compliance/agent y my-agency-conversation en independientes.
+- verifyIndependentModality160: 41/41 (B1–B10: bloqueo sin requisitos, autoasignación, actividades, mensajes, persona que también trabaja para una agencia, agenda única, aislamiento, agencias sin cambios). Unitarias 6/6. Sin migración nueva; manifiesto sin cambios.
+- Siguiente: PR C (documentos autodeclarados, confirmación registrada, «Informe del proveedor»).
+
 ## 2026-11-23 — 160: Cuidador independiente, PR A (Central y activación) — rama claude/160-modalidad-independiente-central, PR borrador, sin desplegar
 - 159 quedó en producción (23-nov, despliegue 87598f45) y validada en LaCasita.
 - 160: platform_modalities (INDEPENDENT_PROVIDER apagada; app_runtime no puede leerla ni escribirla) + app_platform_modality_enabled(); trigger en organizations: no se crea un independiente con la modalidad apagada y el tipo es inmutable salvo app_ops_change_organization_type (solo propietario de migraciones, motivo, auditado, nunca hacia/desde INDEPENDENT_PROVIDER).
