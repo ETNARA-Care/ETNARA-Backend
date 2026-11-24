@@ -313,8 +313,10 @@ async function main() {
     // The portal profile loads her credentials too: a 404 here showed «Error del servidor» and hid «Reactivar».
     const notifBefore = Number((await q(`SELECT count(*) FROM notifications WHERE organization_id=$1`, [orgA]))[0].count);
     const creds = await call("GET", `${A}/workers/${d.workerId}/credentials`, admin.token);
-    check("administradora: ve las credenciales de la inactiva (perfil y «Reactivar» en el portal)", creds.status === 200 && creds.text.includes(dCredential), `${creds.status}`);
-    check("supervisora: ve las credenciales de la inactiva", (await call("GET", `${A}/workers/${d.workerId}/credentials`, sup.token)).text.includes(dCredential));
+    // 162: the former agency keeps the profile but no longer receives her credentials (200, empty list).
+    check("administradora: la carga del perfil sigue funcionando (200) pero sin credenciales de la inactiva (162)", creds.status === 200 && !creds.text.includes(dCredential), `${creds.status}`);
+    const supCreds = await call("GET", `${A}/workers/${d.workerId}/credentials`, sup.token);
+    check("supervisora: tampoco ve las credenciales de la inactiva (162)", supCreds.status === 200 && !supCreds.text.includes(dCredential), `${supCreds.status}`);
     const notifAfter = Number((await q(`SELECT count(*) FROM notifications WHERE organization_id=$1`, [orgA]))[0].count);
     check("sin avisos de vencimiento por una persona inactiva", notifAfter === notifBefore, `${notifBefore}→${notifAfter}`);
     const ownCreds = await call("GET", `${A}/workers/${d.workerId}/credentials`, d.token);
