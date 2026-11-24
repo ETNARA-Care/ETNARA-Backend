@@ -1,9 +1,8 @@
 -- Rollback of 162 (manual, ops only; never run by the migration runner).
 --
 -- Restores the 137 read exceptions for credentials, documents and document versions, and
--- removes the download-issuing function. The download audit table is KEPT by default:
--- its rows are audit records subject to retention. Drop it only with an explicit decision
--- (uncomment the last block), after exporting it.
+-- removes the download-issuing function. The download audit table is KEPT whenever it holds
+-- records (retention); it is removed only when empty, so the schema is then identical to before.
 --
 -- Deploy the previous backend BEFORE running this: the 162 backend calls
 -- app_issue_credential_document_download() and fails closed without it.
@@ -31,8 +30,17 @@ CREATE POLICY document_versions_manager_read_any_status ON document_versions
 
 DROP FUNCTION IF EXISTS public.app_issue_credential_document_download(uuid, uuid, uuid);
 
--- Audit table: kept (retention). To remove it explicitly:
--- DROP TABLE IF EXISTS credential_document_downloads;
--- DROP FUNCTION IF EXISTS public.app_credential_document_downloads_immutable();
+-- Audit table: if it holds download records it is KEPT (retention); with no records it is removed so the schema
+-- returns exactly to its previous state. Never deletes a record.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM credential_document_downloads LIMIT 1) THEN
+    RAISE NOTICE '162 rollback: credential_document_downloads holds audit records; kept for retention';
+  ELSE
+    DROP TABLE credential_document_downloads;
+    DROP FUNCTION IF EXISTS public.app_credential_document_downloads_immutable();
+  END IF;
+END $$;
 
+DELETE FROM schema_migrations WHERE filename = '162_former_agency_document_access_download_audit.sql';
 COMMIT;

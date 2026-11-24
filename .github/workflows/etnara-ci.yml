@@ -393,6 +393,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyFormerAgencyAccessDownloads162.ts
 
+      - name: PostgreSQL 162 rollback (schema identical to before, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 162
+
       - name: PostgreSQL institutional document dates (D4) — upload validation, dates correction without re-upload, history, audit, isolation, roles
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

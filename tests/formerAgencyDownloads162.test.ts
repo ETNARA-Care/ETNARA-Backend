@@ -30,9 +30,11 @@ describe("162 · former agency access and audited downloads", () => {
     expect(list).toMatch(/if \(!active\) return \[\];/);
   });
 
-  it("rollback restores the 137 exceptions and keeps the audit records", () => {
+  it("rollback restores the 137 exceptions, keeps audit records when there are any and unregisters 162", () => {
     for (const t of ["credentials", "documents", "document_versions"]) expect(rollback).toContain(`CREATE POLICY ${t}_manager_read_any_status`);
     expect(rollback).toContain("DROP FUNCTION IF EXISTS public.app_issue_credential_document_download");
-    expect(rollback).not.toMatch(/^\s*DROP TABLE/m);
+    expect(rollback).toMatch(/IF EXISTS \(SELECT 1 FROM credential_document_downloads LIMIT 1\) THEN\s+RAISE NOTICE/);
+    expect(rollback).not.toMatch(/DELETE FROM credential_document_downloads/);
+    expect(rollback).toMatch(/DELETE FROM schema_migrations WHERE filename = '162_former_agency_document_access_download_audit\.sql'/);
   });
 });

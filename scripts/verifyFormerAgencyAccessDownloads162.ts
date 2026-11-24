@@ -250,8 +250,9 @@ async function main() {
   await q(readFileSync(join(process.cwd(), "ops/162_former_agency_document_access_download_audit.rollback.sql"), "utf8"));
   const rbPolicies = (await q(`SELECT tablename FROM pg_policies WHERE policyname LIKE '%_manager_read_any_status' ORDER BY 1`)).rows.map((r) => r.tablename);
   const rbFn = Number((await q(`SELECT count(*) n FROM pg_proc WHERE proname='app_issue_credential_document_download'`)).rows[0].n);
-  check("D19. Reversión: vuelven las 4 políticas de la 137, se retira la función y el registro de descargas se conserva íntegro (retención)",
-    JSON.stringify(rbPolicies) === '["credentials","document_versions","documents","workers"]' && rbFn === 0 && await events() === kept, [rbPolicies, rbFn]);
+  const rbReg = (await q(`SELECT 1 FROM schema_migrations WHERE filename='162_former_agency_document_access_download_audit.sql'`)).rowCount;
+  check("D19. Reversión: vuelven las 4 políticas de la 137, se retira la función, se desregistra la 162 y el registro de descargas (con eventos) se conserva íntegro (retención)",
+    JSON.stringify(rbPolicies) === '["credentials","document_versions","documents","workers"]' && rbFn === 0 && rbReg === 0 && await events() === kept, [rbPolicies, rbFn, rbReg]);
   const mig = readFileSync(join(process.cwd(), "migrations/162_former_agency_document_access_download_audit.sql"), "utf8");
   await q(mig); await q(mig);
   const rePolicies = (await q(`SELECT tablename FROM pg_policies WHERE policyname LIKE '%_manager_read_any_status'`)).rows.map((r) => r.tablename);
