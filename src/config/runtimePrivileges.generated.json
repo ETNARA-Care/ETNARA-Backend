@@ -576,6 +576,7 @@
     "app_is_own_worker_membership",
     "app_is_shift_report_admin",
     "app_is_superadmin",
+    "app_issue_credential_document_download",
     "app_my_confirmed_commitment_overlaps",
     "app_my_message_recipients",
     "app_my_org_features",
