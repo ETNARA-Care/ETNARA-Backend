@@ -88,6 +88,8 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main
       - name: Reject migration number conflicts with main
         run: python3 scripts/check_smartmatch_migration_numbers.py
+      - name: Reject any new migration whose prefix already exists on main (170)
+        run: python3 scripts/check_migration_prefixes.py
   tenant-isolation:
     # Built from the REAL migration chain (not a synthetic fixture schema), so
     # role codes, helper functions and policy interactions match production.
