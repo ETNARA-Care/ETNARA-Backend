@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { residentialRouteFor, featureCodesForOrganizationType, RESIDENTIAL_DENIED_FEATURES, RESIDENTIAL_ONLY_FEATURES } from "../src/middleware/residentialRules.js";
+import { canonicalGatePath, residentialRouteFor, featureCodesForOrganizationType, RESIDENTIAL_DENIED_FEATURES, RESIDENTIAL_ONLY_FEATURES } from "../src/middleware/residentialRules.js";
 import { gatedFeatureFor } from "../src/middleware/orgFeatureRules.js";
 import { teamRouteFor } from "../src/middleware/modalityRules.js";
 
@@ -93,3 +93,49 @@ describe("170: hogares de envejecientes, F0", () => {
     expect(app).toContain("app.use(residentialRoutes);");
   });
 });
+
+// Revisión independiente 25-nov (A1): variantes que Express 5 acepta (barra final, mayúsculas, %XX en ids y literales).
+describe("170 A1 · la guarda reconoce todas las variantes de ruta que Express acepta", () => {
+  const ID2 = "0b8f2c1e-6a4d-4c3b-9e2f-1a2b3c4d5e6f";
+  const enc = (s: string) => [...s].map((c) => "%" + c.charCodeAt(0).toString(16)).join("");
+  it("forma canónica: decodifica segmentos, quita barras repetidas y finales, nunca lanza", () => {
+    expect(canonicalGatePath(`/organizations/%61bc//finance/`)).toBe("/organizations/abc/finance");
+    expect(canonicalGatePath("/a/%E0%A4%A/b")).toBe("/a/%E0%A4%A/b");
+    expect(canonicalGatePath("/")).toBe("/");
+  });
+  const denied = ["/smartmatch/opportunities", `/shifts/${ID2}/private-instructions`, "/finance/services", `/shifts/${ID2}/finance`, "/billing/invoices",
+    "/shift-reports", `/shifts/${ID2}/shift-reports`, "/shift-report-reviewers", "/me/shift-reports", `/care-recipients/${ID2}/shift-reports`];
+  it("rutas denegadas: barra final, doble barra, mayúsculas, ids y literales codificados → denied con el id decodificado", () => {
+    for (const s of denied) {
+      const variants = [`${O}${s}/`, `${O}${s}//`, `${O}/${s}`, `${O}${s}`.toUpperCase() + "/", `/organizations/${enc(ID)}${s}`,
+        `/organizations/%${ID.charCodeAt(0).toString(16)}${ID.slice(1)}${s}`, `${O}${s.replace(/\/([a-z])/, (_m, c: string) => "/%" + c.charCodeAt(0).toString(16))}`,
+        `${O}${s.replace(ID2, enc(ID2))}`];
+      for (const v of variants) expect(residentialRouteFor(v), v).toEqual({ organizationId: ID, kind: "denied" });
+    }
+  });
+  it("/residential con las mismas variantes → residential", () => {
+    for (const v of [`${O}/residential/overview/`, `/organizations/${enc(ID)}/residential/overview`, `${O}/%72esidential/overview`, `${O}//residential`])
+      expect(residentialRouteFor(v), v).toEqual({ organizationId: ID, kind: "residential" });
+  });
+  it("sin falsos positivos: otras rutas y nombres parecidos siguen sin regla", () => {
+    for (const s of ["/financial-rates", "/finances", "/billingx", "/smartmatches", "/residentialx", `/shifts/${ID2}/financex`, "/care-recipients"])
+      expect(residentialRouteFor(`${O}${s}/`), s).toBeNull();
+  });
+});
+
+// Revisión independiente 25-nov (A2): la guarda se cierra ante cualquier fallo inesperado.
+describe("170 A2 · residentialGate se cierra ante lo inesperado", () => {
+  const gateSrc = read("src/middleware/residentialGate.ts");
+  it("solo continúa con sesión inválida (401 de la ruta); pertenencia → 403; id inválido → 400; lo demás → 503", () => {
+    expect(gateSrc).toMatch(/if \(error instanceof SessionInvalidError\) \{ next\(\); return; \}\s*unavailable\(res, "session", error\)/);
+    expect(gateSrc).toMatch(/isTenantAccessDenied\(error\)\) \{ res\.status\(403\)/);
+    expect(gateSrc).toMatch(/InvalidTenantContextError\) \{ res\.status\(400\)/);
+    expect(gateSrc).toMatch(/unavailable\(res, "modality", error\); return;/);
+    expect(gateSrc).not.toMatch(/=== "42883"/);
+    // La consulta de modalidad corre dentro del contexto de la organización (misma transacción).
+    expect(gateSrc).toMatch(/withTenantContext\(\{ userId, organizationId: route\.organizationId \}, async \(trx\) =>[\s\S]*app_org_is_residential[\s\S]*\.execute\(trx\)/);
+    // next() solo aparece en: OPTIONS, sin regla o sin token, sesión inválida y el final permitido.
+    expect((gateSrc.match(/next\(\)/g) ?? []).length).toBe(4);
+  });
+});
+

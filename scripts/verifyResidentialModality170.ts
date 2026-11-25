@@ -161,9 +161,14 @@ async function main() {
       has_function_privilege('public', p.oid, 'EXECUTE') pub, has_function_privilege('app_runtime', p.oid, 'EXECUTE') rt
     FROM pg_proc p WHERE p.oid = 'public.app_org_is_residential(uuid)'::regprocedure`)).rows[0];
   check("S1. app_org_is_residential: SECURITY DEFINER, search_path fijo, sin PUBLIC, solo app_runtime ejecuta", fn?.secdef === true && fn.path.includes("search_path=pg_catalog, public") && fn.pub === false && fn.rt === true, fn);
-  const isRes = async (o: string) => (await rt.query<{ r: boolean }>(`SELECT app_org_is_residential($1::uuid) r`, [o])).rows[0].r;
+  // A3 (25-nov): app_runtime solo obtiene la respuesta como miembro de esa organización o desde ETNARA Central.
+  const isRes = async (o: string, asUser: string) => { await rt.query("BEGIN");
+    try { await rt.query(`SELECT set_config('app.current_user_id', $1, true)`, [asUser]); return (await rt.query<{ r: boolean }>(`SELECT app_org_is_residential($1::uuid) r`, [o])).rows[0].r; }
+    finally { await rt.query("ROLLBACK"); } };
+  const isResSu = async (o: string) => (await q<{ r: boolean }>(`SELECT app_org_is_residential($1::uuid) r`, [o])).rows[0].r;
   check("S2. Solo el hogar es residencial (agencia, independiente y una organización inexistente: false)",
-    (await isRes(H)) === true && (await isRes(A)) === false && (await isRes(I)) === false && (await isRes(randomUUID())) === false);
+    (await isRes(H, adminH.id)) === true && (await isRes(A, adminA.id)) === false && (await isRes(I, adminI.id)) === false
+    && (await isResSu(H)) === true && (await isResSu(randomUUID())) === false);
   check("S3. Interruptores de hogar apagados por defecto: ninguna fila ni evento con los códigos nuevos",
     (await q(`SELECT 1 FROM organization_features WHERE feature_code = ANY($1)`, [HOGAR_CODES])).rowCount === 0
     && (await q(`SELECT 1 FROM organization_feature_events WHERE feature_code = ANY($1)`, [HOGAR_CODES])).rowCount === 0);
