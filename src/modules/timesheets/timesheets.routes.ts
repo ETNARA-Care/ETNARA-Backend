@@ -4,7 +4,9 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
 import { OrganizationAccessDeniedError } from "../organizationContext/organizationContext.service.js";
 import {
+  FinancialRateInvalidError,
   FinancialRateMembershipNotFoundError,
+  ResidentialBillingNotAvailableError,
   FinancialRateRequiredError,
   TimesheetAlreadyApprovedError,
   TimesheetForbiddenError,
@@ -38,7 +40,11 @@ function handleError(error: unknown, res: Response): boolean {
     res.status(404).json({ error: error.message });
     return true;
   }
-  if (error instanceof FinancialRateRequiredError || error instanceof TimesheetAlreadyApprovedError) {
+  if (error instanceof FinancialRateInvalidError) {
+    res.status(400).json({ error: error.message });
+    return true;
+  }
+  if (error instanceof FinancialRateRequiredError || error instanceof TimesheetAlreadyApprovedError || error instanceof ResidentialBillingNotAvailableError) {
     res.status(409).json({ error: error.message });
     return true;
   }

@@ -38,9 +38,31 @@ export class FinancialRateRequiredError extends Error {
   }
 }
 
+/**
+ * F0.1 (hogares, 25-nov-2026): «Horas del personal». En un RESIDENTIAL_CARE_HOME no existe la facturación: la tarifa
+ * de facturación no se acepta (409 RESIDENTIAL_BILLING_NOT_AVAILABLE), se guarda en 0 (la base exige un valor) y las
+ * respuestas la devuelven como null; el pago es solo una estimación (sin nómina, deducciones ni contribuciones).
+ * Agencias: sin cambios (la tarifa de facturación sigue siendo obligatoria).
+ */
+export class ResidentialBillingNotAvailableError extends Error {
+  constructor() { super("RESIDENTIAL_BILLING_NOT_AVAILABLE"); this.name = "ResidentialBillingNotAvailableError"; }
+}
+export class FinancialRateInvalidError extends Error {
+  constructor() { super("INVALID_FINANCIAL_RATE_REQUEST"); this.name = "FinancialRateInvalidError"; }
+}
+
+/** ¿Es un hogar? Se consulta dentro del contexto de la organización (pertenencia ya verificada). */
+export async function isResidentialOrganization(trx: unknown): Promise<boolean> {
+  const r = await sql<{ residential: boolean }>`
+    SELECT public.app_org_is_residential(NULLIF(current_setting('app.current_org_id', true), '')::uuid) AS residential
+  `.execute(trx as never);
+  return r.rows[0]?.residential === true;
+}
+
 export const financialRateSchema = z.object({
   payRateCents: z.number().int().min(0).max(100000),
-  billRateCents: z.number().int().min(0).max(100000),
+  // Obligatoria para agencias (se comprueba en el servicio); en hogares no se acepta.
+  billRateCents: z.number().int().min(0).max(100000).nullable().optional(),
   currency: z.literal("USD").default("USD"),
 });
 
@@ -132,6 +154,7 @@ export async function recordTimesheetFromCheckout(
 export async function listFinancialRates(userId: string, organizationId: string) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);
+    const residential = await isResidentialOrganization(trx);
     const result = await sql<FinancialRateRow>`
       SELECT
         membership.id AS membership_id,
@@ -149,7 +172,7 @@ export async function listFinancialRates(userId: string, organizationId: string)
       WHERE membership.organization_id = ${organizationId}
       ORDER BY (membership.status = 'active') DESC, worker.display_name NULLS LAST, membership.internal_role
     `.execute(trx);
-    return result.rows;
+    return residential ? result.rows.map((row) => ({ ...row, bill_rate_cents: null })) : result.rows;
   });
 }
 
@@ -161,6 +184,11 @@ export async function upsertFinancialRate(
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);
+    const residential = await isResidentialOrganization(trx);
+    const billRateCents = input.billRateCents ?? null;
+    if (residential && billRateCents !== null && billRateCents !== 0) throw new ResidentialBillingNotAvailableError();
+    if (!residential && billRateCents === null) throw new FinancialRateInvalidError();
+    const storedBillRate = residential ? 0 : billRateCents;
     const membership = await sql<{ id: string }>`
       SELECT id FROM organization_worker_memberships
       WHERE id = ${membershipId} AND organization_id = ${organizationId}
@@ -187,7 +215,7 @@ export async function upsertFinancialRate(
         created_by_user_id, updated_by_user_id
       ) VALUES (
         ${membershipId}, ${organizationId},
-        ${input.payRateCents}, ${input.billRateCents}, ${input.currency},
+        ${input.payRateCents}, ${storedBillRate}, ${input.currency},
         ${userId}, ${userId}
       )
       ON CONFLICT (organization_worker_membership_id) DO UPDATE SET
@@ -210,7 +238,7 @@ export async function upsertFinancialRate(
       entityType: "organization_worker_membership", entityId: membershipId,
     });
 
-    return saved.rows[0];
+    return residential ? { ...saved.rows[0], bill_rate_cents: null } : saved.rows[0];
   });
 }
 
@@ -221,6 +249,7 @@ export async function listTimesheets(
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);
+    const residential = await isResidentialOrganization(trx);
     const result = await sql<TimesheetRow>`
       SELECT
         timesheet.id,
@@ -272,7 +301,9 @@ export async function listTimesheets(
       ORDER BY timesheet.check_in_at DESC
     `.execute(trx);
 
-    const rows = result.rows;
+    const rows = residential
+      ? result.rows.map((row) => ({ ...row, bill_rate_cents_snapshot: null, bill_amount_cents: null }))
+      : result.rows;
     return {
       timesheets: rows,
       summary: {
@@ -281,7 +312,7 @@ export async function listTimesheets(
         pendingCount: rows.filter((row) => row.status === "pending").length,
         disputedCount: rows.filter((row) => row.status === "disputed").length,
         approvedPayCents: rows.reduce((total, row) => total + Number(row.pay_amount_cents ?? 0), 0),
-        approvedBillCents: rows.reduce((total, row) => total + Number(row.bill_amount_cents ?? 0), 0),
+        approvedBillCents: residential ? null : rows.reduce((total, row) => total + Number(row.bill_amount_cents ?? 0), 0),
       },
     };
   });
@@ -295,6 +326,7 @@ export async function reviewTimesheet(
 ) {
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertManager(trx);
+    const residential = await isResidentialOrganization(trx);
     const existing = await sql<{
       id: string;
       status: string;
@@ -341,7 +373,8 @@ export async function reviewTimesheet(
         WHERE organization_worker_membership_id = ${current.organization_worker_membership_id}
       `.execute(trx);
       const payRate = current.pay_rate_cents_snapshot ?? rate.rows[0]?.pay_rate_cents ?? null;
-      const billRate = current.bill_rate_cents_snapshot ?? rate.rows[0]?.bill_rate_cents ?? null;
+      // Hogares: sin facturación; la base exige un valor en una hoja aprobada, así que se guarda 0.
+      const billRate = residential ? 0 : current.bill_rate_cents_snapshot ?? rate.rows[0]?.bill_rate_cents ?? null;
       if (payRate === null || billRate === null) throw new FinancialRateRequiredError();
       const minutes = input.approvedMinutes ?? Number(current.recorded_minutes);
       if (minutes !== Number(current.recorded_minutes) && !input.note) {
@@ -376,6 +409,7 @@ export async function reviewTimesheet(
       organizationId, actorUserId: userId, action, entityType: "timesheet", entityId: timesheetId,
     });
 
-    return saved.rows[0];
+    const row = saved.rows[0] as Record<string, unknown>;
+    return residential ? { ...row, bill_rate_cents_snapshot: null, bill_amount_cents: null } : row;
   });
 }
