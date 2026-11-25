@@ -393,6 +393,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 163
 
+      - name: PostgreSQL route-gate normalization (security 25-nov — every Express-accepted URL variant over real HTTP as app_runtime for orgFeatureGate, modalityGate, contractEnforcementGate and the write limit; fail-closed on unexpected errors; no rule changes)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyGatePathNormalization.ts
+
       - name: PostgreSQL 164 independent practice phase 1 (En camino and provider report on by default, no self-notifications, arrival without third-party review, professional name at activation; agencies and homes unchanged)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

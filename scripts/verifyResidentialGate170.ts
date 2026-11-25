@@ -18,6 +18,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import pg from "pg";
+import { pathVariants } from "./lib/gatePathVariants.js";
 import { applyPendingMigrations } from "./lib/runMigrations.js";
 
 const serverUrl = process.env.MIGRATIONS_DATABASE_URL;
@@ -39,29 +40,6 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 process.env.RESEND_API_KEY = "test-only-not-a-key";
 process.env.EMAIL_SENDER_ADDRESS ??= "pruebas@example.invalid";
 process.env.ACTIVATION_BASE_URL ??= "https://portal.example.invalid";
-
-/** Variantes de una ruta concreta que Express 5 (router 2, path-to-regexp 8: sin distinguir mayúsculas, barra final opcional) puede aceptar. */
-export function pathVariants(path: string, ids: string[]): Array<{ name: string; path: string }> {
-  const enc = (s: string, i = 0) => s.slice(0, i) + "%" + s.charCodeAt(i).toString(16).toUpperCase() + s.slice(i + 1);
-  const segs = path.split("/");
-  const isId = (s: string) => ids.includes(s);
-  const out: Array<{ name: string; path: string }> = [
-    { name: "canónica", path },
-    { name: "barra final", path: path + "/" },
-    { name: "doble barra final", path: path + "//" },
-    { name: "literales en mayúsculas", path: segs.map((s) => (isId(s) ? s : s.toUpperCase())).join("/") },
-    { name: "ids en mayúsculas", path: segs.map((s) => (isId(s) ? s.toUpperCase() : s)).join("/") },
-    { name: "todo en mayúsculas + barra final", path: path.toUpperCase() + "/" },
-    { name: "id de organización codificado (%XX)", path: segs.map((s, i) => (i === 2 ? enc(s) : s)).join("/") },
-    { name: "id de organización totalmente codificado", path: segs.map((s, i) => (i === 2 ? [...s].map((c) => "%" + c.charCodeAt(0).toString(16)).join("") : s)).join("/") },
-    { name: "doble barra tras la organización", path: segs.slice(0, 3).join("/") + "/" + segs.slice(3).join("/").replace(/^/, "/") },
-  ];
-  const lastLiteral = segs.map((s, i) => [s, i] as const).filter(([s, i]) => i > 2 && s && !isId(s) && !/^\d{4}-/.test(s)).pop();
-  if (lastLiteral) out.push({ name: "literal codificado (%XX)", path: segs.map((s, i) => (i === lastLiteral[1] ? enc(s) : s)).join("/") });
-  const innerId = segs.findIndex((s, i) => i > 2 && isId(s));
-  if (innerId > 0) out.push({ name: "id interno codificado", path: segs.map((s, i) => (i === innerId ? enc(s) : s)).join("/") });
-  return out;
-}
 
 async function freshDb(srv: pg.Client, prefix: string) {
   const name = `${prefix}_${randomBytes(4).toString("hex")}`;

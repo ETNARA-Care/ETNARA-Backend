@@ -2,7 +2,9 @@ import type { NextFunction, Request, Response } from "express";
 import { sql } from "kysely";
 import { db } from "../config/db.js";
 import { withTenantContext } from "../context/tenantContext.js";
-import { validateSessionToken } from "../modules/auth/auth.service.js";
+import { InvalidTenantContextError } from "../context/errors.js";
+import { SessionInvalidError, validateSessionToken } from "../modules/auth/auth.service.js";
+import { respondGateUnavailable } from "./gatePath.js";
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../security/tenantAccessDenied.js";
 import { teamRouteFor } from "./modalityRules.js";
 
@@ -23,18 +25,23 @@ export async function modalityGate(req: Request, res: Response, next: NextFuncti
   let userId: string;
   try {
     ({ userId } = await validateSessionToken((req.headers.authorization ?? "").slice("Bearer ".length).trim()));
-  } catch { next(); return; }
+  } catch (error) {
+    // Seguridad 25-nov (fail-closed): solo una sesión inválida continúa (la ruta responde 401).
+    if (error instanceof SessionInvalidError) { next(); return; }
+    respondGateUnavailable(res, "modalityGate", "session", error, { error: "MODALITY_CHECK_UNAVAILABLE" }); return;
+  }
   try {
     await withTenantContext({ userId, organizationId: team.organizationId }, async () => true);
   } catch (error) {
     if (isTenantAccessDenied(error)) { res.status(403).json(TENANT_ACCESS_DENIED_BODY); return; }
-    next(); return; // ids mal formados: la ruta responde su propio 400
+    if (error instanceof InvalidTenantContextError) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+    respondGateUnavailable(res, "modalityGate", "check", error, { error: "MODALITY_CHECK_UNAVAILABLE" }); return;
   }
   try {
     const r = await sql<{ independent: boolean }>`SELECT app_org_is_independent(${team.organizationId}::uuid) AS independent`.execute(db);
     if (r.rows[0]?.independent === true) { res.status(403).json({ error: "MODALITY_NOT_AVAILABLE" }); return; }
     next();
-  } catch {
-    res.status(503).json({ error: "MODALITY_CHECK_UNAVAILABLE" });
+  } catch (error) {
+    respondGateUnavailable(res, "modalityGate", "check", error, { error: "MODALITY_CHECK_UNAVAILABLE" });
   }
 }

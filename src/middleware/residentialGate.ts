@@ -4,6 +4,7 @@ import { InvalidTenantContextError } from "../context/errors.js";
 import { withTenantContext } from "../context/tenantContext.js";
 import { SessionInvalidError, validateSessionToken } from "../modules/auth/auth.service.js";
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../security/tenantAccessDenied.js";
+import { respondGateUnavailable } from "./gatePath.js";
 import { residentialRouteFor } from "./residentialRules.js";
 
 export { residentialRouteFor };
@@ -54,8 +55,6 @@ export async function residentialGate(req: Request, res: Response, next: NextFun
 }
 
 function unavailable(res: Response, stage: "session" | "modality", error: unknown): void {
-  // Solo la etapa y el código de PostgreSQL: nunca el mensaje, ids ni datos de la petición.
-  const code = (error as { code?: unknown } | null)?.code;
-  console.error("RESIDENTIAL_GATE_UNAVAILABLE", { stage, code: typeof code === "string" ? code : "UNKNOWN" });
-  res.status(503).json({ error: "MODALITY_CHECK_UNAVAILABLE" });
+  // Respuesta común de las guardas (#286): 503 y un registro con la guarda, la etapa y el código; nunca datos.
+  respondGateUnavailable(res, "residentialGate", stage === "session" ? "session" : "check", error, { error: "MODALITY_CHECK_UNAVAILABLE" });
 }

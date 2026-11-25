@@ -100,7 +100,7 @@ describe("170 A1 · la guarda reconoce todas las variantes de ruta que Express a
   const enc = (s: string) => [...s].map((c) => "%" + c.charCodeAt(0).toString(16)).join("");
   it("forma canónica: decodifica segmentos, quita barras repetidas y finales, nunca lanza", () => {
     expect(canonicalGatePath(`/organizations/%61bc//finance/`)).toBe("/organizations/abc/finance");
-    expect(canonicalGatePath("/a/%E0%A4%A/b")).toBe("/a/%E0%A4%A/b");
+    expect(canonicalGatePath("/a/%E0%A4%A/b")).toBe("/a/%e0%a4%a/b");
     expect(canonicalGatePath("/")).toBe("/");
   });
   const denied = ["/smartmatch/opportunities", `/shifts/${ID2}/private-instructions`, "/finance/services", `/shifts/${ID2}/finance`, "/billing/invoices",
