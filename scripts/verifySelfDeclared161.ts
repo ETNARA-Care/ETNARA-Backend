@@ -108,6 +108,8 @@ async function main() {
   const adminH = await user("admin-hogar"); await member(adminH, H, ["ORGANIZATION_ADMIN"]);
   const central = await user("central"); await q(`INSERT INTO platform_admins (user_id) VALUES ($1)`, [central.id]);
   const tC = await login(central), tA = await login(adminA, A), tH = await login(adminH, H);
+  // 163: encender exige una autorización de activación vigente (segundo candado), también para el propietario.
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','verificador local','Prueba local con datos ficticios (163: candado)',5)`); 
   await q(`UPDATE platform_modalities SET enabled=true WHERE code='INDEPENDENT_PROVIDER'`);
   const mkIndependent = async (name: string, email: string, existing?: { email: string }) => {
     const o = (await call("POST", "/platform/organizations", tC, { name, organizationType: "INDEPENDENT_PROVIDER" })).body.organization.id as string;

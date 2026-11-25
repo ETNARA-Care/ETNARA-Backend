@@ -143,6 +143,8 @@ async function main() {
   // Base ficticia: una agencia, un hogar, una práctica independiente (creada en la base: la modalidad 160 se
   // enciende solo aquí, en esta base desechable, y se apaga enseguida), y ETNARA Central.
   const A = await org(`Agencia Ficticia ${tag}`, "HOME_CARE_AGENCY"), H = await org(`Hogar Ficticio ${tag}`, "RESIDENTIAL_CARE_HOME");
+  // 163: encender exige una autorización de activación vigente (segundo candado), también para el propietario.
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','verificador local','Prueba local con datos ficticios (163: candado)',5)`);
   await q(`UPDATE platform_modalities SET enabled=true WHERE code='INDEPENDENT_PROVIDER'`);
   const I = await org(`Independiente Ficticia ${tag}`, "INDEPENDENT_PROVIDER");
   await q(`UPDATE platform_modalities SET enabled=false WHERE code='INDEPENDENT_PROVIDER'`);

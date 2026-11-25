@@ -85,6 +85,8 @@ async function main() {
   const login = async (x: { email: string }, o?: string) => { const t = (await call("POST", "/auth/login", "", { email: x.email, password })).body.token as string; if (o) await call("POST", "/me/active-organization", t, { organizationId: o }); return t; };
 
   const A = await org(`Agencia Ficticia ${tag}`, "HOME_CARE_AGENCY"), H = await org(`Hogar Ficticio ${tag}`, "RESIDENTIAL_CARE_HOME"), H2 = await org(`Otro Hogar ${tag}`, "RESIDENTIAL_CARE_HOME");
+  // 163: encender exige una autorización de activación vigente (segundo candado), también para el propietario.
+  await q(`SELECT app_ops_authorize_modality_activation('INDEPENDENT_PROVIDER','verificador local','Prueba local con datos ficticios (163: candado)',5)`);
   await q(`UPDATE platform_modalities SET enabled=true WHERE code='INDEPENDENT_PROVIDER'`);
   const I = await org(`Independiente Ficticia ${tag}`, "INDEPENDENT_PROVIDER");
   await q(`UPDATE platform_modalities SET enabled=false WHERE code='INDEPENDENT_PROVIDER'`);

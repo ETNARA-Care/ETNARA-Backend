@@ -367,6 +367,9 @@
     "platform_admins": [
       "SELECT"
     ],
+    "platform_modality_events": [
+      "SELECT"
+    ],
     "push_preferences": [
       "INSERT",
       "SELECT"
@@ -659,8 +662,10 @@
     "app_platform_billing_admins",
     "app_platform_contract_eligible_signatories",
     "app_platform_designate_billing_manager",
+    "app_platform_list_modalities",
     "app_platform_modality_enabled",
     "app_platform_org_has_legal_holds",
+    "app_platform_set_modality",
     "app_precheck_activity_photo",
     "app_progress_coverage_campaign_after_response",
     "app_push_claim",
