@@ -393,6 +393,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 170
 
+      - name: PostgreSQL 171 residential establishments and rooms F1 (General and technical pieces idempotent, technical room never has residents and is protected and invisible, units/rooms writable only by residential managers and never deleted, beds and occupancy, transfers with history, audited geofence, closure with its blocks, three-modality isolation, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialEstablishments171.ts
+
+      - name: PostgreSQL 171 rollback (schema identical to 170, existing rows unchanged, automatic pieces removed, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 171 units rooms
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

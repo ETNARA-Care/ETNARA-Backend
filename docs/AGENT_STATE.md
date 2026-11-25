@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-25 — 171 Hogares F1: establecimientos, unidades y habitaciones (rama claude/171-hogares-f1, apilada sobre claude/170-hogares-f0; local, sin PR)
+- Migración 171: General, unidad y habitación técnicas idempotentes (ids estables), geocerca (establishment_settings + historial), room_profiles (camas), historial de ubicación de residentes, cierre (app_residential_close_establishment). Guardas en la base: técnica sin residentes ni cambios fuera del cierre; unidades/habitaciones con reglas de archivo; residente en habitación activa de su establecimiento; establecimiento de hogar solo se archiva con el cierre. units/rooms: escritura solo administración de hogares, sin DELETE (antes cualquier miembro podía con SQL directo). Reversión se niega con datos de personas.
+- API /organizations/:id/residential/{establishments,units,rooms,residents,…}; Central excluye las piezas técnicas de sus conteos. Convención: docs/RESIDENTIAL_TECHNICAL_ROOM.md.
+- Pruebas: verifyResidentialEstablishments171 45/45, rollback 171 4/4 (units rooms como referencia), 170 40/40 (su reversión ahora se prueba con migraciones ≤170), npm test 812/812, verificadores de establecimientos, autorización y aislamiento en verde (superusuario y app_runtime).
+- Siguiente: portal F1 (rama claude/171-hogares-f1 en ETNARAMVP). Sin fusionar, desplegar ni migrar en producción.
+
 ## 2026-11-24 — 161 revisión final de seguridad (rama claude/161-autodeclarados-informe-proveedor, PR #277 borrador)
 - Corregido: aprobación de agencia que sobrevivía a cambios de la titular (app_reset_declared_credential_reviews: datos o archivo nuevo → «pendiente» en todas las organizaciones); evidencia de un autodeclarado solo por su titular (guarda 149 + trigger en document_versions + servicio); app_is_independent_operator solo responde sobre la persona de la sesión.
 - Corregido (bloqueo de piloto): iniciar la visita volvía a exigir «eligible»; ahora acepta la confirmación expresa guardada en assignments.self_declaration_confirmed_at (solo independientes; trigger lo impide en agencias).
