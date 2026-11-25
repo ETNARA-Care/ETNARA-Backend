@@ -10,6 +10,9 @@
  *   G4. Límite de escrituras (L4): las variantes en mayúsculas cuentan igual.
  *   G5. Sin regresión: con los interruptores encendidos, ninguna variante queda cerrada por error.
  *   G6. Cierre ante fallos: sesión inválida → 401 de la ruta; no miembro → 403; fallo inesperado → 503 (nunca sigue).
+ *   G7. Estado contractual vacío, incompleto o inválido → 503 y nada se crea; «off» sin fila de modo sigue normal.
+ *   G8. No regresión de accesos legítimos: ambos modos contractuales, GET y HEAD, cuidadores (WORKER), familiares
+ *       (FAMILY), supervisoras y administración; rutas abiertas de independientes y agencias.
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
@@ -107,9 +110,13 @@ async function main() {
   const adminI = await user("indep"); await member(adminI, I, ["ORGANIZATION_ADMIN"]);
   const tA = await login(adminA, A), tB = await login(adminB, B), tI = await login(adminI, I);
   // Estado contractual fijo SOLO en esta base desechable: B en «restringir operación nueva», vigente y pendiente.
+  // Tabla de control propia de la prueba: modo, fecha y «satisfecho» por organización; present=false no devuelve fila.
+  await q(`CREATE TABLE zz_contract_stub (org uuid PRIMARY KEY, present boolean NOT NULL DEFAULT true, mode text, enforce_from timestamptz, satisfied boolean)`);
   await q(`CREATE OR REPLACE FUNCTION public.app_contract_enforcement_state(p_org uuid)
     RETURNS TABLE(mode text, enforce_from timestamptz, satisfied boolean, pending integer) LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public AS $$
-    SELECT CASE WHEN p_org = '${B}'::uuid THEN 'restrict_new_operations' ELSE 'off' END, now() - interval '1 day', p_org <> '${B}'::uuid, CASE WHEN p_org = '${B}'::uuid THEN 1 ELSE 0 END $$`);
+    SELECT z.mode, z.enforce_from, z.satisfied, 1 FROM public.zz_contract_stub z WHERE z.org = p_org AND z.present
+    UNION ALL SELECT 'off', NULL::timestamptz, true, 0 WHERE NOT EXISTS (SELECT 1 FROM public.zz_contract_stub z WHERE z.org = p_org) $$`);
+  await q(`INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ($1, 'restrict_new_operations', now() - interval '1 day', false)`, [B]);
 
   // ---- Inventario de rutas ---------------------------------------------------------------------------------
   type R = { methods: string[]; path: string };
@@ -203,6 +210,85 @@ async function main() {
   const outsider = await raw("GET", `/organizations/${B}/smartmatch/opportunities/`, tA), outsiderTeam = await raw("GET", `/organizations/%${I.charCodeAt(0).toString(16)}${I.slice(1)}/team`, tA);
   check("G6.5 Sesión inválida o sin token → 401 de la ruta; no miembro (también con variantes) → 403 ORGANIZATION_ACCESS_DENIED",
     bad.status === 401 && noTok.status === 401 && outsider.status === 403 && outsider.body.error === "ORGANIZATION_ACCESS_DENIED" && outsiderTeam.status === 403 && outsiderTeam.body.error === "ORGANIZATION_ACCESS_DENIED", [bad.status, noTok.status, outsider, outsiderTeam]);
+
+  // ---- G7: estado contractual vacío, incompleto o inválido ---------------------------------------------------
+  const D = await org(`Agencia estado roto ${tag}`, "HOME_CARE_AGENCY");
+  const adminD = await user("admin-d"); await member(adminD, D, ["ORGANIZATION_ADMIN"]); const tD = await login(adminD, D);
+  const broken: Array<[string, string]> = [
+    ["sin fila", `INSERT INTO zz_contract_stub (org, present) VALUES ('${D}', false)`],
+    ["modo desconocido", `INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ('${D}', 'bloqueo_total', now() - interval '1 day', false)`],
+    ["modo nulo", `INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ('${D}', NULL, now() - interval '1 day', false)`],
+    ["satisfecho nulo", `INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ('${D}', 'restrict_new_operations', now() - interval '1 day', NULL)`],
+    ["modo restrictivo sin fecha", `INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ('${D}', 'contract_only', NULL, false)`],
+  ];
+  const g7: string[] = [];
+  for (const [label, insert] of broken) {
+    await q(`DELETE FROM zz_contract_stub WHERE org = $1`, [D]); await q(insert);
+    const before = Number((await q<{ n: number }>(`SELECT count(*)::int n FROM care_recipients WHERE organization_id=$1`, [D])).rows[0].n);
+    const w = await raw("POST", `/organizations/${D}/care-recipients`, tD, { firstName: "Ficticia", lastName: "Estado" });
+    const r = await raw("GET", `/organizations/${D}/care-recipients`, tD);
+    const after = Number((await q<{ n: number }>(`SELECT count(*)::int n FROM care_recipients WHERE organization_id=$1`, [D])).rows[0].n);
+    if (!(w.status === 503 && w.body.error === "CONTRACT_CHECK_UNAVAILABLE" && r.status === 503 && after === before)) g7.push(`${label}: POST ${w.status} ${w.body.error ?? ""} GET ${r.status} creados ${after - before}`);
+  }
+  await q(`DELETE FROM zz_contract_stub WHERE org = $1`, [D]);
+  const offWrite = await raw("POST", `/organizations/${D}/care-recipients`, tD, { firstName: "Ficticia", lastName: "Off" });
+  check("G7. Estado contractual vacío, incompleto o inválido → 503 CONTRACT_CHECK_UNAVAILABLE y no se crea nada (lecturas incluidas)", g7.length === 0, g7);
+  check("G7b. Sin modo fijado («off», la situación normal hoy) la agencia opera como siempre", offWrite.status === 201, offWrite);
+
+  // ---- G8: accesos legítimos ---------------------------------------------------------------------------------
+  const C = await org(`Agencia nueva solo contrato ${tag}`, "HOME_CARE_AGENCY");
+  await q(`INSERT INTO zz_contract_stub (org, mode, enforce_from, satisfied) VALUES ($1, 'contract_only', now() - interval '1 day', false)`, [C]);
+  const supB = await user("sup-b"); await member(supB, B, ["SUPERVISOR"]);
+  const wB = await user("worker-b"); await member(wB, B, ["WORKER"]);
+  const fB = await user("family-b"); await member(fB, B, ["FAMILY"]);
+  const adminC = await user("admin-c"); await member(adminC, C, ["ORGANIZATION_ADMIN"]);
+  const wC = await user("worker-c"); await member(wC, C, ["WORKER"]);
+  const fC = await user("family-c"); await member(fC, C, ["FAMILY"]);
+  const [tSB, tWB, tFB, tC, tWC, tFC] = [await login(supB, B), await login(wB, B), await login(fB, B), await login(adminC, C), await login(wC, C), await login(fC, C)];
+  const gateBlock = (x: { status: number; body: Json }) => ["CONTRACT_ACCEPTANCE_REQUIRED", "FEATURE_NOT_ENABLED", "MODALITY_NOT_AVAILABLE", "FEATURE_CHECK_UNAVAILABLE", "MODALITY_CHECK_UNAVAILABLE", "CONTRACT_CHECK_UNAVAILABLE"].includes(x.body.error);
+  const contractBlock = (x: { body: Json }) => x.body.error === "CONTRACT_ACCEPTANCE_REQUIRED" || x.body.error === "CONTRACT_CHECK_UNAVAILABLE";
+  const getRoutes = orgRoutes.filter((r) => r.methods.includes("GET"));
+  const postRoutes = orgRoutes.filter((r) => r.methods.includes("POST"));
+  const isContractRoute = (p: string) => p.startsWith("/organizations/:organizationId/contracts");
+  const bad8: string[] = [];
+  // a) Lecturas GET y HEAD (canónica y con barra final) de administración, supervisora, cuidador y familiar en ambos modos.
+  for (const [who, t, o] of [["admin B (restringir)", tB, B], ["supervisora B", tSB, B], ["cuidador B", tWB, B], ["familiar B", tFB, B], ["admin C (solo contrato)", tC, C], ["cuidador C", tWC, C], ["familiar C", tFC, C]] as const)
+    for (const r of getRoutes) { const p = fill(r.path, o, []); for (const v of [p, p + "/"]) {
+      const g = await raw("GET", v, t); const h = await raw("HEAD", v, t);
+      if (contractBlock(g)) bad8.push(`${who} GET ${v} → ${g.body.error}`);
+      if (h.status !== g.status) bad8.push(`${who} HEAD ${v} → ${h.status} (GET ${g.status})`);
+    } }
+  // b) Escrituras de cuidadores y familiares: el contrato nunca las bloquea, en ningún modo.
+  for (const [who, t, o] of [["cuidador B", tWB, B], ["familiar B", tFB, B], ["cuidador C", tWC, C], ["familiar C", tFC, C]] as const)
+    for (const r of postRoutes) { const v = fill(r.path, o, []); const x = await raw("POST", v, t, {}); if (contractBlock(x)) bad8.push(`${who} POST ${v} → ${x.body.error}`); }
+  // c) Restringir operación nueva (B): la administración y la supervisora escriben fuera de operación nueva.
+  for (const [who, t] of [["admin B", tB], ["supervisora B", tSB]] as const)
+    for (const r of postRoutes.filter((x) => !NEW_OPS.test(fill(x.path, B, [])))) { const v = fill(r.path, B, []); const x = await raw("POST", v, t, {}); if (contractBlock(x)) bad8.push(`${who} POST ${v} → ${x.body.error}`); }
+  // d) Solo contrato (C): el propio proceso contractual sigue abierto; cualquier otra escritura de la administración se cierra (regla de siempre).
+  const cOwn = await Promise.all(postRoutes.filter((r) => isContractRoute(r.path)).map((r) => raw("POST", fill(r.path, C, []) + "/", tC, {})));
+  if (cOwn.some(contractBlock)) bad8.push(`admin C contratos: ${cOwn.map((x) => x.body.error ?? x.status).join(",")}`);
+  const cOther = await raw("POST", `/organizations/${C}/care-recipients/`, tC, { firstName: "X", lastName: "Y" });
+  const bNew = await raw("POST", `/organizations/${B}/CARE-RECIPIENTS`, tSB, { firstName: "X", lastName: "Y" });
+  check("G8.1 Contrato: GET y HEAD abiertos para todos en ambos modos; cuidadores y familiares nunca bloqueados; fuera de operación nueva la gestión escribe; el proceso contractual sigue abierto",
+    bad8.length === 0, { fallos: bad8.length, ejemplos: bad8.slice(0, 10) });
+  check("G8.2 Las reglas contractuales siguen aplicándose igual: «solo contrato» cierra otras escrituras de la administración y «restringir» cierra operación nueva también a la supervisora",
+    cOther.body.error === "CONTRACT_ACCEPTANCE_REQUIRED" && bNew.body.error === "CONTRACT_ACCEPTANCE_REQUIRED", [cOther, bNew]);
+  // e) Modalidad: un independiente usa todas sus rutas abiertas (GET/HEAD, también con barra final) y su ficha de credenciales.
+  const bad8m: string[] = [];
+  for (const r of getRoutes.filter((x) => !teamRouteFor(fill(x.path, I, []), "GET"))) { const p = fill(r.path, I, []); for (const v of [p, p + "/"]) {
+    const g = await raw("GET", v, tI); const h = await raw("HEAD", v, tI);
+    if (g.body.error === "MODALITY_NOT_AVAILABLE" || h.status !== g.status) bad8m.push(`GET/HEAD ${v} → ${g.status} ${g.body.error ?? ""} / ${h.status}`); } }
+  const cred = await raw("POST", `/organizations/${I}/workers/${randomUUID()}/credentials/`, tI, {});
+  const agencyTeamAll = await Promise.all(getRoutes.filter((x) => teamRouteFor(fill(x.path, A, []), "GET")).map((r) => raw("GET", fill(r.path, A, []) + "/", tA)));
+  check("G8.3 Modalidad: el independiente conserva todas sus rutas abiertas (GET/HEAD) y su ficha de credenciales; las agencias conservan sus rutas de equipo",
+    bad8m.length === 0 && cred.body.error !== "MODALITY_NOT_AVAILABLE" && agencyTeamAll.every((x) => x.body.error !== "MODALITY_NOT_AVAILABLE"), { fallos: bad8m.slice(0, 8), cred: cred.status });
+  // f) Funcionalidades encendidas (B): cuidador y familiar no reciben FEATURE_NOT_ENABLED en GET/HEAD de rutas de funcionalidad.
+  const bad8f: string[] = [];
+  for (const [who, t] of [["cuidador B", tWB], ["familiar B", tFB]] as const)
+    for (const r of getRoutes.filter((x) => gatedFeatureFor(fill(x.path, B, []), "GET"))) { const p = fill(r.path, B, []); for (const v of [p, p + "/"]) {
+      const g = await raw("GET", v, t); const h = await raw("HEAD", v, t);
+      if (g.body.error === "FEATURE_NOT_ENABLED" || gateBlock(g) && g.body.error !== "CONTRACT_ACCEPTANCE_REQUIRED" || h.status !== g.status) bad8f.push(`${who} ${v} → ${g.status} ${g.body.error ?? ""} / HEAD ${h.status}`); } }
+  check("G8.4 Funcionalidades encendidas: cuidadores y familiares no quedan cerrados por la guarda (GET y HEAD, también con barra final)", bad8f.length === 0, bad8f.slice(0, 8));
 
   check("Z. Ninguna respuesta 500 en toda la prueba", errors500.length === 0, errors500.slice(0, 15));
 

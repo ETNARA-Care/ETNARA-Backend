@@ -56,7 +56,8 @@ export function gatedFeatureFor(path: string, method = "GET"): { organizationId:
     const m = rule.pattern.exec(candidate);
     if (m) {
       const read = method === "GET" || method === "HEAD";
-      const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method) ?? false);
+      // HEAD es un GET sin cuerpo (Express lo atiende con la ruta GET): lo que se permite en GET se permite en HEAD.
+      const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method === "HEAD" ? "GET" : method) ?? false);
       return { organizationId: m[1].toLowerCase(), feature: rule.feature, ...(pass ? { readOnlyPass: true } : {}) };
     }
   }

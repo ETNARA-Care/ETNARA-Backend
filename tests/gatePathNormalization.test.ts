@@ -90,3 +90,13 @@ describe("orgFeatureGate y modalityGate: cerrados ante lo inesperado", () => {
     expect(spy).toHaveBeenCalledWith("GATE_UNAVAILABLE", { gate: "orgFeatureGate", stage: "check", code: "42501" });
   });
 });
+
+describe("HEAD sigue a GET (revisión 25-nov)", () => {
+  it("las rutas que se leen con el interruptor apagado se leen igual con HEAD; las escrituras no cambian", () => {
+    for (const s of ["/activity-photos", "/activity-photos/mode", `/activity-photos/${ID2}/history`, "/contracts/acceptances", "/billing/invoices"]) {
+      expect(gatedFeatureFor(`/organizations/${ID}${s}`, "HEAD"), s).toEqual(gatedFeatureFor(`/organizations/${ID}${s}`, "GET"));
+    }
+    expect(gatedFeatureFor(`/organizations/${ID}/activity-photos/${ID2}/legal-hold`, "HEAD")?.readOnlyPass).toBeUndefined();
+    expect(gatedFeatureFor(`/organizations/${ID}/contracts/acceptances`, "POST")?.readOnlyPass).toBeUndefined();
+  });
+});
