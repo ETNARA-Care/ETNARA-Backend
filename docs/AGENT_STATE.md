@@ -2,6 +2,12 @@
 
 ## Current Status
 
+## 2026-11-25 — 164 Fase 1 independientes (rama claude/164-fase1-independientes, PR borrador)
+- Migración 164 (sin tablas): filtro BEFORE INSERT en notifications (en una práctica no se crean los avisos de gestión/turno dirigidos a la propia persona operativa; familia, mensajes y vencimientos igual); cierre automático de la llegada «sin ubicación/lejos» en prácticas (reviewed_* con nota; needs_review conserva el dato real); app_org_admin_invitation_is_independent(token_hash).
+- Servicio: una práctica nace con EN_CAMINO y SHIFT_REPORTS encendidos (historial de interruptores con motivo); la inspección de la invitación devuelve `independent`; activar una cuenta nueva de práctica exige `professionalName` (PROFESSIONAL_NAME_REQUIRED) y lo guarda con savePracticeProfile (auditado); aceptar con cuenta existente lo admite opcional.
+- Pruebas: verifyIndependentPractice164 17/17, rollback 164 4/4, 160 41/41, 161 33/33 (ajustado: nombre al activar; C30 simula cuenta sin nombre), 163 29/29, npm test 794/794, manifiesto al día.
+- Pendiente: CI del PR; portal (textos y campo de nombre) en ETNARAMVP rama claude/fase1-independientes.
+
 ## 2026-11-24 — 161 revisión final de seguridad (rama claude/161-autodeclarados-informe-proveedor, PR #277 borrador)
 - Corregido: aprobación de agencia que sobrevivía a cambios de la titular (app_reset_declared_credential_reviews: datos o archivo nuevo → «pendiente» en todas las organizaciones); evidencia de un autodeclarado solo por su titular (guarda 149 + trigger en document_versions + servicio); app_is_independent_operator solo responde sobre la persona de la sesión.
 - Corregido (bloqueo de piloto): iniciar la visita volvía a exigir «eligible»; ahora acepta la confirmación expresa guardada en assignments.self_declaration_confirmed_at (solo independientes; trigger lo impide en agencias).

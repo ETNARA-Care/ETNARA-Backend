@@ -115,7 +115,7 @@ async function main() {
     const o = (await call("POST", "/platform/organizations", tC, { name, organizationType: "INDEPENDENT_PROVIDER" })).body.organization.id as string;
     await call("POST", `/platform/organizations/${o}/admin-invitations`, tC, { email });
     if (existing) await call("POST", "/platform/admin-invitations/accept", await login(existing), { token: tokenFor(email) });
-    else await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(email), password });
+    else await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(email), password, professionalName: "Proveedora Ficticia" });
     await feature(o, "SHIFT_REPORTS");
     return o;
   };
@@ -370,6 +370,12 @@ async function main() {
   check("C32. Quien confirmó al asignarse puede iniciar y terminar esa visita (la confirmación queda en la asignación); sin confirmación, la regla de elegibilidad sigue igual",
     sa2.status === 201 && ci2.status === 201 && co2.status === 201 && Boolean(confirmedAt.rows[0]?.c), [sa2.status, ci2.status, ci2.body.error, co2.status, confirmedAt.rows]);
   const repN = (await q<{ id: string; generated_at: string }>(`SELECT id, generated_at FROM shift_reports WHERE shift_id=$1`, [shN2])).rows[0] ?? { id: randomUUID(), generated_at: new Date().toISOString() };
+  // 164: el nombre se pide al activar; el resguardo sigue para una cuenta que nunca lo dio (p. ej., aceptó con una
+  // cuenta existente sin nombre). Se simula quitándolo en esta base ficticia.
+  await q(`UPDATE workers SET display_name = NULL WHERE user_id = $1`, [lucia.id]);
+  await call("POST", `/organizations/${L}/shift-reports/${repN.id}/refresh`, tL, {});
+  const repN2 = (await q<{ generated_at: string }>(`SELECT generated_at FROM shift_reports WHERE id=$1`, [repN.id])).rows[0] ?? repN;
+  repN.generated_at = repN2.generated_at;
   const pubNoName = await call("POST", `/organizations/${L}/shift-reports/${repN.id}/publish-as-provider`, tL, { expectedGeneratedAt: repN.generated_at, familySections: { schedule: true } });
   const dbNoName = await asApp(lucia.id, L, `UPDATE shift_reports SET status='APPROVED', approved_at=now(), approved_by_user_id='${lucia.id}', published_by_provider=true, family_sections='{}'::jsonb WHERE id='${repN.id}'`);
   const setName = await call("PUT", `/organizations/${L}/practice/profile`, tL, { professionalName: "Lucía Rivera, CNA" });
@@ -382,7 +388,7 @@ async function main() {
   check("C30. Nunca «Cuidador: —»: sin nombre profesional no se publica (API y base); con su nombre (auditado) se actualiza el informe y la familia lo ve",
     pubNoName.status === 409 && pubNoName.body.error === "PROVIDER_NAME_REQUIRED" && dbNoName.includes("PROVIDER_NAME_REQUIRED") && setName.status === 200
     && docsName.body.professionalName === "Lucía Rivera, CNA" && [200, 204].includes(refreshed.status) && fresh.rows[0].name === "Lucía Rivera, CNA"
-    && pubNamed.status === 200 && JSON.stringify(famNamed.body).includes("Lucía Rivera, CNA") && nameAudit.rowCount === 1,
+    && pubNamed.status === 200 && JSON.stringify(famNamed.body).includes("Lucía Rivera, CNA") && nameAudit.rowCount === 2, // 164: la activación y este cambio
     [pubNoName.status, pubNoName.body.error, dbNoName, setName.status, refreshed.status, refreshed.body, fresh.rows[0]?.name, pubNamed.status, pubNamed.body.error, famNamed.status]);
   const otherName = await call("PUT", `/organizations/${A}/practice/profile`, tA, { professionalName: "Intento" });
   check("C31. Solo la propia persona operativa cambia su nombre profesional (una agencia, no)", otherName.status === 403, otherName);
