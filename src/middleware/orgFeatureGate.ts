@@ -2,7 +2,9 @@ import type { NextFunction, Request, Response } from "express";
 import { sql } from "kysely";
 import { db } from "../config/db.js";
 import { withTenantContext } from "../context/tenantContext.js";
-import { validateSessionToken } from "../modules/auth/auth.service.js";
+import { InvalidTenantContextError } from "../context/errors.js";
+import { SessionInvalidError, validateSessionToken } from "../modules/auth/auth.service.js";
+import { respondGateUnavailable } from "./gatePath.js";
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../security/tenantAccessDenied.js";
 
 /**
@@ -32,12 +34,18 @@ export async function orgFeatureGate(req: Request, res: Response, next: NextFunc
   let userId: string;
   try {
     ({ userId } = await validateSessionToken((req.headers.authorization ?? "").slice("Bearer ".length).trim()));
-  } catch { next(); return; }
+  } catch (error) {
+    // Seguridad 25-nov (fail-closed): solo una sesión inválida continúa (la ruta responde 401); cualquier otro
+    // fallo al validarla cierra la petición.
+    if (error instanceof SessionInvalidError) { next(); return; }
+    respondGateUnavailable(res, "orgFeatureGate", "session", error, { error: "FEATURE_CHECK_UNAVAILABLE" }); return;
+  }
   try {
     await withTenantContext({ userId, organizationId: gated.organizationId }, async () => true);
   } catch (error) {
     if (isTenantAccessDenied(error)) { res.status(403).json(TENANT_ACCESS_DENIED_BODY); return; }
-    next(); return; // malformed ids: the route answers its own 400
+    if (error instanceof InvalidTenantContextError) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+    respondGateUnavailable(res, "orgFeatureGate", "check", error, { error: "FEATURE_CHECK_UNAVAILABLE" }); return;
   }
   // Read-only mode (Facturación): reads continue; billing.view decides in the service and the database.
   // Legal-review mode (fotos, 145): the service and the database decide.
@@ -45,7 +53,7 @@ export async function orgFeatureGate(req: Request, res: Response, next: NextFunc
   try {
     if (await isOrgFeatureEnabled(gated.organizationId, gated.feature)) { next(); return; }
     res.status(404).json({ error: "FEATURE_NOT_ENABLED" });
-  } catch {
-    res.status(503).json({ error: "FEATURE_CHECK_UNAVAILABLE" });
+  } catch (error) {
+    respondGateUnavailable(res, "orgFeatureGate", "check", error, { error: "FEATURE_CHECK_UNAVAILABLE" });
   }
 }

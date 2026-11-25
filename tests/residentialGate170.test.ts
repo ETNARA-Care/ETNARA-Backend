@@ -65,6 +65,6 @@ describe("residentialGate (A2): cerrado ante lo inesperado", () => {
     state.tenant = async () => { throw Object.assign(new Error("secreto: correo@ejemplo"), { code: "42501" }); };
     await run(`/organizations/${ORG}/finance`);
     expect(JSON.stringify(spy.mock.calls)).not.toMatch(/secreto|correo/);
-    expect(spy).toHaveBeenCalledWith("RESIDENTIAL_GATE_UNAVAILABLE", { stage: "modality", code: "42501" });
+    expect(spy).toHaveBeenCalledWith("GATE_UNAVAILABLE", { gate: "residentialGate", stage: "check", code: "42501" });
   });
 });

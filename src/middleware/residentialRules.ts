@@ -8,6 +8,10 @@
  *     Informe de Turno. Solo se cierran cuando la organización ES un hogar; agencias e independientes siguen
  *     exactamente igual (sus interruptores de 108/157 deciden, como hoy).
  */
+import { gatePathCandidates } from "./gatePath.js";
+
+export { canonicalGatePath } from "./gatePath.js";
+
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 const ORG = `^/organizations/(${UUID})`;
 
@@ -16,8 +20,8 @@ export type ResidentialRouteKind = "residential" | "denied";
 // Revisión independiente 25-nov (A1). Se compara con la ruta tal como la entiende Express 5 (router 2 /
 // path-to-regexp 8): sin distinguir mayúsculas, con barra final opcional y con los parámetros DECODIFICADOS
 // (/organizations/%61bc…/finance llega a la ruta con el id «abc…»). Por eso cada regla termina en (/|$) y se
-// prueba contra la ruta original y contra su forma canónica (segmentos decodificados, barras repetidas y finales
-// quitadas). Reconocer de más solo puede cerrar una petición, nunca abrirla.
+// prueba contra la ruta original y contra su forma canónica, con la función común de las guardas (gatePath.ts,
+// seguridad #286). Reconocer de más solo puede cerrar una petición, nunca abrirla.
 const RULES: { pattern: RegExp; kind: ResidentialRouteKind }[] = [
   { pattern: new RegExp(`${ORG}/residential(/|$)`, "i"), kind: "residential" },
   // Finanzas (119) y Facturación (123).
@@ -35,21 +39,9 @@ const RULES: { pattern: RegExp; kind: ResidentialRouteKind }[] = [
   { pattern: new RegExp(`${ORG}/care-recipients/${UUID}/shift-reports(/|$)`, "i"), kind: "denied" },
 ];
 
-/**
- * Forma canónica de una ruta para la guarda: cada segmento decodificado (si un segmento no se puede decodificar se
- * deja tal cual), barras repetidas reducidas a una y sin barra final. Nunca lanza.
- */
-export function canonicalGatePath(path: string): string {
-  const segments = path.split("/").filter((segment) => segment !== "").map((segment) => {
-    try { return decodeURIComponent(segment); } catch { return segment; }
-  });
-  return "/" + segments.join("/");
-}
-
 /** Todos los métodos: la regla es por modalidad, no por lectura o escritura. */
 export function residentialRouteFor(path: string): { organizationId: string; kind: ResidentialRouteKind } | null {
-  const canonical = canonicalGatePath(path);
-  for (const candidate of canonical === path ? [path] : [canonical, path]) {
+  for (const candidate of gatePathCandidates(path)) {
     for (const rule of RULES) {
       const match = rule.pattern.exec(candidate);
       if (match) return { organizationId: match[1].toLowerCase(), kind: rule.kind };
