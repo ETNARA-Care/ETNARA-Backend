@@ -166,8 +166,13 @@ async function selfCheck(db: Client) {
     } catch (e) { ck("K7 recorrido completo de la práctica", false, (e as Error).message); }
   } else log("recorrido K7 ya hecho antes: no se repite");
   // K8 (Fase 1 final): prueba integral en la práctica de Ana con datos ficticios nuevos (una sola vez).
-  const k8done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Marta'`, [N])).rowCount;
+  const k8done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Elena'`, [N])).rowCount;
   if (!k8done) {
+    // Las prácticas de la demo se crearon antes de la 164: se les dan los valores por defecto de una práctica nueva.
+    for (const org of [N, L]) for (const f of ["EN_CAMINO", "SHIFT_REPORTS"]) {
+      const on = (await db.query(`SELECT 1 FROM organization_features WHERE organization_id=$1 AND feature_code=$2 AND enabled`, [org, f])).rowCount;
+      if (!on) must(await call("PUT", `/platform/organizations/${org}/features/${f}`, C, { enabled: true, reason: "Demo: valores por defecto de una práctica nueva (164)" }), [200], `${f} en la práctica`);
+    }
     try {
       const t0 = new Date().toISOString();
       const anaId = (await db.query(`SELECT id FROM users WHERE email=$1`, [ACCOUNTS.ana.email])).rows[0].id;
@@ -176,12 +181,12 @@ async function selfCheck(db: Client) {
       const rq = await call("GET", `/organizations/${A}/credentials/review-queue`, tA);
       const anaRev = (await db.query(`SELECT r.review_status FROM organization_credential_reviews r JOIN credentials c ON c.id=r.credential_id JOIN workers w ON w.id=c.worker_id WHERE w.user_id=$1`, [anaId])).rows.map((r) => r.review_status);
       ck("K8a documentos: los de la práctica son autodeclarados; la agencia los ve aparte y ninguno queda aprobado solo", docs.length >= 1 && docs.every((d: any) => d.declaredByHolder !== false) && rq.s === 200 && !anaRev.includes("approved"), { docs: docs.length, rq: rq.s, anaRev });
-      const marta = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Marta", lastName: "Demo" }), [201], "cliente Marta");
+      const marta = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Elena", lastName: "Demo" }), [201], "cliente Elena");
       const mId = (marta.careRecipient ?? marta.recipient ?? marta).id;
       const fpw = "Verif-" + crypto.randomUUID();
-      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia-marta@demo.invalid", careRecipientId: mId, relationshipType: "hija" }), [201], "familia de Marta");
-      must(await call("POST", "/access-invitations/activate", undefined, { token: finv.token, password: fpw }), [200, 201], "activar familia de Marta");
-      const tFm = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia-marta@demo.invalid", password: fpw }), [200], "login familia de Marta").token;
+      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia-elena@demo.invalid", careRecipientId: mId, relationshipType: "hija" }), [201], "familia de Elena");
+      must(await call("POST", "/access-invitations/activate", undefined, { token: finv.token, password: fpw }), [200, 201], "activar familia de Elena");
+      const tFm = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia-elena@demo.invalid", password: fpw }), [200], "login familia de Elena").token;
       const at = (min: number) => new Date(Date.now() + min * 60000).toISOString();
       const s1 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(5), scheduledEnd: at(65) }), [201], "turno 1").shift.id;
       const sa1 = await call("POST", `/organizations/${N}/me/shifts/${s1}/self-assign`, tAna, {});
@@ -202,14 +207,14 @@ async function selfCheck(db: Client) {
       const reps = (await call("GET", `/organizations/${N}/shifts/${s1}/shift-reports`, tAna)).j.reports ?? [];
       const pub = reps[0] ? await call("POST", `/organizations/${N}/shift-reports/${reps[0].id}/publish-as-provider`, tAna, { expectedGeneratedAt: reps[0].generatedAt, familySections: { schedule: true, meals: true, hydration: true, activities: true, mobility: true, observations: true, hygiene: false, mood: false, incidents: false, photos: false } }) : { s: 0, j: {} };
       const fr = await call("GET", `/organizations/${N}/care-recipients/${mId}/shift-reports`, tFm);
-      ck("K8d visita e informe: comenzar, registrar, finalizar, publicar; la familia de Marta lo ve", [200, 201].includes(ci.s) && [200, 201].includes(ev.s) && [200, 201].includes(co.s) && pub.s === 200 && fr.s === 200 && (fr.j.reports ?? []).length >= 1, { ci: ci.s, ev: ev.s, co: co.s, reps: reps.length, pub: pub.s, pubE: pub.j.error, fr: fr.s });
+      ck("K8d visita e informe: comenzar, registrar, finalizar, publicar; la familia de Elena lo ve", [200, 201].includes(ci.s) && [200, 201].includes(ev.s) && [200, 201].includes(co.s) && pub.s === 200 && fr.s === 200 && (fr.j.reports ?? []).length >= 1, { ci: ci.s, ev: ev.s, co: co.s, reps: reps.length, pub: pub.s, pubE: pub.j.error, fr: fr.s });
       await sleep(1500);
       const self = (await db.query(`SELECT notification_type t FROM notifications WHERE user_id=$1 AND organization_id=$2 AND created_at >= $3`, [anaId, N, t0])).rows.map((r) => r.t);
-      const fam = (await db.query(`SELECT n.notification_type t FROM notifications n JOIN users u ON u.id=n.user_id WHERE u.email='verificacion-familia-marta@demo.invalid'`)).rows.map((r) => r.t);
+      const fam = (await db.query(`SELECT n.notification_type t FROM notifications n JOIN users u ON u.id=n.user_id WHERE u.email='verificacion-familia-elena@demo.invalid'`)).rows.map((r) => r.t);
       ck("K8e notificaciones: Ana no recibe avisos sobre sí misma en su práctica; la familia sí recibe los suyos", self.length === 0 && fam.length >= 1, { self, fam });
       const luisId = (await db.query(`SELECT id FROM care_recipients WHERE organization_id=$1 AND first_name='Luis'`, [N])).rows[0]?.id;
       const restr = {
-        revisarCredencial: (await call("POST", `/organizations/${N}/workers/${memb}/credentials/${docs[0]?.id ?? crypto.randomUUID()}/review`, tAna, { decision: "approved" })).s,
+        revisarCredencial: (await call("POST", `/organizations/${N}/workers/${(await db.query(`SELECT owm.id FROM organization_worker_memberships owm JOIN workers w ON w.id=owm.worker_id WHERE w.user_id=$1 AND owm.organization_id=$2`, [anaId, N])).rows[0]?.id}/credentials/${docs[0]?.id ?? crypto.randomUUID()}/review`, tAna, { decision: "approved" })).s,
         familiaEnOtraPractica: (await call("GET", `/organizations/${L}/care-recipients`, tFm)).s,
         familiaEnAgencia: (await call("GET", `/organizations/${A}/care-recipients`, tFm)).s,
         familiaInformeAjeno: (await call("GET", `/organizations/${N}/care-recipients/${luisId}/shift-reports`, tFm)).s,
