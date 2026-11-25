@@ -120,6 +120,21 @@ async function main() {
   await q(`SELECT app_residential_ensure_establishment(l.id) FROM locations l JOIN organizations o ON o.id=l.organization_id WHERE o.organization_type='RESIDENTIAL_CARE_HOME' AND l.archived_at IS NULL`);
   const p1b = await pieces(E1);
   check("A3. Repetir la creación y el relleno deja una sola «General» y una sola habitación técnica", JSON.stringify(p1b) === JSON.stringify(p1), p1b);
+  // Establecimiento de hogar con datos anteriores a la 171 (simulado): «General» y otra unidad ya existentes.
+  await q(`ALTER TABLE locations DISABLE TRIGGER locations_residential_ensure`);
+  const EL = (await q<{ id: string }>(`INSERT INTO locations (organization_id, name) VALUES ($1,'Sede antigua') RETURNING id`, [H2])).rows[0].id;
+  await q(`ALTER TABLE locations ENABLE TRIGGER locations_residential_ensure`);
+  await q(`ALTER TABLE units DISABLE TRIGGER units_residential_guard`);
+  const oldGeneral = (await q<{ id: string }>(`INSERT INTO units (location_id, organization_id, name) VALUES ($1,$2,'general') RETURNING id`, [EL, H2])).rows[0].id;
+  await q(`INSERT INTO units (location_id, organization_id, name) VALUES ($1,$2,'Ala vieja')`, [EL, H2]);
+  await q(`ALTER TABLE units ENABLE TRIGGER units_residential_guard`);
+  const oldRow = (await q<{ h: string }>(`SELECT md5(row(u.*)::text) h FROM units u WHERE id=$1`, [oldGeneral])).rows[0].h;
+  await q(`SELECT app_residential_ensure_establishment($1)`, [EL]);
+  const pl2 = await pieces(EL);
+  const adopted = (await q<{ unit_id: string }>(`SELECT unit_id FROM establishment_general_units WHERE location_id=$1`, [EL])).rows[0]?.unit_id;
+  const oldRowAfter = (await q<{ h: string }>(`SELECT md5(row(u.*)::text) h FROM units u WHERE id=$1`, [oldGeneral])).rows[0].h;
+  check("A5. Relleno sobre datos anteriores: adopta la «General» existente sin modificarla (no crea otra) y añade solo las piezas técnicas",
+    adopted === oldGeneral && oldRowAfter === oldRow && pl2.units === 3 && pl2.general === 1 && pl2.tech === 1 && pl2.rooms === 1, [pl2, adopted === oldGeneral, oldRowAfter === oldRow]);
   const tech = (await q<{ unit_id: string; room_id: string }>(`SELECT unit_id, room_id FROM establishment_technical_rooms WHERE location_id=$1`, [E1])).rows[0];
   const tech2 = (await q<{ unit_id: string; room_id: string }>(`SELECT unit_id, room_id FROM establishment_technical_rooms WHERE location_id=$1`, [E2])).rows[0];
   const general1 = (await q<{ unit_id: string }>(`SELECT unit_id FROM establishment_general_units WHERE location_id=$1`, [E1])).rows[0].unit_id;
@@ -174,6 +189,9 @@ async function main() {
   const rn = await call("POST", `${R}/establishments/${E1}/rooms`, tH, { name: "201", unitId: UN, bedCapacity: 2 });
   const rdup = await call("POST", `${R}/establishments/${E1}/rooms`, tH, { name: "101", unitId: UN });
   const rS = await call("POST", `${R}/establishments/${E2}/rooms`, tH, { name: "S-1", bedCapacity: 1 });
+  const rBig = await call("POST", `${R}/establishments/${E2}/rooms`, tH, { name: "Dormitorio grande", bedCapacity: 25 });
+  check("B5. Camas sin tope de negocio (25 camas se aceptan; solo entero positivo)", rBig.status === 201 && rBig.body.room?.bedCapacity === 25, rBig.body);
+  await call("PATCH", `${R}/rooms/${rBig.body.room?.id}`, tH, { archived: true });
   check("B3. Habitaciones: directas en «General» o en una unidad; nombre repetido en el establecimiento 409",
     rg.status === 201 && rg.body.room?.unitId === general1 && rn.status === 201 && rdup.status === 409 && rS.status === 201, [rg.status, rn.status, rdup.body, rS.status]);
   const RG = rg.body.room?.id as string, RN = rn.body.room?.id as string, RS = rS.body.room?.id as string;
@@ -206,6 +224,31 @@ async function main() {
   check("C7. Ubicar en la habitación técnica o en una de otro hogar: 404; habitación de otro establecimiento sin trasladar: rechazada en la base",
     toTech.status === 404 && toOther.status === 404 && mismatch.includes("RESIDENTIAL_ROOM_LOCATION_MISMATCH"), [toTech.status, toOther.status, mismatch]);
 
+  // ---- Traslados con turnos vigentes ---------------------------------------------------------------------------------
+  const fStart = new Date(Date.now() + 2 * 86400000).toISOString(), fEnd = new Date(Date.now() + 2 * 86400000 + 8 * 3600000).toISOString();
+  const futureShift = (await q<{ id: string }>(`INSERT INTO shifts (organization_id, care_recipient_id, scheduled_start, scheduled_end, status) VALUES ($1,$2,$3,$4,'confirmed') RETURNING id`, [H, r2, fStart, fEnd])).rows[0].id;
+  const trBlocked = await pl(r2, { roomId: RS, reason: "Traslado con turno" });
+  const trBlockedOld = await call("POST", `/organizations/${H}/establishments/${E2}/residents`, tH, { recipientId: r2 });
+  const moveSame = await pl(r2, { roomId: RG, reason: "Cambio de habitación en la misma sede" });
+  const r2loc = (await q<{ location_id: string }>(`SELECT location_id FROM care_recipients WHERE id=$1`, [r2])).rows[0].location_id;
+  check("C8. Traslado a otro establecimiento con turnos vigentes o futuros: rechazado (409), también por la ruta antigua; cambiar de habitación en la misma sede sí",
+    trBlocked.status === 409 && trBlocked.body.error === "RESIDENTIAL_TRANSFER_ACTIVE_SHIFTS" && trBlockedOld.status >= 400 && trBlockedOld.status < 500 && moveSame.status === 200 && r2loc === E1,
+    [trBlocked.body, trBlockedOld.status, trBlockedOld.body, moveSame.status, r2loc]);
+  await q(`UPDATE shifts SET status='cancelled' WHERE id=$1`, [futureShift]);
+  await pl(r2, { roomId: RN, reason: "Vuelve a la 201" });
+
+  // ---- Rutas existentes no eluden la habitación técnica ------------------------------------------------------------------
+  const crTech = await call("POST", `/organizations/${H}/care-recipients`, tH, { firstName: "Eva", lastName: "Ficticia", roomId: tech.room_id });
+  const crPatch = await call("PATCH", `/organizations/${H}/care-recipients/${r3}`, tH, { roomId: tech.room_id });
+  const crOther = await call("PATCH", `/organizations/${H}/care-recipients/${r3}`, tH, { roomId: RS });
+  const shTech = await call("POST", `/organizations/${H}/shifts`, tH, { roomId: tech.room_id, scheduledStart: fStart, scheduledEnd: fEnd });
+  const r3room = (await q<{ room_id: string }>(`SELECT room_id FROM care_recipients WHERE id=$1`, [r3])).rows[0].room_id;
+  const techShifts = (await q<{ n: number }>(`SELECT count(*)::int n FROM shifts WHERE room_id=$1`, [tech.room_id])).rows[0].n;
+  check("E1. Rutas genéricas: residente nuevo o editado en la habitación técnica 409; habitación de otro establecimiento 409; turno genérico sobre la técnica 400; nada cambia",
+    crTech.status === 409 && crTech.body.error === "RESIDENTIAL_TECHNICAL_ROOM_NO_RESIDENTS" && crPatch.status === 409 && crOther.status === 409 && crOther.body.error === "RESIDENTIAL_ROOM_LOCATION_MISMATCH"
+      && shTech.status === 400 && r3room === RN && techShifts === 0,
+    [crTech.status, crTech.body, crPatch.status, crOther.body, shTech.status, shTech.body, r3room === RN, techShifts]);
+
   // ---- Reglas de archivo -----------------------------------------------------------------------------------------------
   const archRoom = await call("PATCH", `${R}/rooms/${RN}`, tH, { archived: true });
   const archGen = await call("PATCH", `${R}/units/${general1}`, tH, { archived: true });
@@ -236,6 +279,33 @@ async function main() {
     gOk.status === 200 && gOk.body.geofence?.radiusMeters === 150 && gH.body.history?.length === 1 && gH.body.history[0].oldRadiusMeters === 100 && gH.body.history[0].newRadiusMeters === 150 && gH.body.history[0].centerChanged === true && gH.body.history[0].actorEmail === adminH.email, [gOk.body, gH.body]);
   check("G3. En la base, cambiar la geocerca sin motivo se rechaza (también directamente con app_runtime)", gDirect.includes("RESIDENTIAL_REASON_REQUIRED"), gDirect);
 
+  // ---- Personal vinculado a dos establecimientos ------------------------------------------------------------------------
+  const dual = await user("cuidadora-dos-sedes");
+  const dualOm = await member(dual, H, ["WORKER"]);
+  const dualW = (await q<{ id: string }>(`INSERT INTO workers (user_id, display_name) VALUES ($1,'Cuidadora Dos Sedes') RETURNING id`, [dual.id])).rows[0].id;
+  const dualOwm = (await q<{ id: string }>(`INSERT INTO organization_worker_memberships (worker_id, organization_id, status, internal_role) VALUES ($1,$2,'active','CNA') RETURNING id`, [dualW, H])).rows[0].id;
+  const wl = async (loc: string) => (await q<{ id: string }>(`INSERT INTO establishment_worker_assignments (organization_id, location_id, organization_worker_membership_id) VALUES ($1,$2,$3) RETURNING id`, [H, loc, dualOwm])).rows[0].id;
+  const al = async (loc: string) => (await q<{ id: string }>(`INSERT INTO establishment_admin_assignments (organization_id, location_id, organization_membership_id) VALUES ($1,$2,$3) RETURNING id`, [H, loc, dualOm])).rows[0].id;
+  const wl1 = await wl(E1), wl2 = await wl(E2), al1 = await al(E1), al2 = await al(E2);
+  const pastStart = new Date(Date.now() - 3 * 86400000).toISOString(), pastEnd = new Date(Date.now() - 3 * 86400000 + 8 * 3600000).toISOString();
+  const pastShift = (await q<{ id: string }>(`INSERT INTO shifts (organization_id, care_recipient_id, scheduled_start, scheduled_end, status) VALUES ($1,$2,$3,$4,'completed') RETURNING id`, [H, r1, pastStart, pastEnd])).rows[0].id;
+  await q(`INSERT INTO assignments (organization_id, shift_id, organization_worker_membership_id, care_recipient_id, response_status) VALUES ($1,$2,$3,$4,'accepted')`, [H, pastShift, dualOwm, r1]);
+  const tDual = await login(dual, H);
+  const snapshot = async () => (await q<Json>(`SELECT
+    (SELECT status::text FROM users WHERE id=$1) AS user_status,
+    (SELECT status::text FROM organization_memberships WHERE id=$2) AS om_status,
+    (SELECT string_agg(r.code, ',' ORDER BY r.code) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.organization_membership_id=$2) AS roles,
+    (SELECT status::text FROM organization_worker_memberships WHERE id=$3) AS owm_status,
+    (SELECT internal_role FROM organization_worker_memberships WHERE id=$3) AS internal_role,
+    (SELECT count(*)::int FROM credentials c WHERE c.worker_id=$4) AS credentials,
+    (SELECT count(*)::int FROM assignments WHERE organization_worker_membership_id=$3) AS assignments,
+    (SELECT md5(string_agg(md5(row(a.*)::text), '' ORDER BY a.id)) FROM assignments a WHERE organization_worker_membership_id=$3) AS assignments_hash,
+    (SELECT count(*)::int FROM shifts WHERE id=$5) AS past_shift,
+    (SELECT count(*)::int FROM establishment_worker_assignments WHERE organization_worker_membership_id=$3) AS worker_links_total,
+    (SELECT count(*)::int FROM establishment_admin_assignments WHERE organization_membership_id=$2) AS admin_links_total`, [dual.id, dualOm, dualOwm, dualW, pastShift])).rows[0];
+  const dualBefore = await snapshot();
+  const wsE2before = await call("GET", `/organizations/${H}/establishments/${E2}/workspace`, tDual);
+
   // ---- Cierre del establecimiento --------------------------------------------------------------------------------------
   const ck1 = await call("GET", `${R}/establishments/${E2}/closure-check`, tH);
   const cl1 = await call("POST", `${R}/establishments/${E2}/close`, tH, { reason: "Cierre de la sede" });
@@ -259,7 +329,7 @@ async function main() {
     (SELECT count(*)::int FROM establishment_closures WHERE location_id=$1) closures`, [E2, tech2.room_id])).rows[0];
   const kept = (await q<{ n: number }>(`SELECT count(*)::int n FROM rooms r JOIN units u ON u.id=r.unit_id WHERE u.location_id=$1`, [E2])).rows[0].n;
   check("K4. Sin motivo 400; la cuidadora no cierra (403); sin bloqueos se cierra: archiva todo (también lo técnico) sin borrar y lo registra",
-    clNoReason.status === 400 && clW.status === 403 && cl3.status === 200 && cl3.body.closure?.closed === true && cl3.body.closure?.roomsArchived === 1 && after.loc !== null && after.open_rooms === 0 && after.open_units === 0 && after.tech_archived === true && after.closures === 1 && kept === 2,
+    clNoReason.status === 400 && clW.status === 403 && cl3.status === 200 && cl3.body.closure?.closed === true && cl3.body.closure?.roomsArchived === 1 && after.loc !== null && after.open_rooms === 0 && after.open_units === 0 && after.tech_archived === true && after.closures === 1 && kept === 3,
     [clNoReason.status, clW.status, cl3.body, after, kept]);
   const postRoom = await call("POST", `${R}/establishments/${E2}/rooms`, tH, { name: "Nueva" });
   const postGeo = await call("PUT", `${R}/establishments/${E2}/geofence`, tH, { radiusMeters: 120, reason: "Tras el cierre" });
@@ -271,6 +341,29 @@ async function main() {
     [postRoom.body, postGeo.body, reopen.body, reclose.body, placeClosed.body]);
   const closureForge = await suErr(`DELETE FROM establishment_closures WHERE location_id=$1`, [E2]);
   check("K6. El registro de cierre es solo de anexos", closureForge.includes("RESIDENTIAL_HISTORY_APPEND_ONLY"), closureForge);
+
+  // ---- Cierre y personal de dos sedes ------------------------------------------------------------------------------------------
+  const dualAfter = await snapshot();
+  const links = (await q<{ id: string; archived: boolean }>(`SELECT id, archived_at IS NOT NULL AS archived FROM establishment_worker_assignments WHERE id = ANY($1)
+    UNION ALL SELECT id, archived_at IS NOT NULL FROM establishment_admin_assignments WHERE id = ANY($1)`, [[wl1, wl2, al1, al2]])).rows;
+  const isArchived = (id: string) => links.find((l) => l.id === id)?.archived;
+  const closure = (await q<{ w: string[]; a: string[]; n: number }>(`SELECT archived_worker_link_ids w, archived_admin_link_ids a, staff_links_archived n FROM establishment_closures WHERE location_id=$1`, [E2])).rows[0];
+  check("S1. El cierre archiva solo los vínculos con el establecimiento cerrado (los de la otra sede siguen activos) y deja constancia de cuáles",
+    isArchived(wl2) === true && isArchived(al2) === true && isArchived(wl1) === false && isArchived(al1) === false
+      && JSON.stringify(closure.w) === JSON.stringify([wl2]) && JSON.stringify(closure.a) === JSON.stringify([al2]) && closure.n === 2, [links, closure]);
+  check("S2. No toca a la persona: cuenta, membresía, roles, ficha de cuidadora, credenciales ni historial de asignaciones y turnos",
+    JSON.stringify(dualAfter) === JSON.stringify(dualBefore) && dualBefore.user_status === "active" && dualBefore.om_status === "active" && dualBefore.owm_status === "active" && dualBefore.assignments === 1,
+    [dualBefore, dualAfter]);
+  const wsE1 = await call("GET", `/organizations/${H}/establishments/${E1}/workspace`, tDual);
+  const wsE2 = await call("GET", `/organizations/${H}/establishments/${E2}/workspace`, tDual);
+  const mine = await call("GET", `/organizations/${H}/my-admin-establishments`, tDual);
+  const actE1 = await call("POST", `/organizations/${H}/establishments/${E1}/residents/manage`, tDual, { firstName: "Flor", lastName: "Ficticia" });
+  const mineIds = (mine.body.establishments ?? []).map((e: Json) => e.id);
+  check("S3. Sigue trabajando en la otra sede (espacio de trabajo 200 y puede registrar un residente) y pierde el acceso operativo a la cerrada",
+    wsE2before.status === 200 && wsE1.status === 200 && wsE2.status === 403 && actE1.status === 201 && mineIds.includes(E1) && !mineIds.includes(E2),
+    [wsE2before.status, wsE1.status, wsE2.status, actE1.status, mineIds]);
+  const login2 = await call("POST", "/auth/login", "", { email: dual.email, password });
+  check("S4. Puede seguir iniciando sesión (el cierre no es una baja ni una acción de Recursos Humanos)", login2.status === 200 && typeof login2.body.token === "string", login2.status);
 
   // ---- Permisos y aislamiento -------------------------------------------------------------------------------------------
   const sList = await call("GET", `${R}/establishments`, tS), wList = await call("GET", `${R}/establishments`, tW), fList = await call("GET", `${R}/establishments`, tF);

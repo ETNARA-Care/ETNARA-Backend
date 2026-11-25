@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { residentialRouteFor } from "../src/middleware/residentialRules.js";
 import { residentialDbErrorCode, residentialDbErrorStatus } from "../src/modules/residential/residentialErrors.js";
@@ -48,6 +48,30 @@ describe("171: hogares F1 (establecimientos y habitaciones)", () => {
     expect(fn).not.toMatch(/\bDELETE\b/);
     expect(fn.indexOf("set_config('app.residential_procedure', 'on', true)")).toBeLessThan(fn.indexOf("set_config('app.residential_procedure', 'off', true)"));
   });
+  it("el cierre archiva solo los vínculos del personal con ese establecimiento y deja constancia de cuáles", () => {
+    const fn = mig.slice(mig.indexOf("FUNCTION public.app_residential_close_establishment"), mig.indexOf("REVOKE ALL ON FUNCTION public.app_residential_close_establishment"));
+    for (const t of ["establishment_worker_assignments", "establishment_admin_assignments"])
+      expect(fn).toMatch(new RegExp(`UPDATE public\\.${t} SET archived_at = now\\(\\)\\s+WHERE location_id = p_location_id AND organization_id = v_org AND archived_at IS NULL RETURNING id`));
+    expect(fn).not.toMatch(/organization_memberships|organization_worker_memberships|users|credentials|user_roles/);
+    expect(fn).toMatch(/archived_worker_link_ids, archived_admin_link_ids/);
+  });
+  it("traslado: rechazado con turnos vigentes o futuros del residente (sin asignaciones colgadas)", () => {
+    expect(mig).toMatch(/RESIDENTIAL_TRANSFER_ACTIVE_SHIFTS/);
+    expect(mig).toMatch(/NEW\.location_id IS DISTINCT FROM OLD\.location_id[\s\S]{0,200}s\.care_recipient_id = NEW\.id/);
+  });
+  it("contrato de F3: si aparece shift_resident_assignments, su migración debe cerrar las asignaciones al trasladar", () => {
+    const files = readdirSync(new URL("../migrations/", import.meta.url)).filter((f) => /^\d{3}_.*\.sql$/.test(f));
+    for (const f of files) {
+      const text = read(`migrations/${f}`);
+      if (/CREATE TABLE[^;]*shift_resident_assignments/i.test(text)) {
+        expect(text, f).toMatch(/ON\s+(public\.)?care_recipients/i);
+        expect(text, f).toMatch(/location_id/);
+      }
+    }
+  });
+  it("la ruta genérica de turnos no acepta la habitación técnica", () => {
+    expect(read("src/modules/scheduling/scheduling.service.ts")).toContain("AND NOT app_is_technical_room(id)");
+  });
   it("la reversión se niega con datos de personas", () => {
     expect(rollback).toMatch(/ROLLBACK_171_REFUSED/);
     for (const t of ["room_profiles", "establishment_settings_events", "care_recipient_room_events", "establishment_closures"]) expect(rollback).toContain(`EXISTS (SELECT 1 FROM ${t})`);
@@ -67,6 +91,8 @@ describe("171: hogares F1 (establecimientos y habitaciones)", () => {
   it("validación de entradas: nombres reservados, camas 1–20, radio 50–300 m, motivo y centro completo", () => {
     expect(createUnitSchema.safeParse({ name: "__etnara_technical__" }).success).toBe(false);
     expect(createRoomSchema.safeParse({ name: "101", bedCapacity: 0 }).success).toBe(false);
+    expect(createRoomSchema.safeParse({ name: "101", bedCapacity: 25 }).success).toBe(true); // sin tope de negocio
+    expect(mig).toMatch(/bed_capacity\s+integer NULL CHECK \(bed_capacity >= 1\)/);
     expect(updateRoomSchema.safeParse({ bedCapacity: null }).success).toBe(true);
     expect(geofenceSchema.safeParse({ radiusMeters: 49, reason: "abc" }).success).toBe(false);
     expect(geofenceSchema.safeParse({ radiusMeters: 301, reason: "abc" }).success).toBe(false);

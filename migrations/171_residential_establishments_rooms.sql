@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS room_profiles (
   room_id            uuid PRIMARY KEY,
   organization_id    uuid NOT NULL,
   -- Camas registradas por la administración. Nunca se presenta como capacidad autorizada por el Departamento de
-  -- la Familia; superarla solo advierte (D8).
-  bed_capacity       integer NULL CHECK (bed_capacity BETWEEN 1 AND 20),
+  -- la Familia; superarla solo advierte (D8). Sin tope de negocio: solo un número entero positivo.
+  bed_capacity       integer NULL CHECK (bed_capacity >= 1),
   updated_at         timestamptz NOT NULL DEFAULT now(),
   updated_by_user_id uuid NULL REFERENCES users (id),
   FOREIGN KEY (room_id, organization_id) REFERENCES rooms (id, organization_id)
@@ -140,6 +140,10 @@ CREATE TABLE IF NOT EXISTS establishment_closures (
   rooms_archived     integer NOT NULL,
   units_archived     integer NOT NULL,
   staff_links_archived integer NOT NULL,
+  -- Vínculos del personal con ESTE establecimiento que el cierre archivó (nunca otros establecimientos, ni la
+  -- membresía, la cuenta, las credenciales o los historiales de la persona).
+  archived_worker_link_ids uuid[] NOT NULL DEFAULT '{}',
+  archived_admin_link_ids  uuid[] NOT NULL DEFAULT '{}',
   closed_at          timestamptz NOT NULL DEFAULT now(),
   FOREIGN KEY (location_id, organization_id) REFERENCES locations (id, organization_id)
 );
@@ -205,11 +209,20 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('residential-establishment:' || p_location_id::text));
 
   IF NOT EXISTS (SELECT 1 FROM public.establishment_general_units WHERE location_id = p_location_id) THEN
+    -- Si el establecimiento ya tiene una unidad activa llamada «General» (datos anteriores), se adopta tal cual,
+    -- sin modificarla, en lugar de crear otra.
+    SELECT u.id INTO v_unit FROM public.units u
+    WHERE u.location_id = p_location_id AND u.archived_at IS NULL AND lower(btrim(u.name)) = 'general'
+    ORDER BY u.created_at, u.id LIMIT 1;
+    IF v_unit IS NOT NULL THEN
+      INSERT INTO public.establishment_general_units (location_id, organization_id, unit_id) VALUES (p_location_id, v_org, v_unit);
+    ELSE
     -- Identificadores y fechas derivados del establecimiento: crear o rellenar dos veces da filas idénticas.
     INSERT INTO public.units (id, location_id, organization_id, name, created_at, updated_at)
     VALUES (public.app_residential_stable_uuid('etnara-residential-general-unit:' || p_location_id::text), p_location_id, v_org, 'General', v_created, v_created)
     RETURNING id INTO v_unit;
     INSERT INTO public.establishment_general_units (location_id, organization_id, unit_id) VALUES (p_location_id, v_org, v_unit);
+    END IF;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.establishment_technical_rooms WHERE location_id = p_location_id) THEN
@@ -378,6 +391,17 @@ BEGIN
   IF NEW.room_id IS NOT NULL AND public.app_is_technical_room(NEW.room_id) THEN
     RAISE EXCEPTION 'RESIDENTIAL_TECHNICAL_ROOM_NO_RESIDENTS' USING ERRCODE = 'P0001';
   END IF;
+  -- Traslado entre establecimientos de un hogar: se rechaza mientras el residente tenga turnos vigentes o futuros
+  -- (y por tanto asignaciones) en el establecimiento anterior. Así nunca quedan asignaciones activas que apunten al
+  -- lugar equivocado; F3 cerrará además sus asignaciones por residente en la misma transacción (contrato de F3).
+  -- Cambiar de habitación dentro del mismo establecimiento no afecta a las asignaciones (§3).
+  IF TG_OP = 'UPDATE' AND OLD.location_id IS NOT NULL AND NEW.location_id IS DISTINCT FROM OLD.location_id
+     AND public.app_org_is_residential(NEW.organization_id)
+     AND EXISTS (SELECT 1 FROM public.shifts s
+                 WHERE s.organization_id = NEW.organization_id AND s.care_recipient_id = NEW.id
+                   AND s.status NOT IN ('cancelled', 'completed') AND s.scheduled_end > now()) THEN
+    RAISE EXCEPTION 'RESIDENTIAL_TRANSFER_ACTIVE_SHIFTS' USING ERRCODE = 'P0001';
+  END IF;
   IF NEW.room_id IS NULL OR NOT public.app_org_is_residential(NEW.organization_id) THEN
     RETURN NEW;
   END IF;
@@ -514,7 +538,8 @@ DECLARE
   v_rooms integer;
   v_units integer;
   v_links integer := 0;
-  v_n integer;
+  v_worker_links uuid[];
+  v_admin_links uuid[];
 BEGIN
   IF v_user IS NULL OR v_org IS NULL OR NOT public.app_is_org_manager() THEN
     RAISE EXCEPTION 'RESIDENTIAL_MANAGER_REQUIRED' USING ERRCODE = 'P0001';
@@ -559,15 +584,21 @@ BEGIN
   GET DIAGNOSTICS v_rooms = ROW_COUNT;
   UPDATE public.units u SET archived_at = now(), updated_at = now() WHERE u.location_id = p_location_id AND u.archived_at IS NULL;
   GET DIAGNOSTICS v_units = ROW_COUNT;
-  UPDATE public.establishment_worker_assignments SET archived_at = now() WHERE location_id = p_location_id AND organization_id = v_org AND archived_at IS NULL;
-  GET DIAGNOSTICS v_n = ROW_COUNT; v_links := v_links + v_n;
-  UPDATE public.establishment_admin_assignments SET archived_at = now() WHERE location_id = p_location_id AND organization_id = v_org AND archived_at IS NULL;
-  GET DIAGNOSTICS v_n = ROW_COUNT; v_links := v_links + v_n;
+  -- Solo los vínculos con este establecimiento: revoca el acceso operativo aquí y nada más. No toca la
+  -- membresía en la organización, la cuenta, las credenciales, los documentos ni otros establecimientos.
+  WITH a AS (UPDATE public.establishment_worker_assignments SET archived_at = now()
+             WHERE location_id = p_location_id AND organization_id = v_org AND archived_at IS NULL RETURNING id)
+  SELECT COALESCE(array_agg(id ORDER BY id), '{}') INTO v_worker_links FROM a;
+  WITH a AS (UPDATE public.establishment_admin_assignments SET archived_at = now()
+             WHERE location_id = p_location_id AND organization_id = v_org AND archived_at IS NULL RETURNING id)
+  SELECT COALESCE(array_agg(id ORDER BY id), '{}') INTO v_admin_links FROM a;
+  v_links := cardinality(v_worker_links) + cardinality(v_admin_links);
   UPDATE public.locations SET archived_at = now(), updated_at = now() WHERE id = p_location_id;
   PERFORM set_config('app.residential_procedure', 'off', true);
 
-  INSERT INTO public.establishment_closures (organization_id, location_id, closed_by_user_id, reason, rooms_archived, units_archived, staff_links_archived)
-  VALUES (v_org, p_location_id, v_user, btrim(p_reason), v_rooms, v_units, v_links);
+  INSERT INTO public.establishment_closures (organization_id, location_id, closed_by_user_id, reason, rooms_archived, units_archived,
+    staff_links_archived, archived_worker_link_ids, archived_admin_link_ids)
+  VALUES (v_org, p_location_id, v_user, btrim(p_reason), v_rooms, v_units, v_links, v_worker_links, v_admin_links);
   -- Las piezas técnicas se cuentan dentro, pero nunca se informan por separado.
   RETURN jsonb_build_object('closed', true,
     'roomsArchived', greatest(v_rooms - 1, 0), 'unitsArchived', greatest(v_units - 1, 0), 'staffLinksArchived', v_links);

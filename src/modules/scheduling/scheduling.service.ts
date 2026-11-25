@@ -186,8 +186,9 @@ export async function insertShiftInTransaction(
       if (!check.rows[0]) throw new RecipientNotInOrgError();
     }
     if (input.roomId) {
+      // 171: la habitación técnica de un hogar no se usa desde la ruta genérica (solo el calendario de hogares, F2).
       const check = await sql<{ id: string }>`
-        SELECT id FROM rooms WHERE id = ${input.roomId} AND organization_id = ${organizationId} LIMIT 1
+        SELECT id FROM rooms WHERE id = ${input.roomId} AND organization_id = ${organizationId} AND NOT app_is_technical_room(id) LIMIT 1
       `.execute(trx);
       if (!check.rows[0]) throw new RoomNotInOrgError();
     }

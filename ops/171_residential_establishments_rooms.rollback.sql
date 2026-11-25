@@ -14,13 +14,18 @@ BEGIN
      OR EXISTS (SELECT 1 FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id)
      OR EXISTS (SELECT 1 FROM care_recipients cr JOIN organizations o ON o.id = cr.organization_id
                 WHERE o.organization_type = 'RESIDENTIAL_CARE_HOME' AND cr.room_id IS NOT NULL)
+     -- Habitaciones o unidades de hogares creadas o cambiadas desde que se aplicó la 171 (las anteriores a la 171
+     -- no cuentan: son datos previos y la reversión no las toca).
      OR EXISTS (SELECT 1 FROM rooms r JOIN organizations o ON o.id = r.organization_id
                 WHERE o.organization_type = 'RESIDENTIAL_CARE_HOME'
-                  AND r.id NOT IN (SELECT room_id FROM establishment_technical_rooms))
+                  AND r.id NOT IN (SELECT room_id FROM establishment_technical_rooms)
+                  AND r.updated_at >= (SELECT applied_at FROM schema_migrations WHERE filename = '171_residential_establishments_rooms.sql'))
      OR EXISTS (SELECT 1 FROM units u JOIN organizations o ON o.id = u.organization_id
                 WHERE o.organization_type = 'RESIDENTIAL_CARE_HOME'
                   AND u.id NOT IN (SELECT unit_id FROM establishment_technical_rooms)
-                  AND u.id NOT IN (SELECT unit_id FROM establishment_general_units))
+                  AND u.updated_at >= (SELECT applied_at FROM schema_migrations WHERE filename = '171_residential_establishments_rooms.sql'))
+     -- (la «General» que crea la 171 lleva la fecha del establecimiento: si cambió después, o el establecimiento es
+     --  posterior a la 171, hay datos de personas y la reversión se niega)
      OR EXISTS (SELECT 1 FROM establishment_settings
                 WHERE geofence_radius_m <> 100 OR geofence_latitude IS NOT NULL) THEN
     RAISE EXCEPTION 'ROLLBACK_171_REFUSED: existen datos de hogares creados en F1; revisar antes de revertir';
@@ -38,8 +43,11 @@ DROP TRIGGER IF EXISTS care_recipients_residential_room_history ON care_recipien
 
 -- Piezas automáticas (sin datos de personas: comprobado arriba).
 CREATE TEMP TABLE _r171_rooms ON COMMIT DROP AS SELECT room_id AS id FROM establishment_technical_rooms;
+-- Solo las unidades que creó la 171 (identificador estable). Una «General» anterior que se adoptó no se borra.
 CREATE TEMP TABLE _r171_units ON COMMIT DROP AS
-  SELECT unit_id AS id FROM establishment_technical_rooms UNION SELECT unit_id FROM establishment_general_units;
+  SELECT unit_id AS id FROM establishment_technical_rooms
+  UNION SELECT g.unit_id FROM establishment_general_units g
+        WHERE g.unit_id = public.app_residential_stable_uuid('etnara-residential-general-unit:' || g.location_id::text);
 DROP TABLE IF EXISTS establishment_technical_rooms;
 DROP TABLE IF EXISTS establishment_general_units;
 DROP TABLE IF EXISTS room_profiles;
