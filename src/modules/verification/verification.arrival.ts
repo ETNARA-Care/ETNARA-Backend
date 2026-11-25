@@ -23,6 +23,8 @@ export class AlreadyArrivedError extends Error { constructor() { super("ALREADY_
 export class ArrivalAfterCheckInError extends Error { constructor() { super("ALREADY_CHECKED_IN"); } }
 export class LocationConsentRequiredError extends Error { constructor() { super("LOCATION_CONSENT_REQUIRED"); } }
 export class NoArrivalToReviewError extends Error { constructor() { super("NO_ARRIVAL_TO_REVIEW"); } }
+/** 164: en una práctica independiente nadie revisa (ni «aprueba») su propia llegada; queda registrada tal cual, sin verificar. */
+export class ArrivalReviewNotApplicableError extends Error { constructor() { super("ARRIVAL_REVIEW_NOT_APPLICABLE"); } }
 /** «Llegué» only around the visit: from 2 h before the start until its end (audit M3, enforced in 107). */
 export class ArrivalOutsideWindowError extends Error { constructor() { super("ARRIVAL_OUTSIDE_WINDOW"); } }
 
@@ -175,6 +177,8 @@ export async function reviewArrival(userId: string, organizationId: string, shif
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const manager = (await sql<{ ok: boolean }>`SELECT app_is_org_manager() AS ok`.execute(trx)).rows[0]?.ok;
     if (!manager) throw new NotOrgManagerError();
+    const independent = (await sql<{ v: boolean }>`SELECT app_org_is_independent(${organizationId}::uuid) AS v`.execute(trx)).rows[0]?.v === true;
+    if (independent) throw new ArrivalReviewNotApplicableError();
     const r = await sql<{ reviewed_at: string }>`
       UPDATE shift_arrivals SET reviewed_by_user_id = ${userId}, reviewed_at = now(), review_note = ${input.note}
       WHERE shift_id = ${shiftId} AND organization_id = ${organizationId}

@@ -4,10 +4,11 @@
 --   1. Sin avisos a sí misma: en una práctica, los avisos de gestión y de turno cuyo destinatario es la propia
 --      persona que opera la práctica (ORGANIZATION_ADMIN + WORKER) no se crean. Los avisos a la familia, los
 --      mensajes, las solicitudes de la familia y los vencimientos de sus documentos siguen igual.
---   2. Llegada sin revisión de otra persona: en una práctica, la llegada «lejos / sin ubicación» se registra ya
---      cerrada con una nota. Los hechos (proximidad, distancia redondeada, hora) no cambian: needs_review sigue
---      siendo el dato real y la restricción de la 101 no se toca.
---   3. La invitación de administración dice si es de una práctica (para pedir el nombre profesional al activar).
+--   2. La invitación de administración dice si es de una práctica (para pedir el nombre profesional al activar).
+--
+-- Las llegadas NO se modifican: una llegada lejos o sin ubicación conserva needs_review, su proximidad y queda sin
+-- revisar (nunca aparece como verificada). En una práctica nadie la «aprueba»: el backend rechaza la revisión
+-- (ARRIVAL_REVIEW_NOT_APPLICABLE) y el aviso de revisión a la propia persona no se crea (punto 1).
 --
 -- Sin tablas nuevas, sin cambios de datos existentes. Idempotente. Reversión: ops/164_independent_practice_phase1.rollback.sql
 -- 1. Avisos a sí misma ------------------------------------------------------------------------------------------
@@ -41,25 +42,7 @@ DROP TRIGGER IF EXISTS notifications_independent_self_filter ON notifications;
 CREATE TRIGGER notifications_independent_self_filter BEFORE INSERT ON notifications
   FOR EACH ROW EXECUTE FUNCTION app_notification_independent_self_filter();
 
--- 2. Llegada sin revisión de otra persona ------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION app_shift_arrival_independent_close()
-RETURNS trigger AS $$
-BEGIN
-  IF NEW.needs_review AND NEW.reviewed_at IS NULL AND public.app_org_is_independent(NEW.organization_id) THEN
-    NEW.reviewed_by_user_id := NEW.recorded_by_user_id;
-    NEW.reviewed_at := now();
-    NEW.review_note := 'Práctica independiente: la llegada no requiere revisión de otra persona.';
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public;
-REVOKE ALL ON FUNCTION app_shift_arrival_independent_close() FROM PUBLIC;
-
-DROP TRIGGER IF EXISTS shift_arrivals_independent_close ON shift_arrivals;
-CREATE TRIGGER shift_arrivals_independent_close BEFORE INSERT ON shift_arrivals
-  FOR EACH ROW EXECUTE FUNCTION app_shift_arrival_independent_close();
-
--- 3. ¿La invitación de administración es de una práctica? ----------------------------------------------------------
+-- 2. ¿La invitación de administración es de una práctica? ----------------------------------------------------------
 -- Solo con el token (hash) de una invitación de administración pendiente y vigente; no revela nada más.
 CREATE OR REPLACE FUNCTION app_org_admin_invitation_is_independent(p_token_hash text)
 RETURNS boolean AS $$

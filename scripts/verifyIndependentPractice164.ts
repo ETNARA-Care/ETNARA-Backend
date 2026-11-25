@@ -4,7 +4,7 @@
  * Cubre: «De camino» e Informe del proveedor encendidos al crear una práctica (agencias y hogares no); la invitación
  * dice si es de una práctica; nombre profesional obligatorio al activar una cuenta nueva de práctica (la agencia no);
  * sin avisos a sí misma en una práctica (la familia sigue recibiendo los suyos; la agencia, igual que antes); la llegada
- * «sin ubicación» en una práctica queda cerrada con nota (en la agencia sigue pendiente de revisión); reversión.
+ * «sin ubicación» en una práctica conserva su estado real y nadie la «aprueba» (en la agencia sigue pendiente de revisión); reversión.
  *
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
@@ -178,14 +178,28 @@ async function main() {
     check("S5. En la base: se descarta solo el aviso de gestión a la propia persona de la práctica; mensajes, vencimientos, familia y agencia se guardan",
       d1 === 0 && d2 === 1 && d3 === 1 && d4 === 1 && d5 === 1, [d1, d2, d3, d4, d5]);
 
-    // ---------------------------------------------------------------- 4. Llegada sin revisión de otra persona
-    const arrRowP = (await q<Json>(`SELECT proximity, needs_review, reviewed_at IS NOT NULL AS closed, reviewed_by_user_id, review_note FROM shift_arrivals WHERE shift_id=$1`, [sP])).rows[0];
+    // ---------------------------------------------------------------- 4. Llegada: estado real, sin aprobación automática
+    const arrRowP = (await q<Json>(`SELECT proximity, needs_review, reviewed_at, reviewed_by_user_id, review_note FROM shift_arrivals WHERE shift_id=$1`, [sP])).rows[0];
+    const selfReview = await call("POST", `/organizations/${P}/shifts/${sP}/arrival/review`, tP, { membershipId: (await q<{ id: string }>(`SELECT organization_worker_membership_id id FROM shift_arrivals WHERE shift_id=$1`, [sP])).rows[0].id, note: "Intento de autorrevisión (prueba)" });
+    const afterSelf = (await q<Json>(`SELECT reviewed_at FROM shift_arrivals WHERE shift_id=$1`, [sP])).rows[0];
+    const journeyP = (await call("GET", `/organizations/${P}/shifts/${sP}/journey`, tP)).body.journey ?? {};
+    const reps = (await call("GET", `/organizations/${P}/shifts/${sP}/shift-reports`, tP)).body.reports ?? [];
+    const repArrival = (reps[0]?.content?.times?.arrival) ?? null;
+    check("L1. Práctica: la llegada sin ubicación conserva su estado real (proximidad sin verificar, needs_review) y queda SIN revisión; nunca se marca como revisada ni verificada",
+      arrP.status === 201 && ["NO_CONSENT", "UNAVAILABLE"].includes(arrRowP?.proximity) && arrRowP?.needs_review === true && arrRowP?.reviewed_at === null && arrRowP?.reviewed_by_user_id === null && arrRowP?.review_note === null, arrRowP);
+    check("L2. Práctica: nadie puede «aprobar» su propia llegada (409 ARRIVAL_REVIEW_NOT_APPLICABLE) y sigue sin revisión",
+      selfReview.status === 409 && selfReview.body.error === "ARRIVAL_REVIEW_NOT_APPLICABLE" && afterSelf?.reviewed_at === null, [selfReview, afterSelf]);
+    check("L3. Práctica: el informe conserva la advertencia de la llegada (needsReview, sin revisar)",
+      repArrival && repArrival.needsReview === true && repArrival.reviewed === false, { repArrival, journey: journeyP.state });
     const arrRowA = (await q<Json>(`SELECT proximity, needs_review, reviewed_at IS NOT NULL AS closed FROM shift_arrivals WHERE shift_id=$1`, [sA])).rows[0];
-    check("L1. Práctica: la llegada sin ubicación conserva el dato real (needs_review) y queda cerrada con su nota; nadie más debe revisarla",
-      arrP.status === 201 && arrRowP?.needs_review === true && arrRowP?.closed === true && arrRowP?.reviewed_by_user_id === pUser && /no requiere revisión/.test(arrRowP?.review_note ?? ""), arrRowP);
-    check("L2. Agencia (control): la misma llegada sigue pendiente de revisión de la administración", arrA.status === 201 && arrRowA?.needs_review === true && arrRowA?.closed === false, arrRowA);
+    check("L4. Agencia (control): la misma llegada sigue pendiente de revisión de la administración", arrA.status === 201 && arrRowA?.needs_review === true && arrRowA?.closed === false, arrRowA);
     const reviewA = await call("POST", `/organizations/${A}/shifts/${sA}/arrival/review`, tA, { membershipId: mem, note: "Revisada por la administración (prueba)" });
-    check("L3. Agencia: la administración la revisa como siempre", reviewA.status === 200, reviewA);
+    check("L5. Agencia: la administración la revisa como siempre", reviewA.status === 200, reviewA);
+    // Ninguna aprobación automática: la 164 solo añade un disparador, en notifications.
+    const trig = (await q<{ t: string; tab: string }>(`SELECT t.tgname t, c.relname tab FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_proc p ON p.oid=t.tgfoid
+      WHERE NOT t.tgisinternal AND p.proname IN ('app_notification_independent_self_filter') OR (NOT t.tgisinternal AND c.relname IN ('shift_arrivals','assignments','worker_eligibility','credentials','organization_credential_reviews') AND t.tgname ILIKE '%independent%close%')`)).rows;
+    check("L6. Sin aprobación automática de presencia ni de elegibilidad: la 164 solo añade el filtro de avisos (ningún disparador en llegadas, asignaciones, elegibilidad o credenciales)",
+      trig.length === 1 && trig[0].tab === "notifications", trig);
 
     // ---------------------------------------------------------------- 5. Sin errores 500
     check("E1. Ninguna respuesta 500", errors500.length === 0, errors500);
@@ -193,13 +207,13 @@ async function main() {
     // ---------------------------------------------------------------- 6. Reversión y reaplicación
     const rollback = readFileSync(join(process.cwd(), "ops/164_independent_practice_phase1.rollback.sql"), "utf8");
     await q(rollback);
-    const gone = (await q(`SELECT 1 FROM pg_proc WHERE proname IN ('app_notification_independent_self_filter','app_shift_arrival_independent_close','app_org_admin_invitation_is_independent')`)).rowCount;
+    const gone = (await q(`SELECT 1 FROM pg_proc WHERE proname IN ('app_notification_independent_self_filter','app_org_admin_invitation_is_independent')`)).rowCount;
     const unreg = (await q(`SELECT 1 FROM schema_migrations WHERE filename='164_independent_practice_phase1.sql'`)).rowCount;
     const d6 = await ins(pUser, P, "SHIFT_STARTED");
-    check("R1. La reversión retira las tres funciones y sus disparadores y desregistra la 164 (sin el filtro, el aviso vuelve a crearse)", gone === 0 && unreg === 0 && d6 === 1, [gone, unreg, d6]);
+    check("R1. La reversión retira las dos funciones y el disparador y desregistra la 164 (sin el filtro, el aviso vuelve a crearse)", gone === 0 && unreg === 0 && d6 === 1, [gone, unreg, d6]);
     { const log = console.log; console.log = () => undefined; try { await applyPendingMigrations(db, join(process.cwd(), "migrations")); } finally { console.log = log; } }
-    const back = (await q(`SELECT 1 FROM pg_proc WHERE proname IN ('app_notification_independent_self_filter','app_shift_arrival_independent_close','app_org_admin_invitation_is_independent')`)).rowCount;
-    check("R2. Se vuelve a aplicar limpia", back === 3 && (await ins(pUser, P, "SHIFT_STARTED")) === 0, back);
+    const back = (await q(`SELECT 1 FROM pg_proc WHERE proname IN ('app_notification_independent_self_filter','app_org_admin_invitation_is_independent')`)).rowCount;
+    check("R2. Se vuelve a aplicar limpia", back === 2 && (await ins(pUser, P, "SHIFT_STARTED")) === 0, back);
   } finally {
     server.close(); await pool.end(); await db.end(); await srv.query(`DROP DATABASE ${own} WITH (FORCE)`); await srv.end();
   }
