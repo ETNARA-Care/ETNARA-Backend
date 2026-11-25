@@ -283,7 +283,10 @@ async function main() {
 
     // Next day: a new notice with the current count (one of A's reviews is done meanwhile).
     await legal(A.admin, a3.id, { action: "REVIEW", basis: `${basis} (revisado)`, reviewAt: inDays(60) });
-    await q(`UPDATE notifications SET notice_day = notice_day - 1 WHERE notification_type='${NOTICE}'`);
+    // Shift every notice back one day in two steps: a single UPDATE could hit the daily unique index mid-statement
+    // (row order), which made this check flaky when two consecutive days already existed.
+    await q(`UPDATE notifications SET notice_day = notice_day - 10000 WHERE notification_type='${NOTICE}'`);
+    await q(`UPDATE notifications SET notice_day = notice_day + 9999 WHERE notification_type='${NOTICE}'`);
     const nextDay = await runLegalReviewNotice();
     const today = await notices(`n.notice_day = (now() AT TIME ZONE 'America/Puerto_Rico')::date`);
     const todayA = today.filter((r) => r.organization_id === orgA);
@@ -293,7 +296,10 @@ async function main() {
     // Nothing overdue → nothing more.
     await legal(A.admin, a2.id, { action: "REVIEW", basis: `${basis} (revisado)`, reviewAt: inDays(60) });
     await legal(B.admin, b1.id, { action: "REVIEW", basis: `${basis} (revisado)`, reviewAt: inDays(60) });
-    await q(`UPDATE notifications SET notice_day = notice_day - 1 WHERE notification_type='${NOTICE}'`);
+    // Shift every notice back one day in two steps: a single UPDATE could hit the daily unique index mid-statement
+    // (row order), which made this check flaky when two consecutive days already existed.
+    await q(`UPDATE notifications SET notice_day = notice_day - 10000 WHERE notification_type='${NOTICE}'`);
+    await q(`UPDATE notifications SET notice_day = notice_day + 9999 WHERE notification_type='${NOTICE}'`);
     const none = await runLegalReviewNotice();
     check("N9 when every review of A and B is up to date they get nothing; agency C (switch off, review still overdue) keeps getting its daily notice (145 §5)",
       none === 1 && (await notices(`n.organization_id = $1`, [orgC])).length === 3, `created=${none}`);
