@@ -166,7 +166,7 @@ async function selfCheck(db: Client) {
     } catch (e) { ck("K7 recorrido completo de la práctica", false, (e as Error).message); }
   } else log("recorrido K7 ya hecho antes: no se repite");
   // K8 (Fase 1 final): prueba integral en la práctica de Ana con datos ficticios nuevos (una sola vez).
-  const k8done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Elena' AND last_name='Final'`, [N])).rowCount;
+  const k8done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Elena' AND last_name='Final2'`, [N])).rowCount;
   if (!k8done) {
     // Las prácticas de la demo se crearon antes de la 164: se les dan los valores por defecto de una práctica nueva.
     for (const org of [N, L]) for (const f of ["EN_CAMINO", "SHIFT_REPORTS"]) {
@@ -181,24 +181,27 @@ async function selfCheck(db: Client) {
       const rq = await call("GET", `/organizations/${A}/credentials/review-queue`, tA);
       const anaRev = (await db.query(`SELECT r.review_status FROM organization_credential_reviews r JOIN credentials c ON c.id=r.credential_id JOIN workers w ON w.id=c.worker_id WHERE w.user_id=$1`, [anaId])).rows.map((r) => r.review_status);
       ck("K8a documentos: los de la práctica son autodeclarados; la agencia los ve aparte y ninguno queda aprobado solo", docs.length >= 1 && docs.every((d: any) => d.declaredByHolder !== false) && rq.s === 200 && !anaRev.includes("approved"), { docs: docs.length, rq: rq.s, anaRev });
-      const marta = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Elena", lastName: "Final" }), [201], "cliente Elena");
+      const marta = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Elena", lastName: "Final2" }), [201], "cliente Elena");
       const mId = (marta.careRecipient ?? marta.recipient ?? marta).id;
       const fpw = "Verif-" + crypto.randomUUID();
-      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia-elena2@demo.invalid", careRecipientId: mId, relationshipType: "hija" }), [201], "familia de Elena");
+      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia-elena3@demo.invalid", careRecipientId: mId, relationshipType: "hija" }), [201], "familia de Elena");
       must(await call("POST", "/access-invitations/activate", undefined, { token: finv.token, password: fpw }), [200, 201], "activar familia de Elena");
-      const tFm = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia-elena2@demo.invalid", password: fpw }), [200], "login familia de Elena").token;
+      const tFm = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia-elena3@demo.invalid", password: fpw }), [200], "login familia de Elena").token;
       // Turnos de prueba anteriores (Marta y Elena, de intentos previos de K8) se cancelan para no chocar en el horario.
       for (const r of (await db.query(`SELECT s.id FROM shifts s JOIN care_recipients c ON c.id=s.care_recipient_id WHERE s.organization_id=$1 AND c.first_name IN ('Marta','Elena') AND s.status::text NOT IN ('completed','cancelled')`, [N])).rows)
         await call("POST", `/organizations/${N}/shifts/${r.id}/cancel`, tAna, {});
-      const at = (min: number) => new Date(Date.now() + min * 60000).toISOString();
-      const s1 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(5), scheduledEnd: at(65) }), [201], "turno 1").shift.id;
+      // Después del último turno vigente de la práctica (un turno terminado sigue ocupando su horario).
+      const busy = (await db.query(`SELECT max(scheduled_end) e FROM shifts WHERE organization_id=$1 AND status::text <> 'cancelled' AND scheduled_end > now()`, [N])).rows[0].e;
+      const base = Math.max(Date.now(), busy ? new Date(busy).getTime() : 0) + 2 * 60000;
+      const at = (min: number) => new Date(base + min * 60000).toISOString();
+      const s1 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(0), scheduledEnd: at(20) }), [201], "turno 1").shift.id;
       const sa1 = await call("POST", `/organizations/${N}/me/shifts/${s1}/self-assign`, tAna, {});
       const a1 = await call("POST", `/organizations/${N}/shifts/${s1}/arrival`, tAna, { clientEventId: crypto.randomUUID() });
       const memb = (await db.query(`SELECT organization_worker_membership_id m FROM shift_arrivals WHERE shift_id=$1`, [s1])).rows[0]?.m;
       const rv = await call("POST", `/organizations/${N}/shifts/${s1}/arrival/review`, tAna, { membershipId: memb, note: "autorrevisión de prueba" });
       ck("K8b «Asignármelo» y llegada sin GPS: queda «no verificada»; la autorrevisión se rechaza (409)", [200, 201].includes(sa1.s) && a1.s === 201 && (a1.j.arrival ?? a1.j).needsReview === true && rv.s === 409, { sa1: sa1.s, sa1E: sa1.j.error, a1: a1.s, arr: a1.j, rv: rv.s });
       await db.query(`INSERT INTO care_recipient_locations (care_recipient_id, organization_id, address_line, municipality, latitude, longitude, is_primary, gps_confirmed_at, gps_confirmed_by_user_id) VALUES ($1,$2,'Calle Ficticia 1','San Juan',18.465500,-66.105700,true,now(),$3)`, [mId, N, anaId]);
-      const s2 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(90), scheduledEnd: at(150) }), [201], "turno 2").shift.id;
+      const s2 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(22), scheduledEnd: at(42) }), [201], "turno 2").shift.id;
       await call("POST", `/organizations/${N}/me/shifts/${s2}/self-assign`, tAna, {});
       const cons = await call("POST", `/organizations/${N}/me/location-consent`, tAna, { consentVersion: "location-check-v1" });
       const a2 = await call("POST", `/organizations/${N}/shifts/${s2}/arrival`, tAna, { latitude: 18.2, longitude: -66.5, accuracyM: 10, clientEventId: crypto.randomUUID() });
@@ -213,7 +216,7 @@ async function selfCheck(db: Client) {
       ck("K8d visita e informe: comenzar, registrar, finalizar, publicar; la familia de Elena lo ve", [200, 201].includes(ci.s) && [200, 201].includes(ev.s) && [200, 201].includes(co.s) && pub.s === 200 && fr.s === 200 && (fr.j.reports ?? []).length >= 1, { ci: ci.s, ev: ev.s, co: co.s, reps: reps.length, pub: pub.s, pubE: pub.j.error, fr: fr.s });
       await sleep(1500);
       const self = (await db.query(`SELECT notification_type t FROM notifications WHERE user_id=$1 AND organization_id=$2 AND created_at >= $3`, [anaId, N, t0])).rows.map((r) => r.t);
-      const fam = (await db.query(`SELECT n.notification_type t FROM notifications n JOIN users u ON u.id=n.user_id WHERE u.email='verificacion-familia-elena2@demo.invalid'`)).rows.map((r) => r.t);
+      const fam = (await db.query(`SELECT n.notification_type t FROM notifications n JOIN users u ON u.id=n.user_id WHERE u.email='verificacion-familia-elena3@demo.invalid'`)).rows.map((r) => r.t);
       ck("K8e notificaciones: Ana no recibe avisos sobre sí misma en su práctica; la familia sí recibe los suyos", self.length === 0 && fam.length >= 1, { self, fam });
       const luisId = (await db.query(`SELECT id FROM care_recipients WHERE organization_id=$1 AND first_name='Luis'`, [N])).rows[0]?.id;
       const restr = {
