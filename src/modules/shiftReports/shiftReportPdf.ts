@@ -14,6 +14,8 @@ export interface FamilyShiftReport {
   id: string; version: number; status: string; approvedAt: string; serviceDate: string;
   organization: { name: string | null }; recipient: { name: string | null }; caregiver: { name: string | null };
   agencySummary: string | null; shown: string[];
+  /** 161: publicado por el propio cuidador independiente («Informe del proveedor»). */
+  publishedByProvider?: boolean;
   sections: {
     schedule?: { scheduledStart: string; scheduledEnd: string; arrivalAt: string | null; startAt: string | null; endAt: string | null };
     meals?: Item[]; hydration?: Item[]; activities?: Item[]; mobility?: Item[]; hygiene?: Item[]; mood?: Item[];
@@ -57,7 +59,7 @@ export function renderShiftReportPdf(r: FamilyShiftReport): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER", margin: 48, bufferPages: true,
-      info: { Title: "Informe de turno", Author: r.organization.name ?? "ETNARA Care", Creator: "ETNARA Care", Producer: SHIFT_REPORT_PDF_VERSION, CreationDate: new Date(r.approvedAt) },
+      info: { Title: r.publishedByProvider ? "Informe del proveedor" : "Informe de turno", Author: r.organization.name ?? "ETNARA Care", Creator: "ETNARA Care", Producer: SHIFT_REPORT_PDF_VERSION, CreationDate: new Date(r.approvedAt) },
     });
     const chunks: Buffer[] = [];
     doc.on("data", (c: Buffer) => chunks.push(c));
@@ -75,15 +77,18 @@ export function renderShiftReportPdf(r: FamilyShiftReport): Promise<Buffer> {
     doc.font("Times-Bold").fontSize(18).fillColor("#FFFFFF").text(r.recipient.name ?? "Residente", left, 80, { width: width - 150 });
     // Status pill.
     doc.roundedRect(left + width - 120, 36, 120, 22, 11).fill(SAGE);
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF").text("APROBADO", left + width - 120, 43, { width: 120, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#FFFFFF").text(r.publishedByProvider ? "PUBLICADO" : "APROBADO", left + width - 120, 43, { width: 120, align: "center" });
     doc.y = 136;
 
     // Identification grid.
-    const grid: Array<[string, string]> = [
-      ["Agencia", r.organization.name ?? "—"], ["Residente", r.recipient.name ?? "—"],
-      ["Cuidadora", r.caregiver.name ?? "—"], ["Fecha del servicio", longDate(r.serviceDate)],
-      ["Estado", "Aprobado por la agencia"], ["Fecha de aprobación", stamp(r.approvedAt)],
-    ];
+    // 161: un «Informe del proveedor» nunca dice «aprobado por la agencia».
+    const grid: Array<[string, string]> = r.publishedByProvider
+      ? [["Proveedor", r.organization.name ?? "—"], ["Persona atendida", r.recipient.name ?? "—"],
+         ["Cuidador/a", r.caregiver.name ?? "—"], ["Fecha del servicio", longDate(r.serviceDate)],
+         ["Estado", "Informe del proveedor"], ["Fecha de publicación", stamp(r.approvedAt)]]
+      : [["Agencia", r.organization.name ?? "—"], ["Residente", r.recipient.name ?? "—"],
+         ["Cuidadora", r.caregiver.name ?? "—"], ["Fecha del servicio", longDate(r.serviceDate)],
+         ["Estado", "Aprobado por la agencia"], ["Fecha de aprobación", stamp(r.approvedAt)]];
     const colW = width / 2;
     let gy = doc.y;
     grid.forEach(([label, value], i) => {
@@ -164,7 +169,9 @@ export function renderShiftReportPdf(r: FamilyShiftReport): Promise<Buffer> {
       doc.font("Helvetica").fontSize(10).fillColor("#1F2430").text(r.agencySummary, left + 14, y + 24, { width: width - 28 });
       doc.y = y + h + 10;
     }
-    const closing = "Generado a partir de los registros del turno y aprobado por la agencia. Incluye solo las secciones que la agencia autorizó para la familia. ETNARA no añade actividades ni marca tareas como hechas.";
+    const closing = r.publishedByProvider
+      ? "Informe del proveedor: generado a partir de los registros del turno y publicado por el propio proveedor independiente, sin revisión de terceros. ETNARA Care no lo revisa ni lo aprueba, no añade actividades ni marca tareas como hechas."
+      : "Generado a partir de los registros del turno y aprobado por la agencia. Incluye solo las secciones que la agencia autorizó para la familia. ETNARA no añade actividades ni marca tareas como hechas.";
     doc.font("Helvetica").fontSize(8.5);
     ensure(doc.heightOfString(closing, { width }) + 10);
     doc.fillColor(MUTED).text(closing, left, doc.y + 8, { width });

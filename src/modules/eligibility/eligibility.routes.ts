@@ -48,6 +48,11 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(404).json({ error: "NO_APPLICABLE_REQUIREMENT_SET" });
     return true;
   }
+  // 161: en un cuidador independiente ningún requisito exige «revisión de la organización».
+  if (err instanceof Error && err.message.includes("INDEPENDENT_REQUIREMENT_NO_REVIEW")) {
+    res.status(409).json({ error: "INDEPENDENT_REQUIREMENT_NO_REVIEW" });
+    return true;
+  }
   return false;
 }
 

@@ -49,6 +49,6 @@ describe("160: cuidador independiente (PR A)", () => {
     expect(body).toMatch(/app_my_confirmed_commitment_overlaps/);
     expect(body).not.toMatch(/evaluateWorkerEligibility|eligibilityStatus/); // no evalúa por su cuenta ni la salta
     const assign = svc.slice(svc.indexOf("export async function assignWorkerToShiftInTransaction("), svc.indexOf("export async function listAssignments("));
-    expect(assign).toMatch(/if \(eligibility\.eligibilityStatus !== "eligible"\) \{/);
+    expect(assign).toMatch(/if \(eligibility\.eligibilityStatus !== "eligible" && !selfDeclarationMissing\) \{/);
   });
 });

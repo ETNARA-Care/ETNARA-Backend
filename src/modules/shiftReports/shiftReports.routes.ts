@@ -4,7 +4,8 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
 import { respondInternalError } from "../../observability/internalError.js";
 import {
-  ShiftReportError, approveSchema, approveShiftReport, getShiftReports, grantShiftReportReviewer, listSchema, listShiftReportReviewers,
+  ShiftReportError, approveSchema, approveShiftReport, publishShiftReportAsProvider,
+  getShiftReports, grantShiftReportReviewer, listSchema, listShiftReportReviewers,
   listShiftReports, myShiftReportAccess, refreshShiftReport, returnSchema, returnShiftReport, reviewerGrantSchema, revokeShiftReportReviewer,
 } from "./shiftReports.service.js";
 import { familyShiftReportPdf, getFamilyShiftReport, listFamilyShiftReports, sendShiftReportPdf } from "./shiftReportsFamily.service.js";
@@ -47,6 +48,10 @@ router.post("/organizations/:organizationId/shift-reports/:reportId/refresh", re
   handle(200, (req, org) => refreshShiftReport(user(req), org, id(req, "reportId"))));
 router.post("/organizations/:organizationId/shift-reports/:reportId/approve", requireAuth,
   handle(200, (req, org) => approveShiftReport(user(req), org, id(req, "reportId"), approveSchema.parse(req.body ?? {}))));
+
+// 161: «Informe del proveedor» del cuidador independiente (sin revisión de terceros).
+router.post("/organizations/:organizationId/shift-reports/:reportId/publish-as-provider", requireAuth,
+  handle(200, (req, org) => publishShiftReportAsProvider(user(req), org, id(req, "reportId"), approveSchema.parse(req.body ?? {}))));
 
 router.post("/organizations/:organizationId/shift-reports/:reportId/return", requireAuth,
   handle(200, (req, org) => returnShiftReport(user(req), org, id(req, "reportId"), returnSchema.parse(req.body ?? {}))));
