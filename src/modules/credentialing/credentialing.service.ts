@@ -191,9 +191,10 @@ export async function listCredentialTypes(
  */
 /**
  * The worker belongs to this agency and the caller may act on her credentials. Writes need an
- * active membership. `managerReadInactive` lets the agency's managers READ the credentials of a
- * caregiver they deactivated (her profile and history stay visible; paso 1B, 30-oct-2026); the
- * caregiver herself and everyone else still need the active membership. Returns that status.
+ * active membership. `managerReadInactive` lets the agency's managers reach a caregiver they
+ * deactivated (her profile stays visible; paso 1B, 30-oct-2026); since 162 the caller gets no
+ * credential or file of hers in that case. The caregiver herself and everyone else still need
+ * the active membership. Returns that status.
  */
 async function assertWorkerLinkedToOrg(
   trx: unknown,
@@ -344,6 +345,9 @@ export async function listCredentials(userId: string, organizationId: string, wo
   assertUuid(workerId, "workerId");
   return withTenantContext({ userId, organizationId }, async (trx) => {
     const { active } = await assertWorkerLinkedToOrg(trx, organizationId, workerId, { managerReadInactive: true });
+    // 162: a former agency keeps the caregiver's profile, never her credentials or files.
+    // RLS returns nothing as well; this keeps the answer explicit and the profile page working.
+    if (!active) return [];
     const result = await sql<CredentialRow & { type_code: string; document_status: string | null; organization_review_status: string | null; organization_review_notes: string | null }>`
       SELECT c.id, c.worker_id, c.credential_type_id, c.document_id, c.issuing_entity_name,
              c.issuing_entity_type, c.issued_at, c.expires_at, c.status, c.created_at, c.updated_at,
@@ -544,15 +548,31 @@ export async function createCredentialDocumentDownload(
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
     if (!credential.document_id) throw new CredentialNotFoundError();
-    const result = await sql<{ storage_key: string; original_filename: string; content_type: string }>`
-      SELECT sf.storage_key, sf.original_filename, sf.content_type
+    const visible = await sql<{ ok: number }>`
+      SELECT 1 AS ok
       FROM document_versions dv
       JOIN stored_files sf ON sf.id = dv.file_id
       WHERE dv.document_id = ${credential.document_id} AND dv.file_id = ${fileId} AND sf.status = 'active'
       LIMIT 1
     `.execute(trx);
-    if (!result.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
-    return result.rows[0];
+    if (!visible.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+    // 162: the storage key comes only from the database function that re-checks access and
+    // records the download (user, organization, document, version, date) in the same
+    // transaction. If the record cannot be written, no URL is issued.
+    let issued;
+    try {
+      issued = await sql<{ storage_key: string; original_filename: string; content_type: string }>`
+        SELECT storage_key, original_filename, content_type
+        FROM public.app_issue_credential_document_download(${workerId}::uuid, ${credentialId}::uuid, ${fileId}::uuid)
+      `.execute(trx);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (message.includes("DOWNLOAD_NOT_ALLOWED")) throw new WorkerNotLinkedError();
+      if (message.includes("DOWNLOAD_FILE_NOT_FOUND")) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+      throw err;
+    }
+    if (!issued.rows[0]) throw new InvalidFileOwnershipError("FILE_NOT_FOUND");
+    return issued.rows[0];
   });
   const downloadUrl = await createPrivateDownloadUrl(file.storage_key, file.original_filename, file.content_type);
   return { downloadUrl, expiresInSeconds: 300 };
