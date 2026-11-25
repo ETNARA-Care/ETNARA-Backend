@@ -6,11 +6,12 @@
  * app_runtime y se cuenta lo que ve de la cuidadora: su perfil (workers), sus credenciales, sus
  * documentos y las versiones de esos documentos. También se intenta escribir.
  *
- *   - administradora y supervisora de la agencia donde está INACTIVA: leen todo; no escriben nada;
+ *   - administradora y supervisora de la agencia donde está INACTIVA: leen SOLO su perfil (137);
+ *     desde la 162 ya no ven sus credenciales, documentos ni versiones; no escriben nada;
  *   - otra cuidadora de esa agencia, la familia y la administradora de una agencia sin relación: 0;
  *   - agencia donde sigue ACTIVA: lee (como antes);
  *   - la propia cuidadora: sus propias filas (como antes);
- *   - sin la 137, la administradora de la agencia donde está inactiva vería 0 (control).
+ *   - sin la 137, la administradora de la agencia donde está inactiva no vería ni el perfil (control).
  *
  * Datos sintéticos; solo bases desechables.
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db> npx tsx scripts/verifyRlsInactiveCaregiverReads.ts
@@ -83,7 +84,8 @@ async function main() {
 
   for (const k of ["adminA", "supA"]) {
     const v = await sees(k);
-    check(`${k}: lee perfil, credencial, documento y versión de la inactiva`, want(v, 1), JSON.stringify(v));
+    check(`${k}: lee el perfil de la inactiva, pero no sus credenciales, documentos ni versiones (162)`,
+      v.perfil === 1 && v.credenciales === 0 && v.documentos === 0 && v.versiones === 0, JSON.stringify(v));
     // Each attempt in its own savepoint: a rejected write (42501) must not hide the next one.
     const attempt = async (sqlText: string, p: unknown[]) => {
       await q("SAVEPOINT a");
@@ -128,7 +130,8 @@ async function main() {
   const def = (await q(`SELECT prosecdef, proconfig::text AS cfg, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname='app_manager_reads_org_worker'`))[0];
   check("función: sin EXECUTE para PUBLIC; search_path fijo", execPublic === false && def.prosecdef === true && /search_path=pg_catalog, public/.test(def.cfg), JSON.stringify(def));
   const newPolicies = await q(`SELECT tablename, cmd, permissive FROM pg_policies WHERE policyname LIKE '%_manager_read_any_status'`);
-  check("las 4 políticas nuevas son solo SELECT y permisivas", newPolicies.length === 4 && newPolicies.every((r: any) => r.cmd === "SELECT" && r.permissive === "PERMISSIVE"), JSON.stringify(newPolicies));
+  check("queda solo la política del perfil (workers), SELECT y permisiva (162 quitó las otras 3)",
+    newPolicies.length === 1 && newPolicies[0].tablename === "workers" && newPolicies[0].cmd === "SELECT" && newPolicies[0].permissive === "PERMISSIVE", JSON.stringify(newPolicies));
 
   for (const k of ["otraA", "famA", "adminC"]) {
     const v = await sees(k);
@@ -138,16 +141,16 @@ async function main() {
   const own = await sees("dA");
   check("la propia cuidadora: ve sus filas, como antes", own.perfil === 1 && own.credenciales === 1, JSON.stringify(own));
 
-  // Control: without the 137 policies the agency loses her (the gap).
+  // Control: without the 137 profile policy the agency loses her profile too (the original gap).
   await q("BEGIN");
-  for (const t of ["workers", "credentials", "documents", "document_versions"]) await q(`DROP POLICY IF EXISTS ${t}_manager_read_any_status ON ${t}`);
+  await q(`DROP POLICY IF EXISTS workers_manager_read_any_status ON workers`);
   await q(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [actors.adminA.user, A]);
   await q("SET LOCAL ROLE app_runtime");
   const ctl = (await q(`SELECT (SELECT count(*) FROM workers WHERE id=$1)::int p, (SELECT count(*) FROM credentials WHERE worker_id=$1)::int c`, [w]))[0];
   await q("ROLLBACK");
   check("control sin la 137: la administradora no la ve (la brecha)", ctl.p === 0 && ctl.c === 0, JSON.stringify(ctl));
   const restored = Number((await q(`SELECT count(*) FROM pg_policies WHERE policyname LIKE '%_manager_read_any_status'`))[0].count);
-  check("control revertido: las 4 políticas siguen", restored === 4, `${restored}`);
+  check("control revertido: la política del perfil sigue", restored === 1, `${restored}`);
 
   const after = (await q(`SELECT (SELECT display_name FROM workers WHERE id=$1) n, (SELECT status FROM credentials WHERE id=$2) s, (SELECT count(*) FROM credentials WHERE worker_id=$1) c`, [w, cred]))[0];
   check("ningún dato cambió", JSON.stringify(after) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(after)}`);

@@ -193,10 +193,13 @@ async function main() {
   const on = ordN.body.order ?? {}, oe = ordE.body.order ?? {};
   const bodyN = (await q(`SELECT body, commercial_status FROM contract_document_versions WHERE id=$1`, [on.versionId])).rows[0] ?? {};
   const bodyE = (await q(`SELECT body FROM contract_document_versions WHERE id=$1`, [oe.versionId])).rows[0] ?? {};
+  // «Ningún US$99»: se busca un PRECIO de 99 (US$99, US$ 99.00, 99 al mes, 99 USD), no cualquier «99». Antes, el nombre
+  // aleatorio de la agencia de prueba (p. ej. «…A99F…») podía contener «99» y la prueba fallaba sin motivo (~1 de 3).
+  const NO_DEFAULT_99 = /US\$\s?99(?:[.,]\d{2})?\b|\b99(?:[.,]00)?\s*(?:USD|d[oó]lares|al mes)/i;
   check("F1. Orden por agencia con condiciones individuales (plan, funcionalidades, precio, promociones, complementos, condiciones); sin precio predeterminado: la de N dice «POR DEFINIR Y ACEPTAR», la de E muestra su precio como PROPUESTA; ningún US$99; solo Central la crea; sin condiciones → 400",
     ordN.status === 201 && ordE.status === 201 && ordAgency.status === 403 && ordNoTerms.status === 400
     && on.commercialTerms?.pricing?.proposedMonthlyPriceUsd === null && oe.commercialTerms?.pricing?.proposedMonthlyPriceUsd === 135.5
-    && bodyN.body.includes("Precio mensual: POR DEFINIR Y ACEPTAR") && bodyE.body.includes("US$135.50 al mes (PROPUESTA") && !/99/.test(bodyN.body + bodyE.body)
+    && bodyN.body.includes("Precio mensual: POR DEFINIR Y ACEPTAR") && bodyE.body.includes("US$135.50 al mes (PROPUESTA") && !NO_DEFAULT_99.test(bodyN.body + bodyE.body)
     && on.commercialTerms?.status === "proposal" && bodyN.commercial_status === "proposal" && on.commercialStatus === "proposal", [ordN.status, ordE.status, ordAgency.status, ordNoTerms.status]);
   check("F1b. Salvaguardas fijadas por el servidor: aceptación expresa obligatoria, sin cobro ni renovación automáticos, facturación desactivada; Fundadoras como configuración PENDIENTE DE APROBACIÓN DEFINITIVA",
     on.commercialTerms?.chargesRequireExpressAcceptance === true && on.commercialTerms?.automaticCharges === false && on.commercialTerms?.automaticRenewal === false && on.commercialTerms?.billingActivated === false
