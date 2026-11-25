@@ -9,9 +9,13 @@ describe("Phase 5.10 work eligibility", () => {
   it("keeps assignment and check-in fail-closed on fresh eligibility", () => {
     const assignments = read("src/modules/assignments/assignments.service.ts");
     const verification = read("src/modules/verification/verification.service.ts");
+    const coverage = read("src/modules/coverage/coverage.service.ts");
+    const coverageOffers = read("src/modules/coverageOffers/coverageOffers.service.ts");
 
     expect(assignments).toMatch(/evaluateWorkerEligibility[\s\S]*eligibilityStatus !== "eligible"/);
     expect(verification).toMatch(/export async function checkIn[\s\S]*evaluateWorkerEligibility[\s\S]*eligibilityStatus !== "eligible"/);
+    expect(coverage).toMatch(/evaluateWorkerEligibility[\s\S]*const isEligible = eligibility\.eligibilityStatus === "eligible"[\s\S]*const recommended = isEligible &&/);
+    expect(coverageOffers).toMatch(/recommendCoverage[\s\S]*\.filter\(\(candidate\) => candidate\.recommended\)/);
   });
 
   it("reports revoked mandatory credentials distinctly", () => {
