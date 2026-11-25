@@ -117,6 +117,20 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
         run: npx tsx scripts/verifyCredentialReviewWriteBoundary.ts
 
+      - name: Shift reschedule permissions, audit and caregiver notice, app as superuser
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: superuser
+        run: npx tsx scripts/verifyShiftReschedule.ts
+
+      - name: Shift reschedule permissions, audit and caregiver notice, app as app_runtime
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+          AUTHZ_DB_MODE: app_runtime
+        run: npx tsx scripts/verifyShiftReschedule.ts
+
       - name: PostgreSQL SmartMatch RLS verification (app_runtime, synthetic)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
