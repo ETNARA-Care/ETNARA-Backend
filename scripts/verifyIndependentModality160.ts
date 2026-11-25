@@ -123,7 +123,7 @@ async function main() {
   // ---- Activación con una sola cuenta: persona nueva --------------------------------------------------------
   const indEmail = `i160-independiente-${tag}@example.invalid`;
   const inv1 = await call("POST", `/platform/organizations/${I}/admin-invitations`, tC, { email: indEmail });
-  const act1 = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(indEmail), password });
+  const act1 = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(indEmail), password, professionalName: "Proveedora Ficticia" });
   const ind = { email: indEmail, id: (await q<{ id: string }>(`SELECT id FROM users WHERE lower(email)=$1`, [indEmail])).rows[0]?.id ?? "" };
   const prof1 = await q<{ n: string }>(`SELECT count(*) n FROM workers WHERE user_id=$1`, [ind.id]);
   const mem1 = await q<{ status: string; internal_role: string; worker_user: string }>(`SELECT m.status, m.internal_role, w.user_id worker_user FROM organization_worker_memberships m JOIN workers w ON w.id=m.worker_id WHERE m.organization_id=$1`, [I]);

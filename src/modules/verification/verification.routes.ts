@@ -25,7 +25,7 @@ import {
 } from "./verification.service.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import {
-  AlreadyArrivedError, ArrivalAfterCheckInError, ArrivalOutsideWindowError, LocationConsentRequiredError, NoArrivalToReviewError,
+  AlreadyArrivedError, ArrivalAfterCheckInError, ArrivalOutsideWindowError, LocationConsentRequiredError, NoArrivalToReviewError, ArrivalReviewNotApplicableError,
   arrivalReviewSchema, arrivalSchema, consentSchema,
   getMyLocationConsent, grantLocationConsent, recordArrival, reviewArrival, revokeLocationConsent,
 } from "./verification.arrival.js";
@@ -104,7 +104,7 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(409).json({ error: "ARRIVAL_OUTSIDE_WINDOW" });
     return true;
   }
-  if (err instanceof AlreadyArrivedError || err instanceof ArrivalAfterCheckInError || err instanceof NoArrivalToReviewError) {
+  if (err instanceof AlreadyArrivedError || err instanceof ArrivalAfterCheckInError || err instanceof NoArrivalToReviewError || err instanceof ArrivalReviewNotApplicableError) {
     res.status(409).json({ error: err.message });
     return true;
   }
