@@ -1,33 +1,73 @@
 import type { NextFunction, Request, Response } from "express";
 import { sql } from "kysely";
 import { withTenantContext } from "../context/tenantContext.js";
-import { validateSessionToken } from "../modules/auth/auth.service.js";
+import { InvalidTenantContextError } from "../context/errors.js";
+import { SessionInvalidError, validateSessionToken } from "../modules/auth/auth.service.js";
+import { isTenantAccessDenied } from "../security/tenantAccessDenied.js";
+import { canonicalGatePath, gatePathCandidates, respondGateUnavailable } from "./gatePath.js";
 import { contractsEnforcementEnabled, decideContractGate, type EnforcementMode } from "../modules/contracts/contracts.enforcement.js";
 
 /**
  * Puerta de acceso por contrato pendiente (153). APAGADA salvo CONTRACTS_ENFORCEMENT=on: apagada, no
  * hace ninguna consulta. Encendida, solo actúa sobre rutas de una agencia con modo y fecha fijados
- * por ETNARA Central. Ante cualquier duda (sin sesión, no miembro, error) deja pasar: la ruta
- * responde con sus propios permisos; esta puerta nunca abre lo que la ruta cerraría.
+ * por ETNARA Central. Sin sesión válida o sin pertenencia deja pasar: la ruta responde con sus propios permisos
+ * (401/403); esta puerta nunca abre lo que la ruta cerraría.
+ * Seguridad 25-nov: la ruta se compara en su forma canónica (ids codificados, mayúsculas, barra final), como la
+ * enruta Express, y un fallo inesperado al decidir (base, permisos, función) cierra con 503 en vez de dejar pasar.
+ * Las reglas de contrato (decideContractGate) no cambian.
  */
-const ORG_PATH = /^\/organizations\/([0-9a-fA-F-]{36})(\/|$)/;
+const ORG_PATH = /^\/organizations\/([0-9a-fA-F-]{36})(\/|$)/i;
 
 export async function contractEnforcementGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!contractsEnforcementEnabled() || req.method === "OPTIONS") { next(); return; }
-  const m = ORG_PATH.exec(req.path);
+  const path = canonicalGatePath(req.path);
+  const m = gatePathCandidates(req.path).map((p) => ORG_PATH.exec(p)).find((x) => x !== null) ?? null;
   const auth = req.headers.authorization ?? "";
   if (!m || !auth.startsWith("Bearer ")) { next(); return; }
+  let userId: string;
   try {
-    const { userId } = await validateSessionToken(auth.slice("Bearer ".length).trim());
-    const organizationId = m[1];
+    ({ userId } = await validateSessionToken(auth.slice("Bearer ".length).trim()));
+  } catch (error) {
+    if (error instanceof SessionInvalidError) { next(); return; }
+    respondGateUnavailable(res, "contractEnforcementGate", "session", error, { error: "CONTRACT_CHECK_UNAVAILABLE" }); return;
+  }
+  try {
+    const organizationId = m[1].toLowerCase();
     const state = await withTenantContext({ userId, organizationId }, async (trx) => {
       const s = (await sql<{ mode: EnforcementMode; enforce_from: Date | null; satisfied: boolean }>`SELECT mode, enforce_from, satisfied FROM public.app_contract_enforcement_state(${organizationId})`.execute(trx)).rows[0];
       const roles = (await sql<{ code: string }>`SELECT r.code FROM organization_memberships om JOIN user_roles ur ON ur.organization_membership_id = om.id
         JOIN roles r ON r.id = ur.role_id WHERE om.user_id = ${userId} AND om.organization_id = ${organizationId} AND om.status = 'active'`.execute(trx)).rows.map((r) => r.code);
-      return { ...s, roles };
+      return { state: parseEnforcementState(s), roles };
     });
-    const d = decideContractGate({ mode: state.mode, enforceFrom: state.enforce_from ? new Date(state.enforce_from) : null, satisfied: state.satisfied, roles: state.roles, method: req.method, path: req.path, now: new Date() });
+    // Un estado vacío, incompleto o inválido no permite continuar (revisión 25-nov): se cierra con 503.
+    if (!state.state) { respondGateUnavailable(res, "contractEnforcementGate", "check", { code: "INVALID_STATE" }, { error: "CONTRACT_CHECK_UNAVAILABLE" }); return; }
+    const d = decideContractGate({ ...state.state, roles: state.roles, method: req.method, path, now: new Date() });
     if (!d.allow) { res.status(403).json({ error: d.reason, mode: d.mode }); return; }
-  } catch { /* la ruta decide */ }
+  } catch (error) {
+    // No miembro o id inválido: la ruta responde sus propios 403/400, como siempre.
+    if (isTenantAccessDenied(error) || error instanceof InvalidTenantContextError) { next(); return; }
+    respondGateUnavailable(res, "contractEnforcementGate", "check", error, { error: "CONTRACT_CHECK_UNAVAILABLE" }); return;
+  }
   next();
+}
+
+const MODES: readonly EnforcementMode[] = ["off", "notice", "restrict_new_operations", "contract_only"];
+
+/**
+ * Valida la fila de app_contract_enforcement_state. Devuelve null si falta, si el modo no es uno de los cuatro, si
+ * «satisfecho» no es booleano, si la fecha no es válida o si un modo restrictivo no trae fecha (la base lo impide
+ * con un CHECK). Así, un estado roto nunca deja pasar por omisión.
+ */
+export function parseEnforcementState(row: unknown): { mode: EnforcementMode; enforceFrom: Date | null; satisfied: boolean } | null {
+  if (!row || typeof row !== "object") return null;
+  const r = row as { mode?: unknown; enforce_from?: unknown; satisfied?: unknown };
+  if (typeof r.mode !== "string" || !MODES.includes(r.mode as EnforcementMode) || typeof r.satisfied !== "boolean") return null;
+  let enforceFrom: Date | null = null;
+  if (r.enforce_from !== null && r.enforce_from !== undefined) {
+    enforceFrom = r.enforce_from instanceof Date ? r.enforce_from : typeof r.enforce_from === "string" ? new Date(r.enforce_from) : new Date(NaN);
+    if (Number.isNaN(enforceFrom.getTime())) return null;
+  }
+  const mode = r.mode as EnforcementMode;
+  if ((mode === "restrict_new_operations" || mode === "contract_only") && !enforceFrom) return null;
+  return { mode, enforceFrom, satisfied: r.satisfied };
 }
