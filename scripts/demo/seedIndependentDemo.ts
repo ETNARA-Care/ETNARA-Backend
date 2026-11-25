@@ -165,6 +165,66 @@ async function selfCheck(db: Client) {
       ck("K7d documento autodeclarado: el archivo se guarda en el almacenamiento propio de la demo", !!put && put.ok, { up: up.s, put: put?.status });
     } catch (e) { ck("K7 recorrido completo de la práctica", false, (e as Error).message); }
   } else log("recorrido K7 ya hecho antes: no se repite");
+  // K8 (Fase 1 final): prueba integral en la práctica de Ana con datos ficticios nuevos (una sola vez).
+  const k8done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Marta'`, [N])).rowCount;
+  if (!k8done) {
+    try {
+      const t0 = new Date().toISOString();
+      const anaId = (await db.query(`SELECT id FROM users WHERE email=$1`, [ACCOUNTS.ana.email])).rows[0].id;
+      must(await call("POST", "/me/active-organization", tAna, { organizationId: N }), [200], "Ana en su práctica");
+      const docs = (await call("GET", `/organizations/${N}/practice/documents`, tAna)).j.documents ?? [];
+      const rq = await call("GET", `/organizations/${A}/credentials/review-queue`, tA);
+      const anaRev = (await db.query(`SELECT r.review_status FROM organization_credential_reviews r JOIN credentials c ON c.id=r.credential_id JOIN workers w ON w.id=c.worker_id WHERE w.user_id=$1`, [anaId])).rows.map((r) => r.review_status);
+      ck("K8a documentos: los de la práctica son autodeclarados; la agencia los ve aparte y ninguno queda aprobado solo", docs.length >= 1 && docs.every((d: any) => d.declaredByHolder !== false) && rq.s === 200 && !anaRev.includes("approved"), { docs: docs.length, rq: rq.s, anaRev });
+      const marta = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Marta", lastName: "Demo" }), [201], "cliente Marta");
+      const mId = (marta.careRecipient ?? marta.recipient ?? marta).id;
+      const fpw = "Verif-" + crypto.randomUUID();
+      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia-marta@demo.invalid", careRecipientId: mId, relationshipType: "hija" }), [201], "familia de Marta");
+      must(await call("POST", "/access-invitations/activate", undefined, { token: finv.token, password: fpw }), [200, 201], "activar familia de Marta");
+      const tFm = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia-marta@demo.invalid", password: fpw }), [200], "login familia de Marta").token;
+      const at = (min: number) => new Date(Date.now() + min * 60000).toISOString();
+      const s1 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(5), scheduledEnd: at(65) }), [201], "turno 1").shift.id;
+      const sa1 = await call("POST", `/organizations/${N}/me/shifts/${s1}/self-assign`, tAna, {});
+      const a1 = await call("POST", `/organizations/${N}/shifts/${s1}/arrival`, tAna, { clientEventId: crypto.randomUUID() });
+      const memb = (await db.query(`SELECT organization_worker_membership_id m FROM shift_arrivals WHERE shift_id=$1`, [s1])).rows[0]?.m;
+      const rv = await call("POST", `/organizations/${N}/shifts/${s1}/arrival/review`, tAna, { membershipId: memb, note: "autorrevisión de prueba" });
+      ck("K8b «Asignármelo» y llegada sin GPS: queda «no verificada»; la autorrevisión se rechaza (409)", [200, 201].includes(sa1.s) && a1.s === 201 && (a1.j.arrival ?? a1.j).needsReview === true && rv.s === 409, { sa1: sa1.s, sa1E: sa1.j.error, a1: a1.s, arr: a1.j, rv: rv.s });
+      await db.query(`INSERT INTO care_recipient_locations (care_recipient_id, organization_id, address_line, municipality, latitude, longitude, is_primary, gps_confirmed_at, gps_confirmed_by_user_id) VALUES ($1,$2,'Calle Ficticia 1','San Juan',18.465500,-66.105700,true,now(),$3)`, [mId, N, anaId]);
+      const s2 = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: mId, scheduledStart: at(90), scheduledEnd: at(150) }), [201], "turno 2").shift.id;
+      await call("POST", `/organizations/${N}/me/shifts/${s2}/self-assign`, tAna, {});
+      const cons = await call("POST", `/organizations/${N}/me/location-consent`, tAna, { consentVersion: "location-check-v1" });
+      const a2 = await call("POST", `/organizations/${N}/shifts/${s2}/arrival`, tAna, { latitude: 18.2, longitude: -66.5, accuracyM: 10, clientEventId: crypto.randomUUID() });
+      const st = (await db.query(`SELECT proximity, needs_review, reviewed_at FROM shift_arrivals WHERE shift_id = ANY($1::uuid[])`, [[s1, s2]])).rows;
+      ck("K8c llegada fuera del perímetro (~51 km): FAR, no verificada; ninguna llegada queda aprobada", cons.s < 300 && a2.s === 201 && (a2.j.arrival ?? a2.j).proximity === "FAR" && st.length === 2 && st.every((r) => r.needs_review && r.reviewed_at === null), { cons: cons.s, a2: a2.s, a2j: a2.j, st });
+      const ci = await call("POST", `/organizations/${N}/shifts/${s1}/check-in`, tAna, { verificationMethodCode: "CAREGIVER_SESSION" });
+      const ev = await call("POST", `/organizations/${N}/shifts/${s1}/care-events`, tAna, { typeCode: "MEAL", careRecipientId: mId, payload: { mealType: "Almuerzo", amountConsumed: "Todo" } });
+      const co = await call("POST", `/organizations/${N}/shifts/${s1}/check-out`, tAna, {});
+      const reps = (await call("GET", `/organizations/${N}/shifts/${s1}/shift-reports`, tAna)).j.reports ?? [];
+      const pub = reps[0] ? await call("POST", `/organizations/${N}/shift-reports/${reps[0].id}/publish-as-provider`, tAna, { expectedGeneratedAt: reps[0].generatedAt, familySections: { schedule: true, meals: true, hydration: true, activities: true, mobility: true, observations: true, hygiene: false, mood: false, incidents: false, photos: false } }) : { s: 0, j: {} };
+      const fr = await call("GET", `/organizations/${N}/care-recipients/${mId}/shift-reports`, tFm);
+      ck("K8d visita e informe: comenzar, registrar, finalizar, publicar; la familia de Marta lo ve", [200, 201].includes(ci.s) && [200, 201].includes(ev.s) && [200, 201].includes(co.s) && pub.s === 200 && fr.s === 200 && (fr.j.reports ?? []).length >= 1, { ci: ci.s, ev: ev.s, co: co.s, reps: reps.length, pub: pub.s, pubE: pub.j.error, fr: fr.s });
+      await sleep(1500);
+      const self = (await db.query(`SELECT notification_type t FROM notifications WHERE user_id=$1 AND organization_id=$2 AND created_at >= $3`, [anaId, N, t0])).rows.map((r) => r.t);
+      const fam = (await db.query(`SELECT n.notification_type t FROM notifications n JOIN users u ON u.id=n.user_id WHERE u.email='verificacion-familia-marta@demo.invalid'`)).rows.map((r) => r.t);
+      ck("K8e notificaciones: Ana no recibe avisos sobre sí misma en su práctica; la familia sí recibe los suyos", self.length === 0 && fam.length >= 1, { self, fam });
+      const luisId = (await db.query(`SELECT id FROM care_recipients WHERE organization_id=$1 AND first_name='Luis'`, [N])).rows[0]?.id;
+      const restr = {
+        revisarCredencial: (await call("POST", `/organizations/${N}/workers/${memb}/credentials/${docs[0]?.id ?? crypto.randomUUID()}/review`, tAna, { decision: "approved" })).s,
+        familiaEnOtraPractica: (await call("GET", `/organizations/${L}/care-recipients`, tFm)).s,
+        familiaEnAgencia: (await call("GET", `/organizations/${A}/care-recipients`, tFm)).s,
+        familiaInformeAjeno: (await call("GET", `/organizations/${N}/care-recipients/${luisId}/shift-reports`, tFm)).s,
+        practicaInterruptor: (await call("PATCH", "/platform/modalities/INDEPENDENT_PROVIDER", tAna, { enabled: true, reason: "intento de prueba" })).s,
+      };
+      ck("K8f restricciones: la práctica no revisa credenciales ni toca el interruptor; la familia no ve otras organizaciones ni informes ajenos", restr.revisarCredencial === 403 && [403, 404].includes(restr.familiaEnOtraPractica) && [403, 404].includes(restr.familiaEnAgencia) && [403, 404].includes(restr.familiaInformeAjeno) && restr.practicaInterruptor === 403, restr);
+      const nr = {
+        agenciaClientes: (await call("GET", `/organizations/${A}/care-recipients`, tA)).s, agenciaTurnos: (await call("GET", `/organizations/${A}/shifts`, tA)).s,
+        agenciaPersonal: (await call("GET", `/organizations/${A}/workers`, tA)).s, agenciaCola: rq.s,
+        hogarEstablecimientos: (await call("GET", `/organizations/${H}/establishments`, tH)).s, hogarTurnos: (await call("GET", `/organizations/${H}/shifts`, tH)).s,
+      };
+      ck("K8g agencia y hogar sin regresión: clientes, turnos, personal, cola de credenciales, establecimientos (200)", Object.values(nr).every((s) => s === 200), nr);
+    } catch (e) { ck("K8 prueba integral", false, (e as Error).message); }
+  } else log("prueba integral K8 ya hecha antes: no se repite");
+
   const failed = out.filter((x) => !x[1]).length;
   console.log(`[DEMO-AUTOCHECK] RESULTADO ${out.length - failed}/${out.length}`);
 }
