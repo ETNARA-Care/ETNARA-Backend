@@ -600,6 +600,7 @@
     "app_open_caregiver_thread",
     "app_open_my_agency_thread",
     "app_org_admin_gap_notify",
+    "app_org_admin_invitation_is_independent",
     "app_org_billing_enabled",
     "app_org_feature_enabled",
     "app_org_is_independent",

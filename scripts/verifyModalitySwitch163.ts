@@ -173,7 +173,7 @@ async function main() {
   const I = (await call("POST", "/platform/organizations", tC, { name: `Práctica ${tag}`, organizationType: "INDEPENDENT_PROVIDER" })).body.organization?.id as string;
   const indEmail = `m163-independiente-${tag}@example.invalid`;
   const inv = await call("POST", `/platform/organizations/${I}/admin-invitations`, tC, { email: indEmail });
-  const act = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(indEmail), password });
+  const act = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(indEmail), password, professionalName: "Proveedora Ficticia" });
   const tI = await login({ email: indEmail }, I);
   const rec1 = await call("POST", `/organizations/${I}/care-recipients`, tI, { firstName: "Persona", lastName: "Ficticia" });
   check("M9. Encendida: se registra un proveedor independiente y opera", Boolean(I) && inv.status === 201 && act.status === 201 && [200, 201].includes(rec1.status), [I, inv.status, act.status, rec1.status]);
@@ -203,7 +203,7 @@ async function main() {
     [list.status, rec2.status, workers.status, orgRow]);
   const i2Email = `m163-pendiente-${tag}@example.invalid`;
   const inv2 = await call("POST", `/platform/organizations/${I2}/admin-invitations`, tC, { email: i2Email });
-  const act2 = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(i2Email), password });
+  const act2 = await call("POST", "/platform/admin-invitations/activate", "", { token: tokenFor(i2Email), password, professionalName: "Proveedora Ficticia Dos" });
   check("M13. Una organización independiente creada antes de apagar conserva su registro y puede completar la activación de su única persona operativa",
     inv2.status === 201 && act2.status === 201, [inv2.status, inv2.body, act2.status, act2.body]);
 
