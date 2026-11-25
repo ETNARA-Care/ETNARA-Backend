@@ -40,6 +40,8 @@ function tokenFor(email: string): string {
   const m = lines.find((l) => l.toLowerCase().includes(email.toLowerCase()));
   return /token=([A-Fa-f0-9]{64})/.exec(m ?? "")?.[1] ?? "";
 }
+// PDF mínimo y válido, ficticio, para probar el almacenamiento de documentos.
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const day = (n: number) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
 
@@ -129,6 +131,40 @@ async function selfCheck(db: Client) {
   ck("K5 el documento de Ana es autodeclarado (la agencia lo revisa aparte)", cred.length >= 1 && cred.every((c) => c.declared_by_holder === true), cred);
   const mails = existsSync(MAIL) ? readFileSync(MAIL, "utf8").trim().split("\n").filter(Boolean).length : 0;
   ck("K6 correos interceptados (ninguno enviado)", mails >= 4 && (process.env.RESEND_API_KEY ?? "").startsWith("demo-"), { mails });
+  // K7: recorrido completo de una práctica en la demo alojada (una sola vez, en la práctica de Ana para no
+  // tocar la de Lucía, que es la que usa Rafa): cliente, turno con «Asignármelo», visita con registros,
+  // informe del proveedor publicado, archivo adjunto al almacenamiento y lo que ve la familia.
+  const done = (await db.query(`SELECT 1 FROM care_recipients WHERE organization_id=$1 AND first_name='Luis'`, [N]).catch(() => ({ rowCount: 0 }))).rowCount;
+  if (!done) {
+    try {
+      must(await call("PUT", `/platform/organizations/${N}/features/SHIFT_REPORTS`, C, { enabled: true, reason: "Demo: informe del proveedor" }), [200], "informe de turno (Ana)");
+      must(await call("POST", "/me/active-organization", tAna, { organizationId: N }), [200], "Ana en su práctica");
+      const luis = must(await call("POST", `/organizations/${N}/care-recipients`, tAna, { firstName: "Luis", lastName: "Demo" }), [201], "cliente de Ana");
+      const luisId = (luis.careRecipient ?? luis.recipient ?? luis).id;
+      const shift = must(await call("POST", `/organizations/${N}/shifts`, tAna, { careRecipientId: luisId, scheduledStart: new Date(Date.now() + 2 * 60000).toISOString(), scheduledEnd: new Date(Date.now() + 62 * 60000).toISOString() }), [201], "turno").shift;
+      const sa = await call("POST", `/organizations/${N}/me/shifts/${shift.id}/self-assign`, tAna, {});
+      const ci = await call("POST", `/organizations/${N}/shifts/${shift.id}/check-in`, tAna, { verificationMethodCode: "CAREGIVER_SESSION" });
+      const ev = [await call("POST", `/organizations/${N}/shifts/${shift.id}/care-events`, tAna, { typeCode: "MEAL", careRecipientId: luisId, payload: { mealType: "Almuerzo", amountConsumed: "Mitad" } }),
+        await call("POST", `/organizations/${N}/shifts/${shift.id}/care-events`, tAna, { typeCode: "HYDRATION", careRecipientId: luisId, payload: { amount: "Vaso completo" } })].map((r) => r.s);
+      const co = await call("POST", `/organizations/${N}/shifts/${shift.id}/check-out`, tAna, {});
+      ck("K7a práctica: cliente, turno con «Asignármelo», comenzar, registrar y finalizar", [200, 201].includes(sa.s) && [200, 201].includes(ci.s) && ev.every((s) => s === 201 || s === 200) && [200, 201].includes(co.s), { sa: sa.s, saE: sa.j.error, ci: ci.s, ev, co: co.s });
+      const reps = (await call("GET", `/organizations/${N}/shifts/${shift.id}/shift-reports`, tAna)).j.reports ?? [];
+      must(await call("PUT", `/organizations/${N}/practice/profile`, tAna, { professionalName: "Ana Demo" }), [200], "nombre profesional");
+      const pub = reps[0] ? await call("POST", `/organizations/${N}/shift-reports/${reps[0].id}/publish-as-provider`, tAna, { expectedGeneratedAt: reps[0].generatedAt, familySections: { schedule: true, meals: true, hydration: true, activities: true, mobility: true, observations: true, hygiene: false, mood: false, incidents: false, photos: false } }) : { s: 0, j: {} };
+      ck("K7b informe del proveedor: borrador generado y publicado por la propia práctica", reps.length === 1 && pub.s === 200, { reps: reps.length, pub: pub.s, e: pub.j.error });
+      const fpw = "Verif-" + crypto.randomUUID();
+      const finv = must(await call("POST", `/organizations/${N}/access-invitations`, tAna, { type: "family", email: "verificacion-familia@demo.invalid", careRecipientId: luisId, relationshipType: "hijo" }), [201], "familia de verificación");
+      must(await call("POST", "/access-invitations/activate", undefined, { token: finv.token, password: fpw }), [200, 201], "activar familia de verificación");
+      const tFv = must(await call("POST", "/auth/login", undefined, { email: "verificacion-familia@demo.invalid", password: fpw }), [200], "login familia de verificación").token;
+      const fr = await call("GET", `/organizations/${N}/care-recipients/${luisId}/shift-reports`, tFv);
+      const frOther = await call("GET", `/organizations/${L}/care-recipients`, tFv);
+      ck("K7c familia: ve el informe del proveedor de su familiar y no entra a otra práctica", fr.s === 200 && (fr.j.reports ?? []).length >= 1 && [403, 404].includes(frOther.s), { fr: fr.s, n: (fr.j.reports ?? []).length, other: frOther.s });
+      const docs = (await call("GET", `/organizations/${N}/practice/documents`, tAna)).j.documents ?? [];
+      const up = docs[0] ? await call("POST", `/organizations/${N}/me/credentials/${docs[0].id}/documents/upload-url`, tAna, { originalFilename: "certificado-ficticio.pdf", contentType: "application/pdf", sizeBytes: PDF.length }) : { s: 0, j: {} };
+      const put = up.j.upload ? await fetch(`${API}/organizations/${N}/me/credentials/${docs[0].id}/documents/${up.j.upload.fileId}/content`, { method: "POST", headers: { "Content-Type": "application/pdf", Authorization: `Bearer ${tAna}` }, body: PDF }) : null;
+      ck("K7d documento autodeclarado: el archivo se guarda en el almacenamiento propio de la demo", !!put && put.ok, { up: up.s, put: put?.status });
+    } catch (e) { ck("K7 recorrido completo de la práctica", false, (e as Error).message); }
+  } else log("recorrido K7 ya hecho antes: no se repite");
   const failed = out.filter((x) => !x[1]).length;
   console.log(`[DEMO-AUTOCHECK] RESULTADO ${out.length - failed}/${out.length}`);
 }
