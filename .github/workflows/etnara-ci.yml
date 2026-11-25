@@ -399,6 +399,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialModality170.ts
 
+      - name: PostgreSQL 170 gate hardening (independent review 25-nov — every Express-accepted variant of residential and denied routes over real HTTP as app_runtime, fail-closed on unexpected errors, no cross-organization modality oracle)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialGate170.ts
+
       - name: PostgreSQL 170 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
