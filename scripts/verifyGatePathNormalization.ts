@@ -203,7 +203,7 @@ async function main() {
   check("G6.1 orgFeatureGate: sin la función de interruptores → 503 FEATURE_CHECK_UNAVAILABLE", f1.status === 503 && f1.body.error === "FEATURE_CHECK_UNAVAILABLE", f1);
   check("G6.2 modalityGate: sin la función de modalidad → 503 MODALITY_CHECK_UNAVAILABLE", f2.status === 503 && f2.body.error === "MODALITY_CHECK_UNAVAILABLE", f2);
   check("G6.3 Fallo inesperado al validar la sesión → 503 en las tres guardas (nunca continúa)",
-    f3[0].status === 503 && f3[0].body.error === "FEATURE_CHECK_UNAVAILABLE" && f3[1].status === 503 && f3[1].body.error === "MODALITY_CHECK_UNAVAILABLE" && f3[2].status === 503 && f3[2].body.error === "CONTRACT_CHECK_UNAVAILABLE", f3);
+    f3[0].status === 503 && ["FEATURE_CHECK_UNAVAILABLE", "MODALITY_CHECK_UNAVAILABLE"].includes(f3[0].body.error) /* 170: /finance también la cierra antes la guarda de hogares */ && f3[1].status === 503 && f3[1].body.error === "MODALITY_CHECK_UNAVAILABLE" && f3[2].status === 503 && f3[2].body.error === "CONTRACT_CHECK_UNAVAILABLE", f3);
   const created = Number((await q<{ n: number }>(`SELECT count(*)::int n FROM care_recipients WHERE organization_id=$1`, [B])).rows[0].n);
   check("G6.4 contractEnforcementGate: si el estado contractual no se puede leer → 503 CONTRACT_CHECK_UNAVAILABLE y no se crea nada", f4.status === 503 && f4.body.error === "CONTRACT_CHECK_UNAVAILABLE" && created === 0, [f4, created]);
   const bad = await raw("GET", `/organizations/${A}/smartmatch/opportunities`, "token-inexistente"), noTok = await raw("GET", `/organizations/${I}/team`, "");
@@ -275,7 +275,8 @@ async function main() {
     cOther.body.error === "CONTRACT_ACCEPTANCE_REQUIRED" && bNew.body.error === "CONTRACT_ACCEPTANCE_REQUIRED", [cOther, bNew]);
   // e) Modalidad: un independiente usa todas sus rutas abiertas (GET/HEAD, también con barra final) y su ficha de credenciales.
   const bad8m: string[] = [];
-  for (const r of getRoutes.filter((x) => !teamRouteFor(fill(x.path, I, []), "GET"))) { const p = fill(r.path, I, []); for (const v of [p, p + "/"]) {
+  // 170: /residential solo existe para hogares (residentialGate la cierra a independientes por diseño).
+  for (const r of getRoutes.filter((x) => !teamRouteFor(fill(x.path, I, []), "GET") && !/\/residential(\/|$)/.test(x.path))) { const p = fill(r.path, I, []); for (const v of [p, p + "/"]) {
     const g = await raw("GET", v, tI); const h = await raw("HEAD", v, tI);
     if (g.body.error === "MODALITY_NOT_AVAILABLE" || h.status !== g.status) bad8m.push(`GET/HEAD ${v} → ${g.status} ${g.body.error ?? ""} / ${h.status}`); } }
   const cred = await raw("POST", `/organizations/${I}/workers/${randomUUID()}/credentials/`, tI, {});

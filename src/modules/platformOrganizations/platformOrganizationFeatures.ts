@@ -4,13 +4,17 @@ import { z } from "zod";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { UnauthorizedPlatformAccessError } from "../../context/errors.js";
 import { withPlatformContext } from "../../context/tenantContext.js";
+import { featureCodesForOrganizationType } from "../../middleware/residentialRules.js";
 
 /**
  * SmartMatch pilot switches (migration 108). Only ETNARA central (platform
  * admin) reads or changes them; every change needs a reason and is recorded in
  * organization_feature_events (append-only).
  */
-export const FEATURE_CODES = ["SMARTMATCH", "EN_CAMINO", "ACTIVITY_PHOTOS", "FINANZAS", "FACTURACION", "SHIFT_REPORTS", "PUSH_NOTIFICATIONS", "CONTRACTS"] as const;
+const AGENCY_FEATURE_CODES = ["SMARTMATCH", "EN_CAMINO", "ACTIVITY_PHOTOS", "FINANZAS", "FACTURACION", "SHIFT_REPORTS", "PUSH_NOTIFICATIONS", "CONTRACTS"] as const;
+// 170 (hogares F0): solo para RESIDENTIAL_CARE_HOME, apagados por defecto. Agencias e independientes no los ven.
+const RESIDENTIAL_FEATURE_CODES = ["HOGAR_CALENDARIO", "HOGAR_ASIGNACIONES", "HOGAR_PONCHES", "DEMO_ENVIRONMENT"] as const;
+export const FEATURE_CODES = [...AGENCY_FEATURE_CODES, ...RESIDENTIAL_FEATURE_CODES] as const;
 const uuid = z.string().uuid();
 const featureCode = z.enum(FEATURE_CODES);
 const setFeatureSchema = z.object({
@@ -20,11 +24,13 @@ const setFeatureSchema = z.object({
 
 export async function listOrganizationFeatures(userId: string, organizationId: string) {
   return withPlatformContext(userId, async (trx) => {
-    const org = await sql<{ id: string }>`SELECT id FROM organizations WHERE id = ${organizationId}`.execute(trx);
+    const org = await sql<{ id: string; organization_type: string }>`SELECT id, organization_type FROM organizations WHERE id = ${organizationId}`.execute(trx);
     if (!org.rows[0]) throw new Error("ORGANIZATION_NOT_FOUND");
+    // 170: cada tipo ve solo sus códigos (agencias e independientes: la lista de siempre).
+    const codes = featureCodesForOrganizationType(FEATURE_CODES, org.rows[0].organization_type);
     const rows = await sql<{ feature_code: string; enabled: boolean; updated_at: string | null }>`
       SELECT c.code AS feature_code, COALESCE(f.enabled, false) AS enabled, f.updated_at
-      FROM unnest(${sql.raw(`ARRAY['${FEATURE_CODES.join("','")}']`)}::text[]) AS c(code)
+      FROM unnest(${sql.raw(`ARRAY['${codes.join("','")}']`)}::text[]) AS c(code)
       LEFT JOIN organization_features f ON f.organization_id = ${organizationId} AND f.feature_code = c.code
       ORDER BY c.code`.execute(trx);
     const history = await sql<{ feature_code: string; enabled: boolean; reason: string; occurred_at: string; actor_email: string | null }>`
@@ -60,8 +66,12 @@ export async function checkActivityPhotosLegalHolds(userId: string, organization
 
 export async function setOrganizationFeature(userId: string, organizationId: string, code: (typeof FEATURE_CODES)[number], enabled: boolean, reason: string) {
   return withPlatformContext(userId, async (trx) => {
-    const org = await sql<{ id: string }>`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`.execute(trx);
+    const org = await sql<{ id: string; organization_type: string }>`SELECT id, organization_type FROM organizations WHERE id = ${organizationId} FOR UPDATE`.execute(trx);
     if (!org.rows[0]) throw new Error("ORGANIZATION_NOT_FOUND");
+    // 170: encender un código de otra modalidad se rechaza (la base de datos lo impide también). Apagar, nunca.
+    if (enabled && !featureCodesForOrganizationType(FEATURE_CODES, org.rows[0].organization_type).includes(code)) {
+      throw new Error("FEATURE_NOT_AVAILABLE_FOR_MODALITY");
+    }
     const before = await sql<{ enabled: boolean }>`
       SELECT enabled FROM organization_features WHERE organization_id = ${organizationId} AND feature_code = ${code}`.execute(trx);
     const changed = (before.rows[0]?.enabled ?? false) !== enabled;
@@ -114,7 +124,7 @@ export async function designateBillingManager(userId: string, organizationId: st
 }
 
 const KNOWN_DB_CODES: Record<string, number> = {
-  FEATURE_REQUIRES_FINANZAS: 409, FEATURE_NOT_ENABLED: 409, BILLING_PERMISSION_ADMIN_ONLY: 409, REASON_REQUIRED: 400,
+  FEATURE_REQUIRES_FINANZAS: 409, FEATURE_NOT_ENABLED: 409, FEATURE_NOT_AVAILABLE_FOR_MODALITY: 409, BILLING_PERMISSION_ADMIN_ONLY: 409, REASON_REQUIRED: 400,
 };
 
 function handle(error: unknown, res: Response) {

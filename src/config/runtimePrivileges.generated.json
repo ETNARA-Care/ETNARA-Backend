@@ -604,6 +604,7 @@
     "app_org_billing_enabled",
     "app_org_feature_enabled",
     "app_org_is_independent",
+    "app_org_is_residential",
     "app_photo_agency_mode",
     "app_photo_bind_storage_identity",
     "app_photo_classify_keys",
