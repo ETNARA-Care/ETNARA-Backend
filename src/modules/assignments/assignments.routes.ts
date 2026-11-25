@@ -19,6 +19,9 @@ import {
   MyScheduleConflictError,
   selfAssignMyShift,
   SelfAssignNotAvailableError,
+  SelfDeclarationConfirmationRequiredError,
+  SELF_DECLARATION_NOTICE,
+  SELF_DECLARATION_STATEMENT,
 } from "./assignments.service.js";
 import {
   removeAssignmentAudited,
@@ -86,6 +89,10 @@ function handleError(err: unknown, res: Response): boolean {
     res.status(409).json({ error: "SCHEDULE_CONFLICT" });
     return true;
   }
+  if (err instanceof SelfDeclarationConfirmationRequiredError) {
+    res.status(409).json({ error: "SELF_DECLARATION_CONFIRMATION_REQUIRED", missing: err.missing, statement: SELF_DECLARATION_STATEMENT, notice: SELF_DECLARATION_NOTICE });
+    return true;
+  }
   if (err instanceof SelfAssignNotAvailableError) {
     res.status(403).json({ error: "SELF_ASSIGN_INDEPENDENT_ONLY" });
     return true;
@@ -121,7 +128,12 @@ router.post(
       return;
     }
     try {
-      const assignment = await selfAssignMyShift(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId));
+      const body = z.object({ confirmSelfDeclaration: z.boolean().optional() }).strict().safeParse(req.body ?? {});
+      if (!body.success) {
+        res.status(400).json({ error: "INVALID_PAYLOAD" });
+        return;
+      }
+      const assignment = await selfAssignMyShift(req.auth!.userId, orgIdParsed.data, String(req.params.shiftId), body.data);
       res.status(201).json({ assignment });
     } catch (err) {
       if (err instanceof NoApplicableRequirementSetError) {

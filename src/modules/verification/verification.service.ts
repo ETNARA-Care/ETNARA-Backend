@@ -3,7 +3,7 @@ import { isOrgManager, ownWorkerMembershipId } from "../../security/roleGuards.j
 import { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
-import { evaluateWorkerEligibility } from "../eligibility/eligibility.service.js";
+import { evaluateWorkerEligibility, SELF_DECLARATION_CONFIRMATION_STATUS } from "../eligibility/eligibility.service.js";
 import { recordTimesheetFromCheckout } from "../timesheets/timesheets.service.js";
 
 export class WorkerNotLinkedError extends Error {
@@ -333,8 +333,8 @@ export async function checkIn(
       throw new CheckInOutsideWindowError();
     }
 
-    const assignmentRow = await sql<{ id: string; response_status: string }>`
-      SELECT id, response_status FROM assignments
+    const assignmentRow = await sql<{ id: string; response_status: string; self_declaration_confirmed_at: string | null }>`
+      SELECT id, response_status, self_declaration_confirmed_at FROM assignments
       WHERE shift_id = ${shiftId} AND organization_worker_membership_id = ${membership.id} AND organization_id = ${organizationId}
         AND response_status IN ('pending', 'accepted')
       LIMIT 1
@@ -343,7 +343,10 @@ export async function checkIn(
     if (assignmentRow.rows[0].response_status !== "accepted") throw new AssignmentNotAcceptedError();
 
     const eligibility = await evaluateWorkerEligibility(userId, organizationId, membership.id);
-    if (eligibility.eligibilityStatus !== "eligible") {
+    // 161: un cuidador independiente que confirmó expresamente al asignarse este turno (auditado) puede iniciarlo.
+    // Ese estado solo existe en INDEPENDENT_PROVIDER: agencias y hogares siguen exigiendo «eligible».
+    const confirmedSelfDeclaration = eligibility.eligibilityStatus === SELF_DECLARATION_CONFIRMATION_STATUS && Boolean(assignmentRow.rows[0].self_declaration_confirmed_at);
+    if (eligibility.eligibilityStatus !== "eligible" && !confirmedSelfDeclaration) {
       throw new WorkerNotEligibleError(eligibility.eligibilityStatus);
     }
 

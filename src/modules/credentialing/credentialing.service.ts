@@ -271,6 +271,14 @@ async function assertCredentialBelongsToWorker(trx: unknown, workerId: string, c
   return result.rows[0];
 }
 
+/** 161: a un documento AUTODECLARADO solo su titular le añade evidencia (la base de datos lo exige también). */
+async function assertDeclaredEvidenceActor(trx: unknown, credentialId: string, userId: string) {
+  const r = await sql<{ declared: boolean; owner: string | null }>`
+    SELECT c.declared_by_holder AS declared, app_credential_owner_user(c.worker_id) AS owner FROM credentials c WHERE c.id = ${credentialId}
+  `.execute(trx as never);
+  if (r.rows[0]?.declared && r.rows[0].owner !== userId) throw new CredentialManagementForbiddenError();
+}
+
 async function resolveCredentialTypeId(trx: unknown, code: string): Promise<string> {
   const result = await sql<{ id: string }>`
     SELECT id FROM credential_types WHERE code = ${code} LIMIT 1
@@ -343,6 +351,7 @@ export async function listCredentials(userId: string, organizationId: string, wo
     const result = await sql<CredentialRow & { type_code: string; document_status: string | null; organization_review_status: string | null; organization_review_notes: string | null }>`
       SELECT c.id, c.worker_id, c.credential_type_id, c.document_id, c.issuing_entity_name,
              c.issuing_entity_type, c.issued_at, c.expires_at, c.status, c.created_at, c.updated_at,
+             c.declared_by_holder, -- 161: «Registrado por la cuidadora» (solo cuenta para esta agencia tras SU revisión)
              ct.code as type_code, d.status AS document_status,
              ocr.review_status AS organization_review_status, ocr.notes AS organization_review_notes
       FROM credentials c
@@ -372,6 +381,7 @@ export async function initiateCredentialDocumentUpload(
     await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    await assertDeclaredEvidenceActor(trx, credentialId, userId);
     const fileId = randomUUID();
     const storageKey = `credentials/${workerId}/${credentialId}/${fileId}`;
     const result = await sql<{ id: string }>`
@@ -443,6 +453,7 @@ export async function completeCredentialDocumentUpload(
     await assertCredentialUploadActor(trx, workerId);
     await assertWorkerLinkedToOrg(trx, organizationId, workerId);
     const credential = await assertCredentialBelongsToWorker(trx, workerId, credentialId);
+    await assertDeclaredEvidenceActor(trx, credentialId, userId);
     const fileResult = await sql<{ id: string; storage_key: string; content_type: string; original_filename: string; size_bytes: string }>`
       SELECT id, storage_key, content_type, original_filename, size_bytes
       FROM stored_files

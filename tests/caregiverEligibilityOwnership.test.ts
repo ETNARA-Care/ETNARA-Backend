@@ -26,7 +26,8 @@ describe("caregiver eligibility ownership",()=>{
   it("lets an active, non-expired credential satisfy a policy that does not require organization review",()=>{
     const eligibility=read("src/modules/eligibility/eligibility.service.ts");
     expect(eligibility).toMatch(
-      /else if \(req\.requires_organization_review\)[\s\S]*else \{[\s\S]*satisfied = true;[\s\S]*reason = "OK";/
+      // 161: además, un documento AUTODECLARADO nunca cuenta para una agencia sin SU revisión (sin herencia).
+      /else if \(!independent && \(req\.requires_organization_review \|\| credential\.declared_by_holder\)\)[\s\S]*else \{[\s\S]*satisfied = true;[\s\S]*reason = "OK";/
     );
   });
 
