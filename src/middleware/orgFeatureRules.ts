@@ -1,3 +1,4 @@
+import { gatePathCandidates } from "./gatePath.js";
 /** Which routes belong to a pilot feature (pure; used by orgFeatureGate). */
 export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS" | "CONTRACTS";
 
@@ -50,8 +51,9 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; 
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {
-  for (const rule of RULES) {
-    const m = rule.pattern.exec(path);
+  // Seguridad 25-nov: también la forma canónica (ids codificados, barra final), como la entiende Express.
+  for (const candidate of gatePathCandidates(path)) for (const rule of RULES) {
+    const m = rule.pattern.exec(candidate);
     if (m) {
       const read = method === "GET" || method === "HEAD";
       const pass = (rule.readableWhenOff && read) || (rule.passWhenOff?.includes(method) ?? false);

@@ -1,5 +1,12 @@
 # ETNARA Agent State
 
+## 2026-11-25 — Seguridad: normalización de rutas en las guardas (rama claude/seguridad-normalizacion-rutas, PR en borrador)
+- src/middleware/gatePath.ts: canonicalGatePath/gatePathCandidates (segmentos decodificados como hace Express con los parámetros, sin barras repetidas ni finales, minúsculas) y respondGateUnavailable (503, registro solo con guarda, etapa y código).
+- orgFeatureRules, modalityRules, contractEnforcementGate y featureWriteLimit comparan la forma canónica además de la original. Las reglas no cambian.
+- orgFeatureGate, modalityGate y contractEnforcementGate: solo una sesión inválida continúa (401 de la ruta); no miembro 403 (en contratos, la ruta decide como antes); id inválido 400; cualquier otro fallo 503.
+- Antes (main c6db21a): con un id de organización codificado o la barra final se llegaba a funcionalidades apagadas, a rutas de equipo de independientes y a operación nueva con contrato pendiente; el estado contractual ilegible dejaba crear residentes.
+- Pruebas: verifyGatePathNormalization 13/13 (en main 6/13), tests/gatePathNormalization.test.ts.
+
 ## Current Status
 
 ## 2026-11-25 — 164 Fase 1 independientes (rama claude/164-fase1-independientes, PR borrador)

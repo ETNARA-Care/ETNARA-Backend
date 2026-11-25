@@ -1,3 +1,4 @@
+import { gatePathCandidates } from "./gatePath.js";
 /**
  * 160 · Rutas de EQUIPO que no existen para un cuidador independiente (una sola persona con ADMIN + WORKER).
  * Puro: lo usa modalityGate. Solo se aplica a organizaciones INDEPENDENT_PROVIDER; agencias y hogares no pasan
@@ -39,8 +40,9 @@ const RULES: { pattern: RegExp; methods: string[] }[] = [
 /** Devuelve la organización si la ruta es de equipo y está cerrada para un independiente; null en otro caso. */
 export function teamRouteFor(path: string, method = "GET"): { organizationId: string } | null {
   const m = method.toUpperCase();
-  for (const rule of RULES) {
-    const match = rule.pattern.exec(path);
+  // Seguridad 25-nov: también la forma canónica (ids codificados, barra final), como la entiende Express.
+  for (const candidate of gatePathCandidates(path)) for (const rule of RULES) {
+    const match = rule.pattern.exec(candidate);
     if (match && rule.methods.includes(m)) return { organizationId: match[1].toLowerCase() };
   }
   return null;
