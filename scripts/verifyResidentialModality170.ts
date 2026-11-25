@@ -190,6 +190,24 @@ async function main() {
   check("C4. Central no enciende Finanzas, Facturación, SmartMatch ni Informe de Turno en un hogar", pD.every((r) => r.status === 409 && r.body.error === "FEATURE_NOT_AVAILABLE_FOR_MODALITY"), pD.map((r) => r.status));
   const notCentral = await put(H, "HOGAR_CALENDARIO", true, tH);
   check("C5. La administración del hogar no puede encender sus propios interruptores (solo ETNARA Central)", notCentral.status === 403, notCentral);
+  // Ninguna administración de organización enciende sus propios interruptores (solo ETNARA Central).
+  const selfPuts = [await put(H, "HOGAR_PONCHES", true, tS), await put(H, "DEMO_ENVIRONMENT", true, tH), await put(A, "SMARTMATCH", true, tA), await put(I, "EN_CAMINO", true, tI)];
+  check("P1. Ninguna administración (hogar, supervisora, agencia, independiente) cambia sus interruptores por la API: 403 PLATFORM_ADMIN_REQUIRED",
+    selfPuts.every((r) => r.status === 403 && r.body.error === "PLATFORM_ADMIN_REQUIRED"), selfPuts.map((r) => `${r.status}:${r.body.error}`));
+  const forged = async (stmt: string, params: unknown[]) => {
+    try {
+      await rt.query("BEGIN");
+      await rt.query(`SELECT set_config('app.current_user_id', $1, true), set_config('app.current_org_id', $2, true), set_config('app.is_superadmin', 'true', true)`, [adminH.id, H]);
+      await rt.query(stmt, params); await rt.query("ROLLBACK"); return "OK";
+    } catch (e) { await rt.query("ROLLBACK").catch(() => undefined); return (e as Error).message; }
+  };
+  const fIns = await forged(`INSERT INTO organization_features (organization_id, feature_code, enabled, updated_by_user_id) VALUES ($1,'HOGAR_PONCHES',true,$2)`, [H, adminH.id]);
+  const fEv = await forged(`INSERT INTO organization_feature_events (organization_id, feature_code, enabled, reason, actor_user_id) VALUES ($1,'HOGAR_PONCHES',true,'forjado',$2)`, [H, adminH.id]);
+  check("P2. Ni siquiera con el contexto de su hogar y app.is_superadmin forjado en la conexión de la app: RLS rechaza interruptor y evento",
+    fIns.includes("row-level security") && fEv.includes("row-level security"), [fIns, fEv]);
+  const fUpd = await forged(`UPDATE organization_features SET enabled=true WHERE organization_id=$1`, [H]);
+  check("P3. Tampoco puede modificar filas existentes (0 filas visibles para escribir) y no queda nada escrito",
+    fUpd === "OK" && (await q(`SELECT 1 FROM organization_features WHERE organization_id=$1 AND enabled`, [H])).rowCount === 0, fUpd);
   const unknown = await put(H, "HOGAR_INVENTADO", true);
   check("C6. Un código inexistente se rechaza (400)", unknown.status === 400, unknown);
   const agencyFin = await put(A, "FINANZAS", true);

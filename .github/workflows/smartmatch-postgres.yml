@@ -88,6 +88,8 @@ jobs:
         run: git fetch origin main:refs/remotes/origin/main
       - name: Reject migration number conflicts with main
         run: python3 scripts/check_smartmatch_migration_numbers.py
+      - name: Self-test of the general migration prefix check (synthetic collisions must be detected)
+        run: python3 scripts/check_migration_prefixes.py --self-test
       - name: Reject any new migration whose prefix already exists on main (170)
         run: python3 scripts/check_migration_prefixes.py
   tenant-isolation:

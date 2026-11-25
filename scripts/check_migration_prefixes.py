@@ -40,7 +40,31 @@ def check(base: list[str], head: list[str]) -> list[str]:
     return errors
 
 
+def self_test() -> None:
+    """Casos sintéticos: la guarda debe detectar cada colisión y aceptar lo legítimo."""
+    base = ["035_a.sql", "035_b.sql", "161_x.sql", "162_y.sql"]
+    cases = [
+        ("nueva con prefijo libre", base + ["170_ok.sql"], 0),
+        ("duplicados históricos de main intactos", base, 0),
+        ("colisión con main", base + ["162_otra.sql"], 1),
+        ("colisión con un duplicado histórico", base + ["035_c.sql"], 1),
+        ("dos nuevas con el mismo prefijo", base + ["171_a.sql", "171_b.sql"], 1),
+        ("colisión y repetición a la vez", base + ["161_z.sql", "172_a.sql", "172_b.sql"], 2),
+        ("archivos que no son migraciones se ignoran", base + ["README.md", "17_x.sql"], 0),
+    ]
+    failed = 0
+    for name, head, expected in cases:
+        got = len(check(base, head))
+        ok = got == expected
+        failed += not ok
+        print(f"{'PASS' if ok else 'FAIL'}  {name}: {got} error(es), esperado {expected}")
+    print(f"SELF_TEST {len(cases) - failed}/{len(cases)}")
+    sys.exit(1 if failed else 0)
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        self_test()
     ref = sys.argv[1] if len(sys.argv) > 1 else "origin/main"
     head = [p.name for p in Path("migrations").glob("*.sql")]
     errors = check(main_files(ref), head)
