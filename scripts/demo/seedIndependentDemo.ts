@@ -235,6 +235,27 @@ async function selfCheck(db: Client) {
       ck("K8g agencia y hogar sin regresión: clientes, turnos, personal, cola de credenciales, establecimientos (200)", Object.values(nr).every((s) => s === 200), nr);
     } catch (e) { ck("K8 prueba integral", false, (e as Error).message); }
   } else log("prueba integral K8 ya hecha antes: no se repite");
+  // K9 (seguridad #286): las variantes de dirección no eluden las guardas. Solo lecturas (GET); no crea nada.
+  try {
+    const enc = (id: string) => "%" + id.charCodeAt(0).toString(16) + id.slice(1);
+    const variants = (org: string, rest: string) => [`/organizations/${org}${rest}`, `/organizations/${enc(org)}${rest}`, `/organizations/${org}${rest}/`, `/ORGANIZATIONS/${org}${rest.toUpperCase()}/`];
+    const feats = Object.fromEntries((await db.query(`SELECT organization_id::text o, feature_code f, enabled e FROM organization_features`)).rows.map((r) => [`${r.o}:${r.f}`, r.e]));
+    const cand: Array<[string, string, string, string]> = [];
+    for (const [org, tok] of [[A, tA], [H, tH]] as const) for (const [f, rest] of [["SMARTMATCH", "/smartmatch/opportunities"], ["FINANZAS", "/finance/clients"], ["SHIFT_REPORTS", "/shift-reports"]] as const)
+      if (!feats[`${org}:${f}`]) cand.push([org, tok, f, rest]);
+    const off: Record<string, number | string> = {};
+    for (const [org, tok, f, rest] of cand.slice(0, 3)) for (const p of variants(org, rest)) { const r = await call("GET", p, tok); off[`${f} ${p.replace(org, "ORG").replace(enc(org), "%ORG")}`] = r.s === 404 ? (r.j.error ?? "404") : r.s; }
+    ck("K9a interruptores apagados: ninguna variante (id codificado, barra final, mayúsculas) abre la funcionalidad", cand.length > 0 && Object.values(off).every((v) => v === "FEATURE_NOT_ENABLED" || v === "404"), { n: cand.length, off });
+    const team: Record<string, number | string> = {};
+    for (const rest of ["/team", "/smartmatch/opportunities", "/credentials/review-queue"]) for (const p of variants(N, rest)) { const r = await call("GET", p, tAna); team[`${rest} ${p.replace(N, "ORG").replace(enc(N), "%ORG")}`] = r.s === 403 ? (r.j.error ?? "403") : r.s; }
+    ck("K9b práctica independiente: ninguna variante abre rutas de equipo (403 MODALITY_NOT_AVAILABLE)", Object.values(team).every((v) => v === "MODALITY_NOT_AVAILABLE" || v === 404), team);
+    const legit = { agencia: (await call("GET", `/organizations/${A}/care-recipients`, tA)).s, agenciaCodificada: (await call("GET", `/organizations/${enc(A)}/care-recipients`, tA)).s,
+      practica: (await call("GET", `/organizations/${N}/care-recipients`, tAna)).s, practicaCodificada: (await call("GET", `/organizations/${enc(N)}/care-recipients`, tAna)).s,
+      hogar: (await call("GET", `/organizations/${H}/establishments`, tH)).s, hogarBarra: (await call("GET", `/organizations/${H}/establishments/`, tH)).s,
+      ajenoCodificado: (await call("GET", `/organizations/${enc(A)}/care-recipients`, tH)).s };
+    ck("K9c accesos legítimos iguales con variantes (200) y una organización ajena sigue cerrada (403)", legit.agencia === 200 && legit.agenciaCodificada === 200 && legit.practica === 200 && legit.practicaCodificada === 200 && legit.hogar === 200 && legit.hogarBarra === 200 && legit.ajenoCodificado === 403, legit);
+  } catch (e) { ck("K9 variantes de dirección", false, (e as Error).message); }
+
 
   const failed = out.filter((x) => !x[1]).length;
   console.log(`[DEMO-AUTOCHECK] RESULTADO ${out.length - failed}/${out.length}`);
