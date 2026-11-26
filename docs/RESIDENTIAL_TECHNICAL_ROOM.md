@@ -26,6 +26,8 @@ a un establecimiento de hogar sin modificar la tabla `shifts` (decisión D2 del 
   F2 (172): el calendario semanal publica sus turnos en ella. Las respuestas de turnos devuelven `room_id` null cuando
   es la técnica y `establishment_name` con el nombre del establecimiento (`scheduling.service.ts`); la verificación S23
   de `scripts/verifyResidentialSchedule172.ts` busca su id en todas las respuestas.
+  F4 (173–175): los ponches solo se registran sobre turnos de la habitación técnica de su establecimiento (guarda de la
+  base) y las respuestas de asistencia nunca incluyen su id: hablan del establecimiento.
 - El acceso a residentes nunca sale de la habitación técnica: sale de la asignación de residentes (F3).
 - Verificación: `scripts/verifyResidentialEstablishments171.ts` (V1 busca los identificadores y el centinela en todas
   las respuestas; V2 los conteos de Central).

@@ -465,6 +465,30 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 172
 
+      - name: PostgreSQL 173-175 residential attendance F4 (weekly QR and 6-digit codes derived with HMAC and never stored, punches validated only online with a current code inside the geofence, offline never auto-validated, transition only closes, revocation prevails, brute-force lockout, other establishment and other home refused, idempotent, no coordinates stored, versioned revocable consent, reviews and corrections append-only and never on oneself, alerts for perimeter, recidivism and 16 h sessions, policies versioned, idempotent job, three-modality isolation, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialAttendance173.ts
+
+      - name: PostgreSQL 173 rollback (schema identical to 172, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 173
+
+      - name: PostgreSQL 174 rollback (schema identical to 173, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 174
+
+      - name: PostgreSQL 175 rollback (schema identical to 174, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 175
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
