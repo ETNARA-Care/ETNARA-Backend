@@ -423,6 +423,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialGate170.ts
 
+      - name: Residential F0.1 staff hours (homes keep hours, approval, staff pay rates and estimated pay; billing rates and amounts rejected or hidden over real HTTP; no deductions, contributions or payroll; agencies unchanged; independents still denied; never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialStaffHours.ts
+
       - name: PostgreSQL 170 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
