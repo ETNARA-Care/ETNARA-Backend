@@ -1,5 +1,13 @@
 # ETNARA Agent State
 
+## 2026-11-25 — Hogares F0.1: «Horas del personal» sin facturación (rama claude/170b-hogares-f0-1, PR borrador)
+- Decisión de Rafa (opción A, 25-nov 17:21): en un hogar se conservan registro, aprobación y exportación de horas, tarifa de PAGO del personal y pago ESTIMADO; nunca tarifa de facturación, facturación a familias, deducciones, contribuciones ni nómina.
+- Sin migración. La modalidad la decide la base (app_org_is_residential de la organización de la sesión).
+- PUT /financial-rates: en un hogar una tarifa de facturación distinta de 0 → 409 RESIDENTIAL_BILLING_NOT_AVAILABLE; solo pago → se guarda con facturación 0 (columna NOT NULL intacta). En agencias la tarifa de facturación sigue obligatoria (400 INVALID_FINANCIAL_RATE_REQUEST si falta).
+- Lecturas en hogares (tarifas, horas, resumen, vista previa, cierre y lista de periodos): la facturación sale null; al aprobar horas solo se exige la tarifa de pago (facturación 0); el cierre guarda facturación 0, también de hojas antiguas.
+- Revisión GPT (25-nov 19:58): el resumen del periodo agrupa por membresía (antes por nombre: dos personas con el mismo nombre, o sin nombre, se sumaban; también en agencias). El check-out (app_record_timesheet_from_checkout, 114) copia la tarifa vigente: una tarifa de facturación antigua de un hogar queda copiada en la hoja pendiente, pero nunca se devuelve ni se usa (aprobar y cerrar guardan 0). Cambiarlo en el origen exige migración (no autorizada). Consulta de solo lectura en el proyecto para contarlas en producción.
+- Pruebas: verifyResidentialStaffHours 18/18 (añadidos H11 homónimos, H12 check-out real con tarifa antigua, A3 homónimos en agencia); antes 15/15 (hogar H1–H10, agencia A1–A2, independiente y aislamiento I1–I2, sin 500), tests/residentialStaffHours170b.test.ts, npm test 828/828, regresión 160/163/164/170/gate/rutas/roles/Gate7 sin cambios; manifiesto sin cambios.
+
 ## 2026-11-25 — Seguridad: normalización de rutas en las guardas (rama claude/seguridad-normalizacion-rutas, PR en borrador)
 - src/middleware/gatePath.ts: canonicalGatePath/gatePathCandidates (segmentos decodificados como hace Express con los parámetros, sin barras repetidas ni finales, minúsculas) y respondGateUnavailable (503, registro solo con guarda, etapa y código).
 - orgFeatureRules, modalityRules, contractEnforcementGate y featureWriteLimit comparan la forma canónica además de la original. Las reglas no cambian.
