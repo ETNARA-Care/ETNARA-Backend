@@ -19,6 +19,7 @@ import {
   ShiftStateLockedError,
   RecipientNotInOrgError,
   RoomNotInOrgError,
+  ResidentialShiftTargetError,
   WorkerNotLinkedError,
   FamilyMustUseFamilyEndpointError,
 } from "./scheduling.service.js";
@@ -85,6 +86,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof LocationNotFoundError) {
     res.status(400).json({ error: "SERVICE_LOCATION_NOT_IN_RECIPIENT" });
+    return true;
+  }
+  if (err instanceof ResidentialShiftTargetError) {
+    res.status(409).json({ error: err.code });
     return true;
   }
   if (err instanceof RecipientNotInOrgError || err instanceof RoomNotInOrgError) {

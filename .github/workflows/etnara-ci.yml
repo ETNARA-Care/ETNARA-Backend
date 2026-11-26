@@ -441,6 +441,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialEstablishments171.ts
 
+      - name: PostgreSQL 171 closure concurrency (two app_runtime sessions, both orders; closing while creating a room, placing a resident or creating a shift never leaves a closed establishment with anything active; agencies unchanged)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialClosureConcurrency171.ts
+
       - name: Residential 171 round trip (apply on 170 data, rollback restores the 170 schema and data exactly, reapply is idempotent, rollback refused once people's data exists)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
