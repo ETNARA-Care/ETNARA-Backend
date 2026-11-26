@@ -25,6 +25,12 @@ describe("Residential F0.1 — staff hours without billing in care homes", () =>
     expect(periods).toMatch(/CASE WHEN \$\{residential\} THEN 0 ELSE/);
   });
 
+  it("groups the period preview by worker membership, never by name (GPT review)", () => {
+    expect(periods).toContain("t.organization_worker_membership_id membership_id");
+    expect(periods).toContain("const k=String(x.membership_id)");
+    expect(periods).not.toContain('const k=x.worker_name');
+  });
+
   it("adds no deductions, contributions, taxes or payroll processing", () => {
     for (const source of [service, periods]) {
       expect(source).not.toMatch(/deduction|withholding|contribution|payroll_run|stripe|bank_account|payment_intent/i);

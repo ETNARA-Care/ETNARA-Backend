@@ -148,6 +148,43 @@ async function main() {
   const billing = await call("GET", `${P(H)}/billing/invoices`, adminH.token), finance = await call("GET", `${P(H)}/finance/services`, adminH.token);
   check("H10. Hogar: la facturación a familias y Finanzas siguen cerradas (403 MODALITY_NOT_AVAILABLE)", billing.status === 403 && billing.body.error === "MODALITY_NOT_AVAILABLE" && finance.status === 403 && finance.body.error === "MODALITY_NOT_AVAILABLE", [billing.status, finance.status]);
 
+  // ---- Revisión GPT (25-nov): check-out con una tarifa antigua y personas con el mismo nombre -------------------
+  // H12: el check-out real (app_record_timesheet_from_checkout, 114) copia la tarifa vigente en la hoja pendiente.
+  // Con una tarifa de facturación antigua (2500, de antes de F0.1) esa copia queda guardada en la hoja pendiente,
+  // pero nunca se devuelve ni se usa: al aprobar se sustituye por 0 y el cierre guarda 0.
+  const { withTenantContext } = await import("../src/context/tenantContext.js");
+  const { recordTimesheetFromCheckout } = await import("../src/modules/timesheets/timesheets.service.js");
+  const recCo = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name) VALUES ($1,'Residente','Ficticio') RETURNING id`, [H])).rows[0].id;
+  const shiftCo = (await q<{ id: string }>(`INSERT INTO shifts (organization_id,care_recipient_id,scheduled_start,scheduled_end,status) VALUES ($1,$2,'2026-12-02T13:00:00Z','2026-12-02T16:00:00Z','confirmed') RETURNING id`, [H, recCo])).rows[0].id;
+  await q(`INSERT INTO assignments (organization_id,shift_id,organization_worker_membership_id,care_recipient_id,response_status,responded_at) VALUES ($1,$2,$3,$4,'accepted',now())`, [H, shiftCo, wH.owm, recCo]);
+  const legacyRate = (await q<{ bill: number }>(`SELECT bill_rate_cents bill FROM worker_financial_rates WHERE organization_worker_membership_id=$1`, [wH.owm])).rows[0];
+  await withTenantContext({ userId: wH.userId, organizationId: H }, (trx) => recordTimesheetFromCheckout(trx, { actorUserId: wH.userId, organizationId: H, shiftId: shiftCo, membershipId: wH.owm!, checkInAt: "2026-12-02T13:00:00Z", checkOutAt: "2026-12-02T16:00:00Z" }));
+  const coRow = (await q<{ id: string; billsnap: number | null; paysnap: number | null }>(`SELECT id, bill_rate_cents_snapshot billsnap, pay_rate_cents_snapshot paysnap FROM timesheets WHERE shift_id=$1`, [shiftCo])).rows[0];
+  const coList = await call("GET", `${P(H)}/timesheets?dateFrom=2026-12-01&dateTo=2026-12-05`, adminH.token);
+  const coReview = await call("POST", `${P(H)}/timesheets/${coRow?.id}/review`, adminH.token, { decision: "approved" });
+  const coAfter = (await q<{ billsnap: number; bill: number; pay: number }>(`SELECT bill_rate_cents_snapshot billsnap, bill_amount_cents bill, pay_amount_cents pay FROM timesheets WHERE id=$1`, [coRow?.id])).rows[0];
+  const coClose = await call("POST", `${P(H)}/pay-periods/close`, adminH.token, { dateFrom: "2026-12-01", dateTo: "2026-12-05", cadence: "custom" });
+  const coLines = (await q<{ bill: number }>(`SELECT coalesce(sum(ppt.bill_amount_cents),0)::int bill FROM pay_period_timesheets ppt WHERE ppt.timesheet_id=$1`, [coRow?.id])).rows[0];
+  check("H12. Hogar: el check-out real con una tarifa de facturación antigua (2500) la copia en la hoja pendiente, pero no se devuelve; al aprobar queda en 0 y el cierre guarda 0",
+    legacyRate?.bill === 2500 && coRow?.paysnap === 1600 && coList.status === 200 && coList.body.timesheets.length === 1 && coList.body.timesheets[0].bill_rate_cents_snapshot === null
+    && coReview.status === 200 && coAfter?.billsnap === 0 && coAfter.bill === 0 && coAfter.pay === 4800 && coClose.status === 201 && coLines?.bill === 0,
+    [legacyRate, coRow, coList.body.timesheets?.[0]?.bill_rate_cents_snapshot, coReview.status, coAfter, coClose.status, coLines]);
+  // H11: dos personas del hogar con el mismo nombre no se suman en el resumen del periodo.
+  const twin1 = await person(H, "twin1-h", ["WORKER"], true), twin2 = await person(H, "twin2-h", ["WORKER"], true);
+  await q(`UPDATE workers SET display_name='Ana Homónima' WHERE user_id = ANY($1)`, [[twin1.userId, twin2.userId]]);
+  await call("PUT", `${P(H)}/financial-rates/${twin1.owm}`, adminH.token, { payRateCents: 1000 });
+  await call("PUT", `${P(H)}/financial-rates/${twin2.owm}`, adminH.token, { payRateCents: 2000 });
+  for (const [who, start] of [[twin1, "2026-12-10T13:00:00Z"], [twin2, "2026-12-11T13:00:00Z"]] as const) {
+    const id = await timesheet(H, who, adminH, start, 60);
+    await call("POST", `${P(H)}/timesheets/${id}/review`, adminH.token, { decision: "approved" });
+  }
+  const twinPrev = await call("GET", `${P(H)}/pay-periods/preview?dateFrom=2026-12-09&dateTo=2026-12-31&cadence=custom`, adminH.token);
+  const twins = (twinPrev.body.workers ?? []).filter((w: Json) => w.workerName === "Ana Homónima");
+  check("H11. Hogar: dos personas con el mismo nombre salen por separado en el resumen (por membresía), cada una con su pago estimado",
+    twinPrev.status === 200 && twins.length === 2 && new Set(twins.map((w: Json) => w.membershipId)).size === 2
+    && twins.some((w: Json) => w.membershipId === twin1.owm && w.payAmountCents === 1000) && twins.some((w: Json) => w.membershipId === twin2.owm && w.payAmountCents === 2000)
+    && twins.every((w: Json) => w.billAmountCents === null), twinPrev.body.workers);
+
   // ---- Agencia (sin cambios) --------------------------------------------------------------------------------
   const aNoBill = await call("PUT", `${P(A)}/financial-rates/${wA.owm}`, adminA.token, { payRateCents: 1500 });
   const aBoth = await call("PUT", `${P(A)}/financial-rates/${wA.owm}`, adminA.token, { payRateCents: 1500, billRateCents: 2500 });
@@ -160,6 +197,21 @@ async function main() {
   check("A2. Agencia: aprobar, resumir y cerrar el periodo calculan pago y facturación como siempre",
     aRev.status === 200 && aRev.body.timesheet?.bill_amount_cents === 5000 && aPrev.body.summary.billAmountCents === 5000 && aClose.status === 201 && aClose.body.period?.bill_amount_cents === 5000
     && aList.body.summary.approvedBillCents === 5000 && aList.body.timesheets[0].bill_rate_cents_snapshot === 2500, [aRev.body.timesheet?.bill_amount_cents, aPrev.body.summary, aClose.body.period]);
+
+  // A3: también en la agencia, dos personas con el mismo nombre ya no se suman (antes se agrupaba por el nombre).
+  const aTwin1 = await person(A, "twin1-a", ["WORKER"], true), aTwin2 = await person(A, "twin2-a", ["WORKER"], true);
+  await q(`UPDATE workers SET display_name='Beto Homónimo' WHERE user_id = ANY($1)`, [[aTwin1.userId, aTwin2.userId]]);
+  await call("PUT", `${P(A)}/financial-rates/${aTwin1.owm}`, adminA.token, { payRateCents: 1000, billRateCents: 1500 });
+  await call("PUT", `${P(A)}/financial-rates/${aTwin2.owm}`, adminA.token, { payRateCents: 2000, billRateCents: 3000 });
+  for (const [who, start] of [[aTwin1, "2026-12-10T13:00:00Z"], [aTwin2, "2026-12-11T13:00:00Z"]] as const) {
+    const id = await timesheet(A, who, adminA, start, 60);
+    await call("POST", `${P(A)}/timesheets/${id}/review`, adminA.token, { decision: "approved" });
+  }
+  const aTwinPrev = await call("GET", `${P(A)}/pay-periods/preview?dateFrom=2026-12-09&dateTo=2026-12-31&cadence=custom`, adminA.token);
+  const aTwins = (aTwinPrev.body.workers ?? []).filter((w: Json) => w.workerName === "Beto Homónimo");
+  check("A3. Agencia: dos personas con el mismo nombre salen por separado, con su pago y su facturación; el total no cambia",
+    aTwinPrev.status === 200 && aTwins.length === 2 && aTwins.some((w: Json) => w.payAmountCents === 1000 && w.billAmountCents === 1500) && aTwins.some((w: Json) => w.payAmountCents === 2000 && w.billAmountCents === 3000)
+    && aTwinPrev.body.summary.payAmountCents === 3000 && aTwinPrev.body.summary.billAmountCents === 4500, aTwinPrev.body);
 
   // ---- Independiente (sin cambios: el módulo sigue cerrado por la modalidad) --------------------------------
   const iRates = await call("GET", `${P(I)}/financial-rates`, adminI.token), iPeriods = await call("GET", `${P(I)}/pay-periods`, adminI.token);
