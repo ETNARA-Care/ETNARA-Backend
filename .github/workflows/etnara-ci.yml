@@ -435,6 +435,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 170
 
+      - name: PostgreSQL 180 family RLS scope (family-only users in agencies, independents and homes read only their own user, the staff assigned to or recording activities of their family member with their credentials, and only the shifts and assignments of their family member; family portal unchanged; no GET route returns staff contacts, credentials or other residents; multi-role and multi-organization users keep legitimate access; SECURITY DEFINER helpers return only yes or no; never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyFamilyRlsScope180.ts
+
+      - name: PostgreSQL 180 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 180
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

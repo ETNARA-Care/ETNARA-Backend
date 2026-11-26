@@ -32,17 +32,17 @@ La familia solo llega a los datos por la API (no ejecuta SQL), así que hoy la e
   inyección SQL. La RLS es justamente la segunda capa para ese caso, y hoy no la cumple para la familia.
 - **No es crítica:** ninguna vía de explotación actual.
 
-## Corrección propuesta (pendiente de aprobación; no implementada en esta rama)
+## Corrección: migración 180 (aprobada por Rafa el 26-nov-2026)
 Políticas `RESTRICTIVE` para app_runtime, solo para el usuario **solo familia** (rol FAMILY y ningún otro rol ni
-membresía de empleado en la organización actual), en cualquier modalidad:
+membresía de empleado activa en la organización actual), en cualquier modalidad:
 - `users`: solo su propia fila.
-- `credentials`, `workers`, `organization_worker_memberships`: solo del personal con asignación aceptada en turnos de
-  su familiar (lo que hoy muestra el portal familiar de agencias: nombre del cuidador asignado y su credencial
-  verificada).
-- `assignments`, `shifts`: solo de su familiar.
-- Con la regresión completa del portal familiar de agencias (turnos de la familia, «En camino», historial, fotos,
-  mensajes e incidentes) en los dos modos, y `verifyFamilyExposure` añadido a CI.
+- `shifts`, `assignments`: solo de su familiar (directos o de su habitación, como su portal).
+- `workers`, `organization_worker_memberships`, `credentials`: solo del personal con asignación aceptada en turnos de su
+  familiar o que registró actividades de su familiar (lo que hoy muestra su portal: nombre del cuidador y su credencial
+  verificada, y el autor de cada actividad).
+- `worker_unavailability_periods`, `establishment_worker_assignments`: nada.
+- Cinco funciones `SECURITY DEFINER` con `search_path` fijo que solo devuelven sí/no; PUBLIC no puede ejecutarlas.
 
-**Decisión pendiente:** número de migración. El rango 170–179 está reservado para hogares; esta corrección es
-independiente y podría integrarse antes, así que necesita un número propio fuera de ese rango (por ejemplo, 180), con
-la prueba de que las bases nuevas y producción aplican el mismo resultado sin importar el orden.
+Verificación: `scripts/verifyFamilyRlsScope180.ts` (16/16, en agencia, independiente y hogar), reversión 4/4, y la
+compatibilidad con 171–177: el esquema resultante es idéntico aplicando la 180 antes o después de ellas (4.616 objetos:
+políticas, funciones, columnas, disparadores y permisos), y sus verificaciones pasan juntas en la rama combinada.
