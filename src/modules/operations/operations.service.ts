@@ -103,6 +103,10 @@ async function buildOperationsCenter(trx: unknown, organizationId: string): Prom
       )
       -- 154: closed without service (who, when, reason are kept in the closure).
       AND NOT EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL)
+      -- 177 (hogares F5, plan §2): los turnos de la habitación técnica de un hogar no son visitas (no tienen
+      -- verificación de llegada); su seguimiento es la asistencia del hogar. Solo existen en hogares, así que el
+      -- resultado de una agencia o de un independiente no cambia.
+      AND NOT EXISTS (SELECT 1 FROM establishment_technical_rooms t WHERE t.room_id = s.room_id)
   `.execute(trx as never);
 
   const credentials = await sql<any>`

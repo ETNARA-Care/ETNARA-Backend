@@ -330,6 +330,8 @@ interface MyRecipientRow {
   firstName: string;
   lastName: string;
   preferredName: string | null;
+  /** 177 (hogares F5): hogar y habitación de su familiar. Solo en hogares. */
+  residence?: { establishment: string | null; room: string | null };
 }
 
 /**
@@ -364,7 +366,8 @@ export async function listMyCareRecipients(userId: string): Promise<MyRecipientR
             WHERE id = ${rel.care_recipient_id} AND organization_id = ${rel.organization_id}
             LIMIT 1
           `.execute(trx);
-          return r.rows[0];
+          if (!r.rows[0]) return undefined;
+          return { ...r.rows[0], residence: await residenceFor(trx, rel.organization_id, rel.care_recipient_id) };
         }
       );
       if (recipient) {
@@ -376,6 +379,7 @@ export async function listMyCareRecipients(userId: string): Promise<MyRecipientR
           firstName: recipient.first_name,
           lastName: recipient.last_name,
           preferredName: recipient.preferred_name,
+          ...(recipient.residence ? { residence: recipient.residence } : {}),
         });
       }
     } catch {
@@ -384,6 +388,21 @@ export async function listMyCareRecipients(userId: string): Promise<MyRecipientR
     }
   }
   return out;
+}
+
+/**
+ * 177 (hogares F5, D5): en un hogar, la familia ve el hogar (establecimiento) y la habitación de SU familiar; nunca la
+ * habitación técnica. Solo se añade en hogares: el portal familiar de agencias e independientes no cambia.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function residenceFor(trx: any, organizationId: string, recipientId: string): Promise<{ establishment: string | null; room: string | null } | undefined> {
+  const r = await sql<{ residential: boolean; establishment: string | null; room: string | null }>`
+    SELECT app_org_is_residential(${organizationId}::uuid) AS residential,
+           (SELECT l.name FROM locations l WHERE l.id = cr.location_id AND l.organization_id = cr.organization_id) AS establishment,
+           (SELECT ro.name FROM rooms ro WHERE ro.id = cr.room_id AND ro.organization_id = cr.organization_id AND NOT app_is_technical_room(ro.id)) AS room
+    FROM care_recipients cr WHERE cr.id = ${recipientId} AND cr.organization_id = ${organizationId} LIMIT 1`.execute(trx);
+  const row = r.rows[0];
+  return row?.residential ? { establishment: row.establishment, room: row.room } : undefined;
 }
 
 export async function getMyCareRecipient(userId: string, recipientId: string): Promise<MyRecipientRow> {
@@ -421,6 +440,7 @@ export async function getMyCareRecipient(userId: string, recipientId: string): P
           LIMIT 1
         `.execute(trx);
         if (!r.rows[0]) throw new RecipientNotFoundError();
+        const residence = await residenceFor(trx, relationship.organization_id, relationship.care_recipient_id);
         return {
           organizationId: relationship.organization_id,
           recipientId: relationship.care_recipient_id,
@@ -429,6 +449,7 @@ export async function getMyCareRecipient(userId: string, recipientId: string): P
           firstName: r.rows[0].first_name,
           lastName: r.rows[0].last_name,
           preferredName: r.rows[0].preferred_name,
+          ...(residence ? { residence } : {}),
         };
       }
     );

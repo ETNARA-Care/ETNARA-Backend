@@ -351,6 +351,9 @@ export async function listFamilyShifts(
       LIMIT 1
     `.execute(trx);
     if (!relationship.rows[0]) throw new RecipientNotInOrgError();
+    // 177 (hogares F5, D5): en un hogar la familia no ve turnos, horarios, asistencia ni credenciales del personal.
+    const residential = await sql<{ r: boolean }>`SELECT app_org_is_residential(${organizationId}::uuid) AS r`.execute(trx);
+    if (residential.rows[0]?.r) return [];
 
     const result = await sql<{
       id: string;

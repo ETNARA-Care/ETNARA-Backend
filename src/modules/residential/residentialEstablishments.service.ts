@@ -33,13 +33,13 @@ const setReason = (trx: Trx, text: string | null | undefined) =>
 const NOT_TECH_UNIT = sql`NOT EXISTS (SELECT 1 FROM establishment_technical_rooms t WHERE t.unit_id = u.id)`;
 const NOT_TECH_ROOM = sql`NOT EXISTS (SELECT 1 FROM establishment_technical_rooms t WHERE t.room_id = r.id)`;
 
-type Occupancy = {
+export type Occupancy = {
   rooms: number; bedsRegistered: number; bedsOccupied: number; bedsAvailable: number;
   activeResidents: number; residentsWithoutRoom: number; occupancyPercent: number | null;
   capacityConfigured: boolean; overCapacity: boolean;
 };
 
-async function occupancyFor(trx: Trx, organizationId: string, locationIds: string[]): Promise<Map<string, Occupancy>> {
+export async function occupancyFor(trx: Trx, organizationId: string, locationIds: string[]): Promise<Map<string, Occupancy>> {
   const out = new Map<string, Occupancy>();
   if (locationIds.length === 0) return out;
   const rows = await sql<{ location_id: string; rooms: number; beds: number | null; beds_occupied: number; configured: number; over: number; active: number; without_room: number }>`

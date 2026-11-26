@@ -501,6 +501,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 176
 
+      - name: PostgreSQL 177 residential reports and portals F5 (family conversation only with the administration in API and RLS, family portal per D5 with only their resident, home and room and activities with author, role, date and time, never shifts, schedules, punches, attendance, location, credentials or other residents, family-only RLS closed in homes with multi-role users keeping legitimate access, caregiver non-clinical activities only for assigned residents, attendance report reconciles with punches with validated and pending apart and a free range of 1 to 31 days, assignments report, full panel by switch, operations center without technical-room shifts, Central counts unique active residents without names and alerts above 10 without blocking and excludes Hogar Demo, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialPortals177.ts
+
+      - name: PostgreSQL 177 rollback (schema identical to 176, messaging window restored exactly, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 177
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

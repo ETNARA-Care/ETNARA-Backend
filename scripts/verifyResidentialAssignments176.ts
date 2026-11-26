@@ -233,8 +233,8 @@ async function main() {
   const evNo = await call("POST", `/organizations/${H}/shifts/${S1}/care-events`, w.w1.token, { typeCode: "MOOD", careRecipientId: R1, payload: { mood: "Tranquilo" } });
   const evOther = await call("POST", `/organizations/${H}/shifts/${S1}/care-events`, w.w1.token, { typeCode: "MOOD", careRecipientId: R5, payload: { mood: "Tranquilo" } });
   const m3 = await canMsg(w.w1, R3), m1 = await canMsg(w.w1, R1), m1b = await canMsg(w.w2, R1);
-  check("A6. Eventos de cuidado: aceptan solo a los residentes asignados AHORA (sin verificación de visita en hogares); mensajes: solo durante la asignación (sin las 24 h de gracia)",
-    evOk.status === 201 && evNo.status >= 400 && evNo.status < 500 && evOther.status >= 400 && evOther.status < 500 && m3 && !m1 && m1b,
+  check("A6. Eventos de cuidado: aceptan solo a los residentes asignados AHORA (sin verificación de visita en hogares); mensajes: 177 (F5, decisión de Rafa del 26-nov) deja la conversación familiar de un hogar solo a la administración, así que ningún cuidador entra, asignado o no",
+    evOk.status === 201 && evNo.status >= 400 && evNo.status < 500 && evOther.status >= 400 && evOther.status < 500 && !m3 && !m1 && !m1b,
     { evOk: evOk.status, evNo: [evNo.status, evNo.body.error], evOther: evOther.status, m3, m1, m1b });
 
   // ---- Traslado del residente y cancelación del turno ---------------------------------------------------------------------
