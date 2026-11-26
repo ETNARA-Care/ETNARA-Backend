@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const m180 = read("migrations/180_family_rls_scope.sql");
 const rb180 = read("ops/180_family_rls_scope.rollback.sql");
-const FNS = ["app_family_only_member", "app_family_has_recipient", "app_family_recipient_shift", "app_family_visible_membership", "app_family_visible_worker"];
+const FNS = ["app_family_only_member", "app_family_has_recipient", "app_family_recipient_shift", "app_family_visible_membership", "app_family_visible_worker", "app_family_visible_credential"];
 
 describe("180: alcance de la familia en la RLS", () => {
   it("solo añade funciones y políticas: sin tablas, sin datos, sin tocar la estructura de shifts ni interruptores", () => {
@@ -13,10 +13,16 @@ describe("180: alcance de la familia en la RLS", () => {
   });
   it("todas las políticas son RESTRICTIVE, solo para app_runtime y se desactivan para quien no es solo familia", () => {
     const policies = [...m180.matchAll(/CREATE POLICY (\w+) ON (\w+) AS (\w+) FOR ALL TO (\w+)\s+USING \((NOT public\.app_family_only_member\(\))/g)];
-    expect(policies.length).toBe(8);
+    expect(policies.length).toBe(10);
     for (const p of policies) { expect(p[3]).toBe("RESTRICTIVE"); expect(p[4]).toBe("app_runtime"); }
-    for (const t of ["users", "shifts", "assignments", "organization_worker_memberships", "workers", "credentials", "worker_unavailability_periods", "establishment_worker_assignments"])
+    for (const t of ["users", "shifts", "assignments", "organization_worker_memberships", "workers", "credentials", "worker_unavailability_periods", "establishment_worker_assignments", "documents", "stored_files"])
       expect(m180).toMatch(new RegExp(`CREATE POLICY \\w+ ON ${t} AS RESTRICTIVE`));
+  });
+  it("credenciales: solo vigentes, activas, de membresía activa y aprobadas por la organización actual; archivos profesionales fuera, operativos intactos", () => {
+    expect(m180).toMatch(/family_scope_credentials ON credentials[\s\S]*app_family_visible_credential\(id\)/);
+    expect(m180).toMatch(/ocr\.organization_id = owm\.organization_id AND ocr\.review_status = 'approved'/);
+    expect(m180).toMatch(/c\.expires_at IS NULL OR c\.expires_at >= current_date/);
+    expect(m180).toMatch(/scope_type <> 'PLATFORM_PROFESSIONAL'/);
   });
   it("solo familia = rol FAMILY sin ningún otro rol ni membresía de empleado activa; nunca ETNARA central", () => {
     expect(m180).toMatch(/r\.code = 'FAMILY'/);
@@ -34,7 +40,7 @@ describe("180: alcance de la familia en la RLS", () => {
     expect(m180).not.toMatch(/residential_family_|establishment_technical_rooms|shift_resident_assignments|attendance_|schedule_week/);
   });
   it("la reversión quita todo lo nuevo", () => {
-    expect((rb180.match(/DROP POLICY IF EXISTS/g) ?? []).length).toBe(8);
+    expect((rb180.match(/DROP POLICY IF EXISTS/g) ?? []).length).toBe(10);
     for (const f of FNS) expect(rb180).toMatch(new RegExp(`DROP FUNCTION IF EXISTS public\\.${f}\\(`));
     expect(rb180).toMatch(/DELETE FROM schema_migrations WHERE filename = '180_family_rls_scope\.sql'/);
   });

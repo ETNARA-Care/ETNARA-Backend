@@ -7,8 +7,9 @@
 -- WORKER) ni una membresía de empleado activa. Administración, supervisión y personal (aunque también sean familia)
 -- conservan todos sus permisos; en otra organización cada persona tiene los permisos de su rol allí.
 -- Lo que la familia sigue viendo (lo que ya usa su portal): los turnos de su familiar (directos o de su habitación),
--- sus asignaciones, y nombre, puesto y credenciales del personal asignado a esos turnos o que registró actividades de
--- su familiar. Su propia fila de usuario. Nada más del personal.
+-- sus asignaciones, y nombre y puesto del personal asignado a esos turnos o que registró actividades de su familiar;
+-- de ese personal, si sigue activo, solo las credenciales vigentes aprobadas por esta organización. Su propia fila de
+-- usuario. Ningún documento ni archivo profesional del personal. Nada más del personal.
 -- Aditiva: solo funciones de lectura (SECURITY DEFINER, devuelven un sí/no) y políticas RESTRICTIVE para app_runtime.
 -- Independiente de 171–177: no toca sus tablas ni funciones y usa nombres de política propios (family_scope_*), así que
 -- el resultado es el mismo se aplique antes o después de ellas. No modifica shifts (estructura) ni datos.
@@ -112,16 +113,41 @@ AS $$
       AND public.app_family_visible_membership(owm.id));
 $$;
 
+-- Credencial que el portal familiar puede mostrar (auditoría 26-nov): de personal visible con membresía ACTIVA en la
+-- organización actual, vigente, activa y APROBADA por esta organización. Igual que lo que devuelve la API
+-- (listFamilyShifts); las credenciales son de la persona, así que sin esto se verían las subidas o revisadas solo en
+-- otra organización.
+CREATE OR REPLACE FUNCTION public.app_family_visible_credential(p_credential_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.credentials c
+    JOIN public.organization_worker_memberships owm
+      ON owm.worker_id = c.worker_id AND owm.status = 'active'
+     AND owm.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+    WHERE c.id = p_credential_id
+      AND c.status = 'active' AND (c.expires_at IS NULL OR c.expires_at >= current_date)
+      AND public.app_family_visible_membership(owm.id)
+      AND EXISTS (SELECT 1 FROM public.organization_credential_reviews ocr
+                  WHERE ocr.credential_id = c.id AND ocr.organization_id = owm.organization_id AND ocr.review_status = 'approved'));
+$$;
+
 REVOKE ALL ON FUNCTION public.app_family_only_member() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_family_has_recipient(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_family_recipient_shift(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_family_visible_membership(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.app_family_visible_worker(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.app_family_visible_credential(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_family_only_member() TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_family_has_recipient(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_family_recipient_shift(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_family_visible_membership(uuid) TO app_runtime;
 GRANT EXECUTE ON FUNCTION public.app_family_visible_worker(uuid) TO app_runtime;
+GRANT EXECUTE ON FUNCTION public.app_family_visible_credential(uuid) TO app_runtime;
 
 -- Restrictivas (se suman con AND a las existentes); solo actúan sobre el usuario solo-familia.
 DROP POLICY IF EXISTS family_scope_own_user ON users;
@@ -142,9 +168,16 @@ CREATE POLICY family_scope_workers ON workers AS RESTRICTIVE FOR ALL TO app_runt
   USING (NOT public.app_family_only_member() OR public.app_family_visible_worker(id));
 DROP POLICY IF EXISTS family_scope_credentials ON credentials;
 CREATE POLICY family_scope_credentials ON credentials AS RESTRICTIVE FOR ALL TO app_runtime
-  USING (NOT public.app_family_only_member() OR public.app_family_visible_worker(worker_id));
+  USING (NOT public.app_family_only_member() OR public.app_family_visible_credential(id));
 -- La familia nunca necesita disponibilidad ni autorizaciones por establecimiento del personal.
 DROP POLICY IF EXISTS family_scope_deny ON worker_unavailability_periods;
 CREATE POLICY family_scope_deny ON worker_unavailability_periods AS RESTRICTIVE FOR ALL TO app_runtime USING (NOT public.app_family_only_member());
 DROP POLICY IF EXISTS family_scope_deny ON establishment_worker_assignments;
 CREATE POLICY family_scope_deny ON establishment_worker_assignments AS RESTRICTIVE FOR ALL TO app_runtime USING (NOT public.app_family_only_member());
+-- Documentos y archivos profesionales del personal (licencias, certificados): la familia nunca los usa. Los archivos
+-- operativos de la organización (fotos de actividades, adjuntos de incidentes) siguen con sus políticas propias.
+DROP POLICY IF EXISTS family_scope_deny ON documents;
+CREATE POLICY family_scope_deny ON documents AS RESTRICTIVE FOR ALL TO app_runtime USING (NOT public.app_family_only_member());
+DROP POLICY IF EXISTS family_scope_professional_files ON stored_files;
+CREATE POLICY family_scope_professional_files ON stored_files AS RESTRICTIVE FOR ALL TO app_runtime
+  USING (NOT public.app_family_only_member() OR scope_type <> 'PLATFORM_PROFESSIONAL');

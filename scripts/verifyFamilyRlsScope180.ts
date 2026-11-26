@@ -131,6 +131,14 @@ async function main() {
       VALUES ($1,$2,$3,'low','Incidente ficticio','resolved','Resuelto de forma ficticia',$4,$4,now())`, [org, r1, w1.owm, resolver]);
     await q(`INSERT INTO worker_unavailability_periods (organization_id, organization_worker_membership_id, starts_at, ends_at) VALUES ($1,$2, now()+interval '5 days', now()+interval '6 days')`, [org, w2.owm]).catch(() => undefined);
 
+    // Auditoría 26-nov: credenciales de la persona sin aprobar aquí (p. ej. subidas en otra organización) o vencidas,
+    // su documento y su archivo profesional: nada de eso debe verlo la familia.
+    const credOther = (await q(`INSERT INTO credentials (worker_id,credential_type_id,issuing_entity_type,status,expires_at,issuing_entity_name) VALUES ($1,$2,'external_provider','active','2032-01-01','Subida en otra organización') RETURNING id`, [w1.w, bls]))[0].id as string;
+    const credExpired = (await q(`INSERT INTO credentials (worker_id,credential_type_id,issuing_entity_type,status,expires_at) VALUES ($1,$2,'external_provider','active','2020-01-01') RETURNING id`, [w1.w, bls]))[0].id as string;
+    await q(`INSERT INTO organization_credential_reviews (credential_id,organization_id,reviewed_by_user_id,review_status,reviewed_at) VALUES ($1,$2,$3,'approved',now())`, [credExpired, org, resolver]);
+    const proFile = (await q(`INSERT INTO stored_files (scope_type,owner_worker_id,storage_key,content_type,original_filename,size_bytes,uploaded_by_user_id,status)
+      VALUES ('PLATFORM_PROFESSIONAL',$1,$2,'application/pdf','Licencia ficticia.pdf',1000,$3,'active') RETURNING id`, [w1.w, `pro/${w1.w}/${tag}.pdf`, w1.u]))[0].id as string;
+    await q(`INSERT INTO documents (worker_id,credential_type_id,file_id) VALUES ($1,$2,$3)`, [w1.w, bls, proFile]);
     // ---- RLS del usuario solo-familia -------------------------------------------------------------------------------
     const famOnly = (await asUser(fam, org, `SELECT app_family_only_member() AS f`))[0]?.f;
     const rls = {
@@ -144,10 +152,21 @@ async function main() {
     const strictHome = label === "Hogar" && has177;
     const rlsOk = strictHome
       ? rls.users === 1 && rls.credentials === 0 && rls.workers === 0 && rls.memberships === 0 && rls.shifts === 0 && rls.assignments === 0 && rls.visibleWorker === null
-      : rls.users === 1 && rls.credentials === 1 && rls.workers === 1 && rls.memberships === 1 && rls.shifts === 1 && rls.assignments === 1
+      : rls.users === 1 && rls.credentials === 1 /* solo la aprobada y vigente */ && rls.workers === 1 && rls.memberships === 1 && rls.shifts === 1 && rls.assignments === 1
         && JSON.stringify(rls.visibleWorker) === JSON.stringify(["Asignada Ficticia"]);
     check(`${label} R1. Solo familia por RLS: su usuario; ${strictHome ? "nada del personal, turnos ni credenciales (177)" : "del personal solo la asignada (con su credencial); solo turnos y asignaciones de su familiar"}; sin disponibilidad ni otros residentes`,
       famOnly === true && rlsOk && rls.unavailability === 0 && rls.otherRecipients === 0, { famOnly, strictHome, ...rls });
+
+    const c1 = {
+      otherOrgCredential: await count(fam, org, "credentials", `WHERE id='${credOther}'`), expiredCredential: await count(fam, org, "credentials", `WHERE id='${credExpired}'`),
+      documents: await count(fam, org, "documents"), professionalFiles: await count(fam, org, "stored_files", `WHERE scope_type='PLATFORM_PROFESSIONAL'`),
+      adminCredentialsOfAssigned: adminId ? await count(adminId, org, "credentials", `WHERE worker_id='${w1.w}'`) : 3,
+      adminDocuments: adminId ? await count(adminId, org, "documents", `WHERE worker_id='${w1.w}'`) : 1,
+      ownProfessionalFiles: await count(w1.u, org, "stored_files", `WHERE id='${proFile}'`),
+    };
+    check(`${label} C1. Credenciales solo vigentes y aprobadas por esta organización; ningún documento ni archivo profesional del personal; la administración y la propia cuidadora conservan los suyos`,
+      c1.otherOrgCredential === 0 && c1.expiredCredential === 0 && c1.documents === 0 && c1.professionalFiles === 0
+      && c1.adminCredentialsOfAssigned === 3 && c1.adminDocuments === 1 && c1.ownProfessionalFiles === 1, c1);
 
     // ---- Lo que su portal usa ----------------------------------------------------------------------------------------
     const tF = await loginAs(famEmail, org);

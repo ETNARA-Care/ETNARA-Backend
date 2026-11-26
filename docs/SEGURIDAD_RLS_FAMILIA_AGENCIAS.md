@@ -46,3 +46,13 @@ membresía de empleado activa en la organización actual), en cualquier modalida
 Verificación: `scripts/verifyFamilyRlsScope180.ts` (16/16, en agencia, independiente y hogar), reversión 4/4, y la
 compatibilidad con 171–177: el esquema resultante es idéntico aplicando la 180 antes o después de ellas (4.616 objetos:
 políticas, funciones, columnas, disparadores y permisos), y sus verificaciones pasan juntas en la rama combinada.
+
+## Auditoría independiente (26-nov-2026) — ajustes sobre `b5f3df4`
+
+La RLS restringe filas, no columnas, así que se alinearon las filas visibles con lo que el portal familiar ya devuelve:
+
+- **Credenciales:** antes, todas las del personal visible (las credenciales son de la persona, así que también las subidas o revisadas solo en otra organización). Ahora solo las **activas, vigentes y aprobadas por la organización actual**, de personal visible con **membresía activa** (igual que `listFamilyShifts`). Nueva función `app_family_visible_credential(uuid)` (SECURITY DEFINER, boolean).
+- **Documentos (`documents`) y archivos profesionales (`stored_files` con `PLATFORM_PROFESSIONAL`):** la familia ya no los ve (antes veía nombre original y clave de almacenamiento de los del personal visible). Los archivos operativos de la organización (fotos de actividades, adjuntos de incidentes) no cambian.
+- **Historial y turnos cancelados:** dan visibilidad del nombre y el puesto (el portal muestra quién atendió); las credenciales solo si la persona sigue activa y la credencial está vigente y aprobada aquí. Invitaciones pendientes o rechazadas no dan nada.
+- **Riesgo residual (bajo):** la familia sigue leyendo `organization_memberships` y `user_roles` de su organización (identificadores y códigos de rol, sin contactos), porque la conversación con la administración los usa en su propia sesión. Cerrarlo exige cambiar código; queda fuera de la 180.
+- Verificador: 19/19 en main + 180 y en 171–177 + 180 (nueva comprobación C1).
