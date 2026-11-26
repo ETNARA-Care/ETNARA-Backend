@@ -453,6 +453,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 171 units rooms
 
+      - name: PostgreSQL 172 residential weekly schedule F2 (drafts invisible to staff, publish creates shifts on the technical room through the existing eligibility and overlap rules, versioned append-only publications, republish cancels removed entries, templates and copy week, overnight hours split by local day, overlap and duplicate warnings, generic notifications, managers only, three-modality isolation, technical room never exposed, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialSchedule172.ts
+
+      - name: PostgreSQL 172 rollback (schema identical to 171, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 172
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

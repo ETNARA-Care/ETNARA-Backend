@@ -137,7 +137,11 @@ async function main() {
   const leaks1: string[] = [];
   for (const { r, m } of featureCases) for (const v of variantsOf(r, A)) {
     const res = await raw(m, v.path, tA, bodyFor(m));
-    const ok = m === "HEAD" ? res.status === 404 : (res.status === 404 && res.body.error === "FEATURE_NOT_ENABLED") || unmatched(res);
+    // 172: las funcionalidades de hogar (/residential/…) ni siquiera existen en una agencia: las cierra antes residentialGate
+    // (403 MODALITY_NOT_AVAILABLE). Con el interruptor apagado en un hogar, verifyResidentialSchedule172 (G1–G3) exige el 404.
+    const residentialOnly = /\/residential(\/|$)/i.test(decodeURIComponent(v.path));
+    const closedByModality = residentialOnly && res.status === 403 && (m === "HEAD" || res.body.error === "MODALITY_NOT_AVAILABLE");
+    const ok = closedByModality || (m === "HEAD" ? res.status === 404 : (res.status === 404 && res.body.error === "FEATURE_NOT_ENABLED") || unmatched(res));
     if (!ok) leaks1.push(`${m} | ${v.name} | ${v.path} → ${res.status} ${res.body.error ?? ""}`);
   }
   check("G1. orgFeatureGate: ninguna variante ni método llega a una funcionalidad apagada (404 FEATURE_NOT_ENABLED o sin ruta)", leaks1.length === 0 && featureCases.length > 100,
@@ -286,7 +290,8 @@ async function main() {
   // f) Funcionalidades encendidas (B): cuidador y familiar no reciben FEATURE_NOT_ENABLED en GET/HEAD de rutas de funcionalidad.
   const bad8f: string[] = [];
   for (const [who, t] of [["cuidador B", tWB], ["familiar B", tFB]] as const)
-    for (const r of getRoutes.filter((x) => gatedFeatureFor(fill(x.path, B, []), "GET"))) { const p = fill(r.path, B, []); for (const v of [p, p + "/"]) {
+    // 170/172: /residential solo existe para hogares (B es una agencia), como en G8.3.
+    for (const r of getRoutes.filter((x) => gatedFeatureFor(fill(x.path, B, []), "GET") && !/\/residential(\/|$)/.test(x.path))) { const p = fill(r.path, B, []); for (const v of [p, p + "/"]) {
       const g = await raw("GET", v, t); const h = await raw("HEAD", v, t);
       if (g.body.error === "FEATURE_NOT_ENABLED" || gateBlock(g) && g.body.error !== "CONTRACT_ACCEPTANCE_REQUIRED" || h.status !== g.status) bad8f.push(`${who} ${v} → ${g.status} ${g.body.error ?? ""} / HEAD ${h.status}`); } }
   check("G8.4 Funcionalidades encendidas: cuidadores y familiares no quedan cerrados por la guarda (GET y HEAD, también con barra final)", bad8f.length === 0, bad8f.slice(0, 8));

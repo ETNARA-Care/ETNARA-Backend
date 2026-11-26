@@ -81,6 +81,11 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "Nuevo incidente";
     case "SHIFT_ASSIGNMENT_PENDING":
       return "Nuevo turno pendiente de respuesta";
+    // 172 (hogares F2): aviso general, sin nombres ni datos de residentes.
+    case "SCHEDULE_WEEK_PUBLISHED":
+      return "Horario semanal publicado";
+    case "SCHEDULE_WEEK_UPDATED":
+      return "Horario semanal modificado";
     case "SHIFT_ASSIGNMENT_ACCEPTED":
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":

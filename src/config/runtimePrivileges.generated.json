@@ -412,6 +412,31 @@
       "SELECT",
       "UPDATE"
     ],
+    "schedule_template_slots": [
+      "DELETE",
+      "INSERT",
+      "SELECT"
+    ],
+    "schedule_templates": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "schedule_week_publications": [
+      "INSERT",
+      "SELECT"
+    ],
+    "schedule_week_shifts": [
+      "DELETE",
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "schedule_weeks": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "sessions": [
       "INSERT",
       "SELECT",

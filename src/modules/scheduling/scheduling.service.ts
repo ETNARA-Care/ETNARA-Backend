@@ -199,7 +199,7 @@ export async function insertShiftInTransaction(
     const result = await sql<ShiftRow>`
       INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id)
       VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
   }
@@ -237,10 +237,12 @@ export async function listShifts(userId: string, organizationId: string, filter:
     }
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
+      SELECT s.id, s.organization_id, s.care_recipient_id, CASE WHEN app_is_technical_room(s.room_id) THEN NULL ELSE s.room_id END AS room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count,
              -- 154: visual «Cerrado sin servicio» (managers only: RLS hides closures from caregivers).
-             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL) AS closed_without_service
+             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL) AS closed_without_service,
+             -- 172 (hogares F2): un turno del calendario se presenta como del establecimiento (nunca la habitación técnica).
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id) AS establishment_name
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
@@ -270,14 +272,16 @@ export async function listMyShifts(userId: string, organizationId: string) {
     if (!workerId) throw new WorkerNotLinkedError();
 
     const result = await sql<ShiftRow>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
+      SELECT s.id, s.organization_id, s.care_recipient_id, CASE WHEN app_is_technical_room(s.room_id) THEN NULL ELSE s.room_id END AS room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, a.id AS assignment_id,
              a.response_status AS assignment_response_status,
              -- Only a name and the municipality (migration 134): the full name once she
              -- accepted, a short one (preferred name, or first name + initial) while the
              -- assignment is pending. Never the rest of the person's profile or the address.
              prev.display_name AS care_recipient_display_name,
-             prev.municipality AS service_municipality
+             prev.municipality AS service_municipality,
+             -- 172 (hogares F2): turno del establecimiento (nunca la habitación técnica).
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id) AS establishment_name
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
@@ -436,7 +440,9 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at,
+      SELECT id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at,
+             -- 172: turno del calendario de un hogar → del establecimiento.
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = shifts.room_id) AS establishment_name,
              EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = shifts.id AND c.rectified_at IS NULL) AS closed_without_service
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
@@ -485,7 +491,7 @@ export async function updateShift(
       UPDATE shifts
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx).catch(async (error: { message?: string }) => {
       // Guards in migration 107: a cancelled shift never comes back; a visit whose
       // journey/arrival started cannot be moved (cancel and create a new one instead).
@@ -519,7 +525,7 @@ export async function cancelShift(userId: string, organizationId: string, shiftI
         AND organization_id = ${organizationId}
         AND status IN ('unassigned', 'confirmed')
         AND scheduled_start > now()
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start,
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start,
                 scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     if (result.rows[0]) {
