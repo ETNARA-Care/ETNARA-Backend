@@ -441,6 +441,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialEstablishments171.ts
 
+      - name: Residential 171 round trip (apply on 170 data, rollback restores the 170 schema and data exactly, reapply is idempotent, rollback refused once people's data exists)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidential171Rollback.ts
+
       - name: PostgreSQL 171 rollback (schema identical to 170, existing rows unchanged, automatic pieces removed, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

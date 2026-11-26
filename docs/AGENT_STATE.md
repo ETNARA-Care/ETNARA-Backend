@@ -1,5 +1,10 @@
 # ETNARA Agent State
 
+## 2026-11-26 — Hogares F1: preparación final (rama claude/171-hogares-f1, PR #282 en borrador)
+- Actualizada sobre main 9d7e541 (F0 + F0.1, #286): contiene todas sus correcciones.
+- Nuevo scripts/verifyResidential171Rollback.ts (en la CI): la 171 sobre datos de la 170; la reversión sin datos de personas deja el esquema y los datos idénticos a la 170; volver a aplicar es idempotente; con datos de personas la reversión se niega. 8/8.
+- Regresión local: 171 53/53, horas del personal 18/18, 170 40/40, gate 170 20/20, rutas 19/19, 160 41/41, 163 29/29, 164, roles, Gate 7 y Finanzas sin fallos.
+
 ## 2026-11-25 — Hogares F0.1: «Horas del personal» sin facturación (rama claude/170b-hogares-f0-1, PR borrador)
 - Decisión de Rafa (opción A, 25-nov 17:21): en un hogar se conservan registro, aprobación y exportación de horas, tarifa de PAGO del personal y pago ESTIMADO; nunca tarifa de facturación, facturación a familias, deducciones, contribuciones ni nómina.
 - Sin migración. La modalidad la decide la base (app_org_is_residential de la organización de la sesión).
