@@ -41,6 +41,8 @@ async function main() {
   const db = new pg.Client({ connectionString: su.toString() }); await db.connect();
   { const log = console.log; console.log = () => undefined; try { await applyPendingMigrations(db, join(process.cwd(), "migrations")); } finally { console.log = log; } }
   const q = async (s: string, p: unknown[] = []) => (await db.query(s, p)).rows;
+  // ¿Está la 177 (portales de hogares) en la cadena? Cambia lo que una familia de hogar debe ver.
+  const has177 = (await q(`SELECT to_regprocedure('public.app_residential_family_only()') IS NOT NULL AS h`))[0].h === true;
   const pw = randomBytes(24).toString("hex");
   await q(`ALTER ROLE app_runtime WITH LOGIN PASSWORD '${pw}'`);
   const rt = new URL(su.toString()); rt.username = "app_runtime"; rt.password = pw;
@@ -137,9 +139,15 @@ async function main() {
       unavailability: await count(fam, org, "worker_unavailability_periods"), otherRecipients: await count(fam, org, "care_recipients", `WHERE id <> '${r1}'`),
       visibleWorker: (await asUser(fam, org, `SELECT array_agg(display_name ORDER BY display_name) AS v FROM workers`))[0]?.v,
     };
-    check(`${label} R1. Solo familia por RLS: su usuario; del personal solo la asignada (con su credencial); solo turnos y asignaciones de su familiar; sin disponibilidad ni otros residentes`,
-      famOnly === true && rls.users === 1 && rls.credentials === 1 && rls.workers === 1 && rls.memberships === 1 && rls.shifts === 1 && rls.assignments === 1
-      && rls.unavailability === 0 && rls.otherRecipients === 0 && JSON.stringify(rls.visibleWorker) === JSON.stringify(["Asignada Ficticia"]), { famOnly, ...rls });
+    // Hogares con la 177 aplicada (orden 171–177 → 180): la familia no ve personal, credenciales, turnos ni asignaciones
+    // (decisión aprobada en F5); la 180 no debe aflojarlo. Sin la 177 (main + 180) el hogar se comporta como agencia.
+    const strictHome = label === "Hogar" && has177;
+    const rlsOk = strictHome
+      ? rls.users === 1 && rls.credentials === 0 && rls.workers === 0 && rls.memberships === 0 && rls.shifts === 0 && rls.assignments === 0 && rls.visibleWorker === null
+      : rls.users === 1 && rls.credentials === 1 && rls.workers === 1 && rls.memberships === 1 && rls.shifts === 1 && rls.assignments === 1
+        && JSON.stringify(rls.visibleWorker) === JSON.stringify(["Asignada Ficticia"]);
+    check(`${label} R1. Solo familia por RLS: su usuario; ${strictHome ? "nada del personal, turnos ni credenciales (177)" : "del personal solo la asignada (con su credencial); solo turnos y asignaciones de su familiar"}; sin disponibilidad ni otros residentes`,
+      famOnly === true && rlsOk && rls.unavailability === 0 && rls.otherRecipients === 0, { famOnly, strictHome, ...rls });
 
     // ---- Lo que su portal usa ----------------------------------------------------------------------------------------
     const tF = await loginAs(famEmail, org);
@@ -151,11 +159,17 @@ async function main() {
     const sent = conv.body.conversation?.id ? await call("POST", `/organizations/${org}/conversations/${conv.body.conversation.id}/messages`, tF, { body: "Mensaje ficticio" }) : { status: 0 };
     const shift0 = (fsh.body.shifts ?? [])[0];
     const cgName = shift0?.caregiver?.displayName ?? shift0?.caregiverDisplayName ?? JSON.stringify(shift0 ?? {});
-    const portalOk = fsh.status === 200 && JSON.stringify(fsh.body).includes("Asignada Ficticia") && JSON.stringify(fsh.body).includes("expiresAt")
+    const shiftsOk = strictHome
+      ? fsh.status === 200 && Array.isArray(fsh.body.shifts) && fsh.body.shifts.length === 0
+      : fsh.status === 200 && JSON.stringify(fsh.body).includes("Asignada Ficticia") && JSON.stringify(fsh.body).includes("expiresAt");
+    const partsOk = strictHome
+      ? parts.length === 2 && parts.includes(fam) && parts.includes(resolver)
+      : parts.includes(fam) && parts.includes(resolver) && (independent || parts.includes(w1.u)) && !parts.includes(w2.u === w1.u ? "x" : w2.u);
+    const portalOk = shiftsOk
       && tl.status === 200 && JSON.stringify(tl.body).includes("Asignada Ficticia") && inc.status === 200 && JSON.stringify(inc.body).includes("Incidente ficticio")
-      && conv.status === 200 && parts.includes(fam) && parts.includes(resolver) && (independent || parts.includes(w1.u)) && !parts.includes(w2.u === w1.u ? "x" : w2.u) && sent.status === 201;
+      && conv.status === 200 && partsOk && sent.status === 201;
     check(`${label} P1. El portal familiar sigue igual: turnos con la cuidadora asignada y su credencial verificada, historial con autor, incidentes y conversación con la administración (y la cuidadora en su ventana)`,
-      portalOk, { fsh: fsh.status, cgName, tl: tl.status, inc: inc.status, conv: conv.status, parts: parts.length, sent: sent.status });
+      portalOk, { strictHome, fsh: fsh.status, nShifts: (fsh.body.shifts ?? []).length, cgName, tlAuthor: JSON.stringify(tl.body).includes("Asignada Ficticia"), tl: tl.status, inc: inc.status, conv: conv.status, parts: parts.length, sent: sent.status });
 
     // ---- Ninguna ruta GET devuelve marcas ajenas -----------------------------------------------------------------------
     const sentinels: Record<string, string> = {
