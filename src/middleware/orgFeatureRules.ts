@@ -1,6 +1,6 @@
 import { gatePathCandidates } from "./gatePath.js";
 /** Which routes belong to a pilot feature (pure; used by orgFeatureGate). */
-export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS" | "CONTRACTS" | "HOGAR_CALENDARIO" | "HOGAR_PONCHES";
+export type OrgFeature = "SMARTMATCH" | "EN_CAMINO" | "ACTIVITY_PHOTOS" | "FINANZAS" | "FACTURACION" | "SHIFT_REPORTS" | "CONTRACTS" | "HOGAR_CALENDARIO" | "HOGAR_PONCHES" | "HOGAR_ASIGNACIONES";
 
 const UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 // 145: case-insensitive, like Express routing (a path with other capitals must not skip the gate).
@@ -52,6 +52,9 @@ const RULES: { pattern: RegExp; feature: OrgFeature; readableWhenOff?: boolean; 
   { pattern: new RegExp(`^/organizations/(${UUID})/residential/schedule(/|$)`, "i"), feature: "HOGAR_CALENDARIO" },
   // 173–175 (hogares F4): ponches, QR y geocerca.
   { pattern: new RegExp(`^/organizations/(${UUID})/residential/attendance(/|$)`, "i"), feature: "HOGAR_PONCHES" },
+  // 176 (hogares F3): asignación de residentes. La sustitución (/residential/substitutions) exige además HOGAR_CALENDARIO
+  // y la decide su servicio (403 si falta cualquiera de los dos).
+  { pattern: new RegExp(`^/organizations/(${UUID})/residential/assignments(/|$)`, "i"), feature: "HOGAR_ASIGNACIONES" },
 ];
 
 export function gatedFeatureFor(path: string, method = "GET"): { organizationId: string; feature: OrgFeature; readOnlyPass?: boolean } | null {

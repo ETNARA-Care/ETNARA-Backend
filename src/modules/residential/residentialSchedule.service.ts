@@ -82,6 +82,7 @@ type EntryRow = {
   id: string; starts_local: string; ends_local: string; starts_at: string; ends_at: string; required_role: string;
   membership_id: string | null; worker_name: string | null; label: string | null; shift_id: string | null;
   removed_at: string | null; shift_status: string | null; assignment_status: string | null;
+  substitute_name?: string | null; substitution_at?: string | null;
 };
 async function weekEntries(trx: Trx, weekId: string): Promise<EntryRow[]> {
   const r = await sql<EntryRow>`
@@ -91,7 +92,12 @@ async function weekEntries(trx: Trx, weekId: string): Promise<EntryRow[]> {
            e.starts_at, e.ends_at, e.required_role, e.organization_worker_membership_id AS membership_id,
            w.display_name AS worker_name, e.label, e.shift_id, e.removed_at, s.status::text AS shift_status,
            (SELECT a.response_status::text FROM assignments a WHERE a.shift_id = e.shift_id AND a.response_status IN ('pending', 'accepted')
-             ORDER BY a.created_at DESC LIMIT 1) AS assignment_status
+             ORDER BY a.created_at DESC LIMIT 1) AS assignment_status,
+           -- 176 (F3): última sustitución administrativa del turno (quién cubre y desde cuándo).
+           (SELECT sw.display_name FROM shift_substitutions x JOIN organization_worker_memberships sm ON sm.id = x.substitute_membership_id
+              JOIN workers sw ON sw.id = sm.worker_id WHERE x.shift_id = e.shift_id ORDER BY x.created_at DESC LIMIT 1) AS substitute_name,
+           (SELECT to_char(x.effective_at AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') FROM shift_substitutions x WHERE x.shift_id = e.shift_id
+              ORDER BY x.created_at DESC LIMIT 1) AS substitution_at
     FROM schedule_week_shifts e
     LEFT JOIN organization_worker_memberships m ON m.id = e.organization_worker_membership_id
     LEFT JOIN workers w ON w.id = m.worker_id
@@ -109,6 +115,7 @@ const presentEntry = (e: EntryRow) => ({
   requiredRole: e.required_role, membershipId: e.membership_id, workerName: e.worker_name, label: e.label,
   published: e.shift_id !== null, removed: e.removed_at !== null,
   shiftStatus: e.shift_status, assignmentStatus: e.assignment_status,
+  substitution: e.substitute_name ? { substituteName: e.substitute_name, effectiveAt: e.substitution_at ?? null } : null,
 });
 
 export function listScheduleEstablishments(userId: string, organizationId: string) {

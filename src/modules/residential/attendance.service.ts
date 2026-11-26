@@ -547,10 +547,14 @@ export function weekAttendance(userId: string, organizationId: string, locationI
   return manage(userId, organizationId, async (trx) => {
     const est = await establishment(trx, organizationId, locationId);
     const policy = await policyOf(trx, locationId);
-    const rows = (await sql<{ shift_id: string; scheduled_start: string; scheduled_end: string; membership_id: string; worker_name: string | null; shift_status: string }>`
-      SELECT s.id AS shift_id, s.scheduled_start, s.scheduled_end, a.organization_worker_membership_id AS membership_id, w.display_name AS worker_name, s.status::text AS shift_status
+    // 176 (F3): cada persona con su parte del turno (cobertura) cuando hubo una sustitución.
+    const rows = (await sql<{ shift_id: string; scheduled_start: string; scheduled_end: string; membership_id: string; worker_name: string | null; shift_status: string;
+      cov_start: string; cov_end: string }>`
+      SELECT s.id AS shift_id, s.scheduled_start, s.scheduled_end, a.organization_worker_membership_id AS membership_id, w.display_name AS worker_name, s.status::text AS shift_status,
+             c.cov_start, c.cov_end
       FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id AND t.location_id = ${locationId}
       JOIN assignments a ON a.shift_id = s.id AND a.response_status = 'accepted'
+      CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
       JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id JOIN workers w ON w.id = m.worker_id
       WHERE s.organization_id = ${organizationId} AND s.status::text <> 'cancelled'
         AND s.scheduled_start >= (${weekStart}::date::timestamp AT TIME ZONE 'America/Puerto_Rico')
@@ -561,9 +565,12 @@ export function weekAttendance(userId: string, organizationId: string, locationI
       const ps = (await sql<{ id: string; punch_type: PunchType; effective_at: string; effective_status: EffectiveStatus; session_in_punch_id: string | null }>`
         SELECT p.id, p.punch_type, p.effective_at, ${EFFECTIVE} AS effective_status, p.session_in_punch_id FROM attendance_punches p
         WHERE p.shift_id = ${r.shift_id} AND p.organization_worker_membership_id = ${r.membership_id}`.execute(trx)).rows;
-      const a = shiftAttendance({ start: new Date(r.scheduled_start), end: new Date(r.scheduled_end), now, policy,
+      const clipFrom = r.cov_start !== r.scheduled_start && new Date(r.cov_start).getTime() !== new Date(r.scheduled_start).getTime() ? new Date(r.cov_start) : null;
+      const clipTo = new Date(r.cov_end).getTime() !== new Date(r.scheduled_end).getTime() ? new Date(r.cov_end) : null;
+      const a = shiftAttendance({ start: new Date(r.cov_start), end: new Date(r.cov_end), now, policy, clip: { from: clipFrom, to: clipTo },
         punches: ps.map((p) => ({ id: p.id, type: p.punch_type, at: new Date(p.effective_at), status: p.effective_status, sessionInId: p.session_in_punch_id })) });
-      out.push({ shiftId: r.shift_id, scheduledStart: r.scheduled_start, scheduledEnd: r.scheduled_end, membershipId: r.membership_id, workerName: r.worker_name, ...a });
+      out.push({ shiftId: r.shift_id, scheduledStart: r.cov_start, scheduledEnd: r.cov_end, membershipId: r.membership_id, workerName: r.worker_name,
+        substitutedPart: clipFrom !== null || clipTo !== null, ...a });
     }
     return { establishment: { id: est.id, name: est.name }, weekStart, policy, rows: out };
   });

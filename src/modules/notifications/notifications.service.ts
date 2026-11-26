@@ -93,6 +93,11 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "Ponche por revisar";
     case "ATTENDANCE_ALERT":
       return "Alerta de asistencia";
+    // 176 (hogares F3): aviso general de una sustitución, sin motivo, residentes ni datos de salud.
+    case "SHIFT_SUBSTITUTION_ASSIGNED":
+      return "Te asignaron un turno por sustitución";
+    case "SHIFT_SUBSTITUTION_RELEASED":
+      return "Un turno tuyo fue cubierto por sustitución";
     case "SHIFT_ASSIGNMENT_ACCEPTED":
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":

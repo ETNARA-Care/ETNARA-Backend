@@ -29,5 +29,9 @@ a un establecimiento de hogar sin modificar la tabla `shifts` (decisión D2 del 
   F4 (173–175): los ponches solo se registran sobre turnos de la habitación técnica de su establecimiento (guarda de la
   base) y las respuestas de asistencia nunca incluyen su id: hablan del establecimiento.
 - El acceso a residentes nunca sale de la habitación técnica: sale de la asignación de residentes (F3).
+  F3 (176): `shift_resident_assignments` guarda periodos (effective_from/effective_until) por turno de la habitación
+  técnica, persona y residente. `app_worker_has_recipient_assignment` (134) y `app_worker_messaging_window` (132) ganan
+  una rama OR que solo se cumple con una asignación activa AHORA (aceptada, turno no cancelado, membresía activa, dentro
+  de la cobertura recortada por sustituciones); sin las 24 h de gracia en hogares. Fuera de los hogares nada cambia.
 - Verificación: `scripts/verifyResidentialEstablishments171.ts` (V1 busca los identificadores y el centinela en todas
   las respuestas; V2 los conteos de Central).

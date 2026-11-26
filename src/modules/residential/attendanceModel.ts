@@ -116,7 +116,11 @@ export interface ShiftAttendance {
  * como validada si sus dos extremos están validados o justificados; si no, como pendiente. Pausas y alimentos se
  * informan aparte (no se restan: el plan deja fuera los cálculos laborales).
  */
-export function shiftAttendance(input: { start: Date; end: Date; now: Date; policy: Policy; punches: SummaryPunch[] }): ShiftAttendance {
+/**
+ * 176 (F3): `clip` recorta las sesiones a la parte del turno que cubre la persona cuando hubo una sustitución (la
+ * original hasta la hora efectiva, la sustituta desde ella): las horas nunca se duplican y los ponches no cambian.
+ */
+export function shiftAttendance(input: { start: Date; end: Date; now: Date; policy: Policy; punches: SummaryPunch[]; clip?: { from: Date | null; to: Date | null } }): ShiftAttendance {
   const ps = input.punches.filter((p) => p.status !== "not_recognized").sort((a, b) => a.at.getTime() - b.at.getTime() || a.id.localeCompare(b.id));
   const ok = (s: EffectiveStatus) => s === "validated" || s === "justified";
   let validated = 0, pending = 0, breaks = 0, meals = 0, open = false;
@@ -124,7 +128,9 @@ export function shiftAttendance(input: { start: Date; end: Date; now: Date; poli
   for (const i of ins) {
     const out = ps.find((p) => p.type === "out" && (p.sessionInId === i.id || (p.sessionInId === null && p.at > i.at)) );
     if (!out) { open = true; continue; }
-    const minutes = Math.max(0, Math.round((out.at.getTime() - i.at.getTime()) / 60_000));
+    const a = Math.max(i.at.getTime(), input.clip?.from?.getTime() ?? -Infinity);
+    const b = Math.min(out.at.getTime(), input.clip?.to?.getTime() ?? Infinity);
+    const minutes = Math.max(0, Math.round((b - a) / 60_000));
     if (ok(i.status) && ok(out.status)) validated += minutes; else pending += minutes;
   }
   const pair = (startType: PunchType, endType: PunchType) => {

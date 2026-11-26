@@ -489,6 +489,18 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 175
 
+      - name: PostgreSQL 176 residential resident assignments and substitutions F3 (zero residents without assignment and exactly the assigned ones by API and RLS, access switches at the effective time with no overlap on redistribution, cancellation, transfer and substitution, uncovered residents need confirmation, reason and alert, care events and messages only for assigned residents, non-overridable blocks for eligibility and credentials, role, establishment authorization and real overlap, availability is a confirmed warning, reason category without health data, atomic with injected fault, original punches kept and hours never duplicated, notices to both employees and calendar version, switches, isolation, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialAssignments176.ts
+
+      - name: PostgreSQL 176 rollback (schema identical to 175, shared functions restored exactly, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 176
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
