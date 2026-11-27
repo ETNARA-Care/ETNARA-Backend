@@ -477,6 +477,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialScheduleSync172.ts
 
+      - name: PostgreSQL 172 F2 audit scenarios (creating and assigning an individual shift while another admin publishes the same caregiver's week, exact and partial overlaps, both orders, never two shifts or a partial publish; «Mi horario» after accept, edit, cancel, reject, reassign, entry edit/reassign/remove and republish; agencies and independents create shifts as before)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialScheduleScenarios172.ts
+
       - name: PostgreSQL 172 rollback (schema identical to 171, existing rows unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
