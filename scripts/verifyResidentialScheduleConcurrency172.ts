@@ -220,7 +220,7 @@ async function main() {
     await call("POST", `${W(L, wkP)}/entries`, admin1.token, { startsAt: `${wkP}T07:00`, durationMinutes: 480, membershipId: w1.owm });
     const [, mineDuring] = await Promise.all([call("POST", `${W(L, wkP)}/publish`, admin2.token), call("GET", `/organizations/${H}/me/shifts`, w1.token)]);
     const mineAfter = await call("GET", `/organizations/${H}/me/shifts`, w1.token);
-    const starts = (r: { body: Json }) => (r.body.shifts ?? []).map((s: Json) => String(s.scheduledStart ?? s.scheduled_start ?? ""));
+    const starts = (r: { body: Json }): string[] => (r.body.shifts ?? []).map((s: Json) => String(s.scheduledStart ?? s.scheduled_start ?? ""));
     const draftSeen = [...starts(mineDuring), ...starts(mineAfter)].some((s) => s.startsWith(wkD));
     const publishedSeen = starts(mineAfter).some((s) => s.startsWith(wkP));
     const staffTable = await (async () => {
