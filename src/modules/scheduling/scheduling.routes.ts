@@ -21,6 +21,7 @@ import {
   RoomNotInOrgError,
   ResidentialShiftTargetError,
   EstablishmentNotInOrgError,
+  EstablishmentShiftsNotEnabledError,
   WorkerNotLinkedError,
   FamilyMustUseFamilyEndpointError,
 } from "./scheduling.service.js";
@@ -91,6 +92,10 @@ function handleError(err: unknown, res: Response): boolean {
   }
   if (err instanceof EstablishmentNotInOrgError) {
     res.status(400).json({ error: "ESTABLISHMENT_NOT_IN_ORGANIZATION" });
+    return true;
+  }
+  if (err instanceof EstablishmentShiftsNotEnabledError) {
+    res.status(404).json({ error: "FEATURE_NOT_ENABLED" });
     return true;
   }
   if (err instanceof ResidentialShiftTargetError) {

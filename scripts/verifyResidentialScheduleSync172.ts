@@ -1,6 +1,7 @@
 /**
  * 172 · Hogares F2: turnos individuales y calendario semanal sincronizados, y «Mi horario» del cuidador (decisiones de
  * Rafa, 27-nov). Aplicación real por HTTP como app_runtime, datos FICTICIOS, base PROPIA desechable.
+ *   I0     decisión B: «Todo el establecimiento» solo con HOGAR_CALENDARIO encendido (la API también lo exige);
  *   I1–I4  «Crear turno» del establecimiento sin residente; la semana lo muestra (solo lectura), cuenta sus horas y lo
  *          usa en los avisos; publicar nunca duplica; cada turno aparece una sola vez; agencias sin cambios;
  *   I5     asignar un turno individual y publicar uno solapado de la misma persona a la vez: nunca dos solapados;
@@ -140,6 +141,29 @@ async function main() {
     && both.status === 400 && foreign.status === 400 && foreign.body.error === "ESTABLISHMENT_NOT_IN_ORGANIZATION" && agency.status === 400 && agency.body.error === "ESTABLISHMENT_NOT_IN_ORGANIZATION",
     { est: [est.status, est.body.shift?.room_id], both: both.status, foreign: foreign.body, agency: agency.body });
   const estShift = est.body.shift.id as string;
+  // I0. Decisión B (27-nov): «Todo el establecimiento» solo con HOGAR_CALENDARIO encendido; la API no lo permite apagado.
+  {
+    const countAll = async () => (await q<{ n: number }>(`SELECT count(*)::int n FROM shifts WHERE organization_id=$1`, [H])).rows[0].n;
+    await q(`UPDATE organization_features SET enabled=false WHERE organization_id=$1 AND feature_code='HOGAR_CALENDARIO'`, [H]);
+    const before = await countAll();
+    const offEst = await call("POST", `/organizations/${H}/shifts`, admin1.token, { establishmentId: L, scheduledStart: iso(`${plusDays(wk, 4)}T07:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T15:00`) });
+    const offRes = await call("POST", `/organizations/${H}/shifts`, admin1.token, { careRecipientId: resident, scheduledStart: iso(`${plusDays(wk, 4)}T16:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T17:00`) });
+    const offForeign = await call("POST", `/organizations/${H}/shifts`, admin1.token, { establishmentId: randomUUID(), scheduledStart: iso(`${plusDays(wk, 4)}T07:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T15:00`) });
+    const offBoth = await call("POST", `/organizations/${H}/shifts`, admin1.token, { establishmentId: L, careRecipientId: resident, scheduledStart: iso(`${plusDays(wk, 4)}T07:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T15:00`) });
+    const offWorker = await call("POST", `/organizations/${H}/shifts`, w1.token, { establishmentId: L, scheduledStart: iso(`${plusDays(wk, 4)}T07:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T15:00`) });
+    const after = await countAll();
+    const techOff = (await q<{ n: number }>(`SELECT count(*)::int n FROM shifts s JOIN establishment_technical_rooms t ON t.room_id=s.room_id
+      WHERE s.organization_id=$1 AND s.scheduled_start=$2`, [H, iso(`${plusDays(wk, 4)}T07:00`)])).rows[0].n;
+    await q(`UPDATE organization_features SET enabled=true WHERE organization_id=$1 AND feature_code='HOGAR_CALENDARIO'`, [H]);
+    const onEst = await call("POST", `/organizations/${H}/shifts`, admin1.token, { establishmentId: L, scheduledStart: iso(`${plusDays(wk, 4)}T07:00`), scheduledEnd: iso(`${plusDays(wk, 4)}T15:00`) });
+    // Se cancelan los dos turnos de esta prueba para no alterar la semana de las comprobaciones siguientes.
+    for (const id of [onEst.body.shift?.id, offRes.body.shift?.id]) if (id) await call("POST", `/organizations/${H}/shifts/${id}/cancel`, admin1.token, {});
+    check("I0. Con HOGAR_CALENDARIO apagado, «Todo el establecimiento» por la API → 404 FEATURE_NOT_ENABLED y no se crea nada; el turno para una residente sigue igual (201); establecimiento ajeno o con residente → 400; personal sin administración rechazado; al encenderlo → 201",
+      offEst.status === 404 && offEst.body.error === "FEATURE_NOT_ENABLED" && offRes.status === 201 && after === before + 1 && techOff === 0
+      && offForeign.status === 400 && offForeign.body.error === "ESTABLISHMENT_NOT_IN_ORGANIZATION" && offBoth.status === 400
+      && offWorker.status >= 400 && offWorker.status < 500 && onEst.status === 201,
+      { offEst: [offEst.status, offEst.body.error], offRes: offRes.status, before, after, techOff, offForeign: offForeign.body, offBoth: offBoth.status, offWorker: [offWorker.status, offWorker.body.error], onEst: onEst.status });
+  }
   const resShift = (await call("POST", `/organizations/${H}/shifts`, admin1.token, { careRecipientId: resident, scheduledStart: iso(`${plusDays(wk, 1)}T09:00`), scheduledEnd: iso(`${plusDays(wk, 1)}T11:00`) })).body.shift.id as string;
   const asg = await call("POST", `/organizations/${H}/shifts/${estShift}/assignments`, admin1.token, { organizationWorkerMembershipId: w1.owm });
 

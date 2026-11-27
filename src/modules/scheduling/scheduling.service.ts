@@ -55,6 +55,18 @@ export class EstablishmentNotInOrgError extends Error {
   }
 }
 
+/**
+ * 27-nov (decisión B de Rafa): el turno de «Todo el establecimiento» solo existe con HOGAR_CALENDARIO encendido en el
+ * hogar. Apagado, la API responde como el resto de rutas del calendario (404 FEATURE_NOT_ENABLED) y no crea nada; el
+ * turno para una persona residente no cambia.
+ */
+export class EstablishmentShiftsNotEnabledError extends Error {
+  constructor() {
+    super("Establishment shifts require HOGAR_CALENDARIO");
+    this.name = "EstablishmentShiftsNotEnabledError";
+  }
+}
+
 export class ResidentialShiftTargetError extends Error {
   constructor(public readonly code: "RESIDENTIAL_ESTABLISHMENT_CLOSED" | "RESIDENTIAL_ROOM_ARCHIVED") {
     super(code);
@@ -210,6 +222,8 @@ export async function insertShiftInTransaction(
           AND l.archived_at IS NULL AND app_org_is_residential(${organizationId}::uuid) LIMIT 1
       `.execute(trx);
       if (!t.rows[0]) throw new EstablishmentNotInOrgError();
+      const enabled = await sql<{ on: boolean }>`SELECT app_org_feature_enabled(${organizationId}::uuid, 'HOGAR_CALENDARIO') AS on`.execute(trx);
+      if (enabled.rows[0]?.on !== true) throw new EstablishmentShiftsNotEnabledError();
       technicalRoomId = t.rows[0].room_id;
     }
     if (input.careRecipientId) {
