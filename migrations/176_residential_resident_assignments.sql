@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS shift_substitutions (
   CHECK (jsonb_array_length(uncovered) = 0 OR uncovered_confirmed)
 );
 CREATE INDEX IF NOT EXISTS shift_substitutions_shift_idx ON shift_substitutions (shift_id, effective_at);
+-- Una persona se sustituye una sola vez en un turno (27-nov): su cobertura termina en la hora efectiva y nunca hay dos
+-- sustitutas a la vez en su lugar. Para cambiar a la sustituta se sustituye a la sustituta.
+CREATE UNIQUE INDEX IF NOT EXISTS shift_substitutions_original_once_uidx ON shift_substitutions (shift_id, original_membership_id);
 
 CREATE TABLE IF NOT EXISTS shift_resident_assignments (
   id                                uuid PRIMARY KEY DEFAULT gen_random_uuid(),

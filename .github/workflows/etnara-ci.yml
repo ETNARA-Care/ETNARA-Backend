@@ -525,7 +525,7 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 175
 
-      - name: PostgreSQL 176 residential resident assignments and substitutions F3 (zero residents without assignment and exactly the assigned ones by API and RLS, access switches at the effective time with no overlap on redistribution, cancellation, transfer and substitution, uncovered residents need confirmation, reason and alert, care events and messages only for assigned residents, non-overridable blocks for eligibility and credentials, role, establishment authorization and real overlap, availability is a confirmed warning, reason category without health data, atomic with injected fault, original punches kept and hours never duplicated, notices to both employees and calendar version, switches, isolation, agencies unchanged, never 500)
+      - name: PostgreSQL 176 residential resident assignments and substitutions F3 (zero residents without assignment and exactly the assigned ones by API and RLS, access switches at the effective time with no overlap on redistribution, cancellation, transfer and substitution, uncovered residents need confirmation, reason and alert, care events and messages only for assigned residents, non-overridable blocks for eligibility and credentials, role, establishment authorization and real overlap, availability is a confirmed warning, reason category without health data, atomic with injected fault, original punches kept and hours never duplicated, notices to both employees and calendar version, concurrent substitutions and assignments of the same person never overlap and never 500, a person is substituted once per shift, «Mi horario» and punches show each person her part, switches, isolation, agencies unchanged, never 500)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
@@ -536,6 +536,12 @@ jobs:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 176
+
+      - name: PostgreSQL 176 on the production sequence (175 → 180 → 176 gives the same schema as 176 → 180, rolling 176 back leaves production exactly as it is with 180, re-apply identical, 180 objects untouched, only 3 existing functions redefined)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigration176ProductionOrder.ts
 
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:

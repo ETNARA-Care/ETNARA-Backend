@@ -30,6 +30,11 @@ function fail(error: unknown, res: Response, operation: string) {
   if (code) return void res.status(residentialDbErrorStatus(code)).json({ error: code });
   if (error instanceof MembershipNotActiveError) return void res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });
   if (error instanceof InvalidTenantContextError) return void res.status(400).json({ error: "INVALID_ID" });
+  const pg = error as { code?: string; constraint?: string };
+  // Defensa en la base (27-nov): una persona se sustituye una sola vez por turno. El servicio ya lo bloquea antes.
+  if (pg?.code === "23505" && pg.constraint === "shift_substitutions_original_once_uidx") {
+    return void res.status(409).json({ error: "RESIDENTIAL_SUBSTITUTION_BLOCKED", details: { blocks: ["original_not_covering"] } });
+  }
   const e = error as { name?: string; code?: string };
   console.error("resident assignments route failed", { operation, name: e?.name ?? "Error", code: e?.code ?? "UNKNOWN" });
   res.status(500).json({ error: "INTERNAL_ERROR" });

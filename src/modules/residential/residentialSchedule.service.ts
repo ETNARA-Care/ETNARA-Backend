@@ -532,9 +532,9 @@ export function getMyScheduleWeek(userId: string, organizationId: string, weekSt
     if (!worker.rows[0]) throw new ResidentialError("RESIDENTIAL_SCHEDULE_STAFF_ONLY", 403);
     const r = await sql<MyShiftRow>`
       SELECT s.id,
-             to_char(s.scheduled_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
-             to_char(s.scheduled_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
-             s.scheduled_start AS starts_at, s.scheduled_end AS ends_at, s.status::text AS status, a.response_status::text AS assignment_status,
+             to_char(c.cov_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
+             to_char(c.cov_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
+             c.cov_start AS starts_at, c.cov_end AS ends_at, s.status::text AS status, a.response_status::text AS assignment_status,
              COALESCE((SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id),
                       (SELECT l.name FROM rooms r JOIN units u ON u.id = r.unit_id JOIN locations l ON l.id = u.location_id WHERE r.id = s.room_id),
                       (SELECT l.name FROM care_recipients c JOIN locations l ON l.id = c.location_id WHERE c.id = s.care_recipient_id)) AS establishment_name,
@@ -544,12 +544,16 @@ export function getMyScheduleWeek(userId: string, organizationId: string, weekSt
       JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id AND m.status = 'active'
       LEFT JOIN LATERAL app_my_shift_preview(s.id) prev ON true
+      -- 176 (F3): tras una sustitución parcial, cada persona ve SU parte (la original hasta la hora efectiva, la sustituta
+      -- desde ella), igual que en «Ponchar» y en las horas; sin sustitución, la cobertura es el turno entero.
+      CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
       WHERE s.organization_id = ${organizationId}
         AND m.worker_id = ${worker.rows[0].id}
         AND s.status <> 'cancelled'
-        AND s.scheduled_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
-        AND s.scheduled_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
-      ORDER BY s.scheduled_start, s.id`.execute(trx);
+        AND c.cov_end > c.cov_start
+        AND c.cov_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
+        AND c.cov_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
+      ORDER BY c.cov_start, s.id`.execute(trx);
     const shifts = r.rows.map((x) => ({
       shiftId: x.id, startsAt: x.starts_local, endsAt: x.ends_local,
       durationMinutes: Math.round((new Date(x.ends_at).getTime() - new Date(x.starts_at).getTime()) / 60_000),
