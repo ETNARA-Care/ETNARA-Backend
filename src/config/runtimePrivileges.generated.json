@@ -75,6 +75,9 @@
       "SELECT",
       "UPDATE"
     ],
+    "care_recipient_room_events": [
+      "SELECT"
+    ],
     "care_recipients": [
       "INSERT",
       "SELECT",
@@ -151,6 +154,19 @@
       "INSERT",
       "SELECT",
       "UPDATE"
+    ],
+    "establishment_general_units": [
+      "SELECT"
+    ],
+    "establishment_settings": [
+      "SELECT",
+      "UPDATE"
+    ],
+    "establishment_settings_events": [
+      "SELECT"
+    ],
+    "establishment_technical_rooms": [
+      "SELECT"
     ],
     "establishment_worker_assignments": [
       "INSERT",
@@ -387,8 +403,14 @@
     "roles": [
       "SELECT"
     ],
-    "rooms": [
+    "room_profiles": [
+      "INSERT",
       "SELECT"
+    ],
+    "rooms": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
     ],
     "sessions": [
       "INSERT",
@@ -478,7 +500,9 @@
       "UPDATE"
     ],
     "units": [
-      "SELECT"
+      "INSERT",
+      "SELECT",
+      "UPDATE"
     ],
     "user_role_terms_acceptances": [
       "INSERT",
@@ -581,6 +605,7 @@
     "app_is_own_worker_membership",
     "app_is_shift_report_admin",
     "app_is_superadmin",
+    "app_is_technical_room",
     "app_issue_credential_document_download",
     "app_my_confirmed_commitment_overlaps",
     "app_my_message_recipients",
@@ -661,6 +686,8 @@
     "app_record_timesheet_from_checkout",
     "app_rectify_shift_closure",
     "app_reset_credential_review_pending",
+    "app_residential_close_establishment",
+    "app_residential_shift_target_state",
     "app_review_activity_photo",
     "app_revoke_photo_consent",
     "app_role_terms_checkbox_text",

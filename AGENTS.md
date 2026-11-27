@@ -142,6 +142,13 @@ Organization admins may access organization-level operational data according to 
 - Never assume “schema exists” means all migrations are applied.
 - Record applied migrations using the project migration strategy.
 
+## Residential Care Homes (RESIDENTIAL_CARE_HOME)
+- Every residential establishment has a hidden **technical unit and room** (migration 171). It is not a room: it is the
+  anchor that lets a shift belong to an establishment without changing `shifts`.
+- Never return it, count it or place residents in it. Every query on `units`/`rooms` must exclude it. Read
+  `docs/RESIDENTIAL_TECHNICAL_ROOM.md` before touching units, rooms, shifts or occupancy.
+- Residential features are exclusive to RESIDENTIAL_CARE_HOME; agencies and independent providers must not change.
+
 ## Demo / Seed Rules
 - Demo seed logic must be idempotent.
 - Never rely on blind inserts.

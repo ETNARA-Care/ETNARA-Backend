@@ -1,4 +1,5 @@
 import { Router, type Response } from "express";
+import { residentialDbErrorCode } from "../residential/residentialErrors.js";
 import { z } from "zod";
 import {
   createCareRecipient,
@@ -39,6 +40,12 @@ function handleTenantError(err: unknown, res: Response): boolean {
   }
   if (err instanceof RecipientNotFoundError) {
     res.status(404).json({ error: "RECIPIENT_NOT_FOUND" });
+    return true;
+  }
+  // 171: reglas de hogares en la base de datos (habitación técnica, habitación de otro establecimiento, traslados).
+  const residentialCode = residentialDbErrorCode(err);
+  if (residentialCode) {
+    res.status(409).json({ error: residentialCode });
     return true;
   }
   return false;

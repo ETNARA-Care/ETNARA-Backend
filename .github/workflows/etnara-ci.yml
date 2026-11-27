@@ -435,6 +435,30 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 170
 
+      - name: PostgreSQL 171 residential establishments and rooms F1 (General and technical pieces idempotent, technical room never has residents and is protected and invisible, units/rooms writable only by residential managers and never deleted, beds and occupancy, transfers with history, audited geofence, closure with its blocks, three-modality isolation, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialEstablishments171.ts
+
+      - name: PostgreSQL 171 closure concurrency (two app_runtime sessions, both orders; closing while creating a room, placing a resident or creating a shift never leaves a closed establishment with anything active; agencies unchanged)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialClosureConcurrency171.ts
+
+      - name: Residential 171 round trip (apply on 170 data, rollback restores the 170 schema and data exactly, reapply is idempotent, rollback refused once people's data exists)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidential171Rollback.ts
+
+      - name: PostgreSQL 171 rollback (schema identical to 170, existing rows unchanged, automatic pieces removed, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 171 units rooms
+
       - name: PostgreSQL 180 family RLS scope (family-only users in agencies, independents and homes read only their own user, the staff assigned to or recording activities of their family member with their credentials, and only the shifts and assignments of their family member; family portal unchanged; no GET route returns staff contacts, credentials or other residents; multi-role and multi-organization users keep legitimate access; SECURITY DEFINER helpers return only yes or no; never 500)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

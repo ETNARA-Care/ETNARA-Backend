@@ -9,7 +9,8 @@
  *   ETNARA_DISPOSABLE_DB=true MIGRATIONS_DATABASE_URL=postgres://<superuser>@<local>/<db>
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import pg from "pg";
@@ -39,13 +40,19 @@ const ORIGINAL_CODES = ["ACTIVITY_PHOTOS", "CONTRACTS", "EN_CAMINO", "FACTURACIO
 const HOGAR_CODES = ["DEMO_ENVIRONMENT", "HOGAR_ASIGNACIONES", "HOGAR_CALENDARIO", "HOGAR_PONCHES"];
 const DENIED_CODES = ["FACTURACION", "FINANZAS", "SHIFT_REPORTS", "SMARTMATCH"];
 
-async function freshDb(srv: pg.Client, prefix: string) {
+/** maxPrefix: aplica solo hasta esa migración (la reversión de la 170 se prueba sin las que dependen de ella, 171+). */
+async function freshDb(srv: pg.Client, prefix: string, maxPrefix?: number) {
   const name = `${prefix}_${randomBytes(4).toString("hex")}`;
   await srv.query(`CREATE DATABASE ${name}`);
   const u = new URL(serverUrl!); u.pathname = `/${name}`;
   const m = new pg.Client({ connectionString: u.toString() }); await m.connect();
+  let dir = join(process.cwd(), "migrations");
+  if (maxPrefix !== undefined) {
+    dir = mkdtempSync(join(tmpdir(), `etnara-le${maxPrefix}-`));
+    for (const f of readdirSync(join(process.cwd(), "migrations")).filter((f) => /^\d{3}_.*\.sql$/.test(f) && Number(f.slice(0, 3)) <= maxPrefix)) copyFileSync(join(process.cwd(), "migrations", f), join(dir, f));
+  }
   const log = console.log; console.log = () => undefined;
-  try { await applyPendingMigrations(m, join(process.cwd(), "migrations")); } finally { console.log = log; }
+  try { await applyPendingMigrations(m, dir); } finally { console.log = log; }
   return { name, url: u.toString(), client: m };
 }
 
@@ -60,7 +67,7 @@ async function main() {
 
   // ======== Parte 1: reversión e idempotencia, en una base desechable propia ==================================
   {
-    const r = await freshDb(srv, "etnara_h170rb");
+    const r = await freshDb(srv, "etnara_h170rb", 170);
     const c = r.client;
     const applied = (await c.query(`SELECT 1 FROM schema_migrations WHERE filename='170_residential_modality_foundation.sql'`)).rowCount === 1;
     const shapeWith = await shiftsShape(c);
@@ -84,7 +91,11 @@ async function main() {
       applied && gone.f && gone.g && gone.t === 0 && gone.m === 0 && !gone.k.includes("HOGAR") && gone.k.includes("CONTRACTS") && hogarAfter.includes("check constraint"), [gone, hogarAfter]);
     check("R3. La tabla shifts es idéntica con y sin la 170 (columnas, disparadores, políticas y restricciones)", (await shiftsShape(c)) === shapeWith);
     const log = console.log; console.log = () => undefined;
-    try { await applyPendingMigrations(c, join(process.cwd(), "migrations")); } finally { console.log = log; }
+    try {
+      const d170 = mkdtempSync(join(tmpdir(), "etnara-le170r-"));
+      for (const f of readdirSync(join(process.cwd(), "migrations")).filter((f) => /^\d{3}_.*\.sql$/.test(f) && Number(f.slice(0, 3)) <= 170)) copyFileSync(join(process.cwd(), "migrations", f), join(d170, f));
+      await applyPendingMigrations(c, d170);
+    } finally { console.log = log; }
     const sql170 = readFileSync(join(process.cwd(), "migrations/170_residential_modality_foundation.sql"), "utf8");
     let twice = "OK"; try { await c.query(sql170); } catch (e) { twice = (e as Error).message; }
     check("R4. Se vuelve a aplicar tras la reversión y es idempotente (dos veces seguidas sin error)",

@@ -1,5 +1,10 @@
 # ETNARA Agent State
 
+## 2026-11-26 — Hogares F1: preparación final (rama claude/171-hogares-f1, PR #282 en borrador)
+- Actualizada sobre main 9d7e541 (F0 + F0.1, #286): contiene todas sus correcciones.
+- Nuevo scripts/verifyResidential171Rollback.ts (en la CI): la 171 sobre datos de la 170; la reversión sin datos de personas deja el esquema y los datos idénticos a la 170; volver a aplicar es idempotente; con datos de personas la reversión se niega. 8/8.
+- Regresión local: 171 53/53, horas del personal 18/18, 170 40/40, gate 170 20/20, rutas 19/19, 160 41/41, 163 29/29, 164, roles, Gate 7 y Finanzas sin fallos.
+
 ## 2026-11-25 — Hogares F0.1: «Horas del personal» sin facturación (rama claude/170b-hogares-f0-1, PR borrador)
 - Decisión de Rafa (opción A, 25-nov 17:21): en un hogar se conservan registro, aprobación y exportación de horas, tarifa de PAGO del personal y pago ESTIMADO; nunca tarifa de facturación, facturación a familias, deducciones, contribuciones ni nómina.
 - Sin migración. La modalidad la decide la base (app_org_is_residential de la organización de la sesión).
@@ -17,6 +22,14 @@
 - Pruebas: verifyGatePathNormalization 19/19 (en main 8/19; incluye G7 estado contractual y G8 accesos legítimos de administración, supervisora, cuidador y familiar en ambos modos, GET y HEAD), tests/gatePathNormalization.test.ts.
 
 ## Current Status
+
+## 2026-11-25 — 171 Hogares F1: establecimientos, unidades y habitaciones (rama claude/171-hogares-f1, apilada sobre claude/170-hogares-f0; PR en borrador hacia la rama de F0)
+- Migración 171: General, unidad y habitación técnicas idempotentes (ids estables), geocerca (establishment_settings + historial), room_profiles (camas), historial de ubicación de residentes, cierre (app_residential_close_establishment). Guardas en la base: técnica sin residentes ni cambios fuera del cierre; unidades/habitaciones con reglas de archivo; residente en habitación activa de su establecimiento; establecimiento de hogar solo se archiva con el cierre. units/rooms: escritura solo administración de hogares, sin DELETE (antes cualquier miembro podía con SQL directo). Reversión se niega con datos de personas.
+- API /organizations/:id/residential/{establishments,units,rooms,residents,…}; Central excluye las piezas técnicas de sus conteos. Convención: docs/RESIDENTIAL_TECHNICAL_ROOM.md.
+- Pruebas: verifyResidentialEstablishments171 45/45, rollback 171 4/4 (units rooms como referencia), 170 40/40 (su reversión ahora se prueba con migraciones ≤170), npm test 812/812, verificadores de establecimientos, autorización y aislamiento en verde (superusuario y app_runtime).
+- Ronda 25-nov (aprobación de Rafa 07:22): el cierre archiva solo los vínculos del personal con el establecimiento cerrado (establishment_worker/admin_assignments) y guarda sus ids en establishment_closures.archived_worker_link_ids / archived_admin_link_ids; nunca toca membresías, usuarios, credenciales, roles ni vínculos con otros establecimientos (S1–S4). Sin tope de camas (solo entero >= 1; el límite de 20 no estaba aprobado). Traslado entre establecimientos bloqueado con turnos vigentes o futuros (RESIDENTIAL_TRANSFER_ACTIVE_SHIFTS) y contrato para F3 en las pruebas. La General existente se adopta sin modificarla. Rutas genéricas no pueden usar la habitación técnica (care-recipients 409, /shifts 400).
+- Pruebas: verifyResidentialEstablishments171 53/53, rollback 171 4/4, npm test 816/816.
+- Sin fusionar, desplegar ni migrar en producción. No crear las piezas de 171 en los hogares existentes sin autorización (impacto: ops-readonly/hogares-f1-171-impacto-solo-lectura.sql).
 
 ## 2026-11-25 — 164 Fase 1 independientes (rama claude/164-fase1-independientes, PR borrador)
 - Migración 164 (sin tablas): filtro BEFORE INSERT en notifications (en una práctica no se crean los avisos de gestión/turno dirigidos a la propia persona operativa; familia, mensajes y vencimientos igual); app_org_admin_invitation_is_independent(token_hash).
