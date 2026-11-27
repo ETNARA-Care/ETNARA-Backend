@@ -40,6 +40,11 @@ function requireMonday(weekStart: string) {
 }
 
 async function activeEstablishment(trx: Trx, organizationId: string, locationId: string) {
+  // Auditoría F2 (26-nov): bloquea el establecimiento en modo compartido (el mismo bloqueo de la 171 que el cierre toma
+  // en exclusiva). Publicar o editar el calendario y cerrar el establecimiento no pueden cruzarse: si el cierre va
+  // primero, esto espera y ve el establecimiento cerrado; si va después, el cierre espera y ve los turnos creados.
+  const lock = await sql<{ open: boolean | null }>`SELECT app_residential_lock_establishment(${locationId}::uuid) AS open`.execute(trx);
+  if (lock.rows[0]?.open !== true) throw notFound();
   const r = await sql<{ id: string; name: string }>`
     SELECT l.id, l.name FROM locations l
     WHERE l.id = ${locationId} AND l.organization_id = ${organizationId} AND l.archived_at IS NULL`.execute(trx);
