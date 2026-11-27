@@ -5,6 +5,7 @@
  *          que otra administradora publica una semana con una entrada de la misma persona: franja idéntica y solape
  *          parcial, para el establecimiento y para una residente, en los dos órdenes. Nunca dos asignaciones solapadas,
  *          nunca dos turnos de la persona en la franja, la publicación es todo o nada y «Mi horario» muestra uno.
+ *   C4     sin carrera: semana publicada primero y después un turno del establecimiento en la misma franja → 409.
  *   U1–U7  «Mi horario» refleja al momento: aceptar, modificar, cancelar, rechazar, reasignar, editar una entrada y
  *          republicar, quitar una entrada y republicar.
  *   A1–A3  agencias e independientes: crear un turno individual como hasta ahora (residente, asignar, aceptar,
@@ -155,15 +156,15 @@ async function main() {
       const fromIso = iso(`${wkC}T07:00`), toIso = iso(`${wkC}T19:00`);
       const fromCalendar = (await q<{ n: number }>(`SELECT count(*)::int n FROM schedule_week_shifts e JOIN schedule_weeks w ON w.id=e.week_id
         WHERE w.location_id=$1 AND w.week_start=$2 AND e.shift_id IS NOT NULL`, [L, wkC])).rows[0].n;
-      const publications = (await q<{ n: number }>(`SELECT count(*)::int n FROM schedule_publications pb JOIN schedule_weeks w ON w.id=pb.week_id
-        WHERE w.location_id=$1 AND w.week_start=$2`, [L, wkC]).catch(() => ({ rows: [{ n: -1 }] }))).rows[0].n;
+      const publications = (await q<{ n: number }>(`SELECT count(*)::int n FROM schedule_week_publications pb JOIN schedule_weeks w ON w.id=pb.week_id
+        WHERE w.location_id=$1 AND w.week_start=$2`, [L, wkC])).rows[0].n;
       const individualActive = shiftId ? (await activeAssignment(shiftId)).length : -1;
       const m = await mineOf(w1.token, wkC);
       const mineMonday = (m.days as Json[])[0].shiftIds.length;
       const published = p.status === 200, assigned = ca.assign === 201;
       const ok = entry.status === 201 && ca.create === 201 && published !== assigned
         && (await overlapsOf(w1.owm!)) === 0 && (await liveInSlot(w1.owm!, fromIso, toIso)) === 1 && mineMonday === 1
-        && (published ? fromCalendar === 1 && individualActive === 0 : fromCalendar === 0 && (publications === 0 || publications === -1) && individualActive === 1);
+        && (published ? fromCalendar === 1 && publications === 1 && individualActive === 0 : fromCalendar === 0 && publications === 0 && individualActive === 1);
       runs.push({ i, exact, target: forEstablishment ? "establecimiento" : "residente", primero: createFirst ? "crear" : "publicar", gap,
         publicar: p.status, publicarError: p.body.error, asignar: ca.assign, asignarError: ca.error, delCalendario: fromCalendar, publicaciones: publications, mineMonday, ok });
     }
@@ -171,8 +172,25 @@ async function main() {
       runs.filter((r) => r.exact).every((r) => r.ok), runs.filter((r) => r.exact));
     check("C2. Solape parcial 07–15 frente a 11–19 (4 carreras): gana uno; nunca dos asignaciones solapadas",
       runs.filter((r) => !r.exact).every((r) => r.ok), runs.filter((r) => !r.exact));
-    check("C3. La publicación es todo o nada (si pierde, ninguna entrada crea turno) y «Mi horario» muestra un solo turno ese lunes en las 8 carreras; el turno individual que pierde queda sin asignar en «Turnos»",
+    check("C3. La publicación es todo o nada (si pierde, ni turnos ni versión publicada; si gana, una versión y un turno) y «Mi horario» muestra un solo turno ese lunes en las 8 carreras; el turno individual que pierde queda sin asignar en «Turnos»",
       runs.every((r) => r.ok) && runs.every((r) => r.mineMonday === 1), runs.map((r) => ({ i: r.i, publicar: r.publicar, asignar: r.asignar, delCalendario: r.delCalendario, mineMonday: r.mineMonday })));
+  }
+
+  // C4. Orden fijo, sin carrera: la semana se publica primero y después se crea y asigna un turno del establecimiento en
+  // la misma franja (idéntica y parcial) → la asignación se rechaza (409) y queda un solo turno de la persona.
+  {
+    const out: Json[] = []; let ok = true;
+    for (const [k, start] of [["idéntica", "07:00"], ["parcial", "11:00"]] as const) {
+      const wkS = futureMonday(12 + (k === "idéntica" ? 0 : 1));
+      await call("POST", `${W(L, wkS)}/entries`, admin2.token, { startsAt: `${wkS}T${start}`, durationMinutes: 480, membershipId: w1.owm });
+      const p = await call("POST", `${W(L, wkS)}/publish`, admin2.token);
+      const s = await call("POST", `/organizations/${H}/shifts`, admin1.token, { establishmentId: L, scheduledStart: iso(`${wkS}T07:00`), scheduledEnd: iso(`${wkS}T15:00`) });
+      const a = await call("POST", `/organizations/${H}/shifts/${s.body.shift?.id}/assignments`, admin1.token, { organizationWorkerMembershipId: w1.owm });
+      const m = await mineOf(w1.token, wkS);
+      const pass = p.status === 200 && s.status === 201 && a.status === 409 && (m.days as Json[])[0].shiftIds.length === 1 && (await overlapsOf(w1.owm!)) === 0;
+      ok &&= pass; out.push({ k, publicar: p.status, crear: s.status, asignar: [a.status, a.body.error], mine: (m.days as Json[])[0].shiftIds.length });
+    }
+    check("C4. Sin carrera, publicada primero: crear y asignar después un turno del establecimiento en la misma franja (idéntica o parcial) → 409; un solo turno en «Mi horario»", ok, out);
   }
 
   // ---------------------------------------------------------------- U. «Mi horario» se actualiza
