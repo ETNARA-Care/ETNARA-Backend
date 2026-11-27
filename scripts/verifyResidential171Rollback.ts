@@ -47,7 +47,13 @@ async function main() {
   const q = <T extends pg.QueryResultRow = pg.QueryResultRow>(s: string, p: unknown[] = []) => db.query<T>(s, p);
   const all = join(process.cwd(), "migrations");
   const upTo170 = mkdtempSync(join(tmpdir(), "mig170-"));
-  for (const f of readdirSync(all)) if (!f.startsWith("171_")) copyFileSync(join(all, f), join(upTo170, f));
+  // Solo hasta la 170 y hasta la 171: las migraciones posteriores (172…) no forman parte de esta ida y vuelta.
+  const upTo171 = mkdtempSync(join(tmpdir(), "mig171-"));
+  for (const f of readdirSync(all)) {
+    const n = Number(f.slice(0, 3));
+    if (Number.isInteger(n) && n <= 170) copyFileSync(join(all, f), join(upTo170, f));
+    if (Number.isInteger(n) && n <= 171) copyFileSync(join(all, f), join(upTo171, f));
+  }
   try {
     // 1. Hasta la 170, con datos previos ficticios.
     await quiet(() => applyPendingMigrations(db, upTo170));
@@ -69,7 +75,7 @@ async function main() {
     check("P1. Base anterior a la 171 (170 y, si existen, posteriores como la 180) con datos previos ficticios (hogar y agencia)", has170 && !has171 && last === expectedLast && d170.locations === 2 && d170.rooms === 2, [last, expectedLast, d170]);
 
     // 2. Aplicar la 171.
-    await quiet(() => applyPendingMigrations(db, all));
+    await quiet(() => applyPendingMigrations(db, upTo171));
     const d171 = (await q(DATA)).rows[0];
     const auto = (await q<{ general: number; technical: number; settings: number }>(
       `SELECT (SELECT count(*) FROM establishment_general_units)::int general, (SELECT count(*) FROM establishment_technical_rooms)::int technical, (SELECT count(*) FROM establishment_settings)::int settings`)).rows[0];
@@ -90,10 +96,10 @@ async function main() {
 
     // 4. Volver a aplicar la 171 (idempotente).
     let reError = "OK";
-    try { await quiet(() => applyPendingMigrations(db, all)); } catch (e) { reError = (e as Error).message; }
+    try { await quiet(() => applyPendingMigrations(db, upTo171)); } catch (e) { reError = (e as Error).message; }
     const again = (await q<{ general: number; technical: number }>(`SELECT (SELECT count(*) FROM establishment_general_units)::int general, (SELECT count(*) FROM establishment_technical_rooms)::int technical`)).rows[0];
     const before = (await q<{ n: number }>(`SELECT count(*)::int n FROM schema_migrations`)).rows[0].n;
-    await quiet(() => applyPendingMigrations(db, all));
+    await quiet(() => applyPendingMigrations(db, upTo171));
     const after = (await q<{ n: number }>(`SELECT count(*)::int n FROM schema_migrations`)).rows[0].n;
     check("A1. Volver a aplicar la 171 completa y recrea las mismas piezas automáticas", reError === "OK" && again.general === 1 && again.technical === 1, [reError, again]);
     check("A2. Una segunda pasada de migraciones no aplica nada (idempotente)", before === after, [before, after]);
@@ -109,6 +115,7 @@ async function main() {
     check("R4. Con datos de personas, la reversión se niega (ROLLBACK_171_REFUSED) y la 171 sigue completa", refused.includes("ROLLBACK_171_REFUSED") && stillThere, refused);
   } finally {
     rmSync(upTo170, { recursive: true, force: true });
+    rmSync(upTo171, { recursive: true, force: true });
     await db.end();
     await srv.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`); await srv.end();
   }

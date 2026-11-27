@@ -1,5 +1,15 @@
 # ETNARA Agent State
 
+## 2026-11-26 — 172 Hogares F2: calendario semanal (rama claude/172-hogares-f2, apilada sobre claude/171-hogares-f1; PR en borrador)
+- Migración 172: schedule_templates (+ slots), schedule_weeks, schedule_week_shifts (borradores, no son turnos), schedule_week_publications (versionadas, solo añadir). Guardas SECURITY DEFINER (modalidad, establecimiento abierto, entrada publicada, dentro de la semana); RLS solo administración del hogar; política notifications_insert_schedule_week (avisos generales sin residente).
+- Publicar crea turnos reales en la habitación técnica del establecimiento y asigna con assignWorkerToShiftInTransaction (elegibilidad y solape sin cambios; aviso SHIFT_ASSIGNMENT_PENDING). Republicar cancela los turnos de las entradas quitadas. La tabla shifts no cambia.
+- Plantillas (día ISO, hora, duración 15–1440, rol, plazas), copiar semana, horas por persona y por día local (Puerto Rico UTC−4; turnos nocturnos repartidos), avisos de solape y duplicado. Rutas /organizations/:id/residential/schedule/* detrás de HOGAR_CALENDARIO (apagado).
+- Turnos: room_id de la habitación técnica sale null en listShifts, listMyShifts, getShift, crear, editar y cancelar; establishment_name presenta el turno «del establecimiento».
+- verifyResidential171Rollback ahora usa solo migraciones ≤171 (antes copiaba también las posteriores).
+- verifyGatePathNormalization: en una agencia las rutas /residential/… cuentan como cerradas con 403 MODALITY_NOT_AVAILABLE (las cierra residentialGate antes del interruptor), como ya hacía G8.3; el 404 con el interruptor apagado en un hogar lo exige verifyResidentialSchedule172.
+- Pruebas: verifyResidentialSchedule172 28/28, rollback 172 4/4, tests/residentialSchedule172.test.ts, npm test 856/856, manifiesto regenerado; los 90 verificadores de la CI en una base como la de la CI (bootstrap doble): 90/90.
+- Sin fusionar, desplegar ni migrar. F2 queda en borrador hasta validar F1 en producción.
+
 ## 2026-11-26 — Hogares F1: preparación final (rama claude/171-hogares-f1, PR #282 en borrador)
 - Actualizada sobre main 9d7e541 (F0 + F0.1, #286): contiene todas sus correcciones.
 - Nuevo scripts/verifyResidential171Rollback.ts (en la CI): la 171 sobre datos de la 170; la reversión sin datos de personas deja el esquema y los datos idénticos a la 170; volver a aplicar es idempotente; con datos de personas la reversión se niega. 8/8.

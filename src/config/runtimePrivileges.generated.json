@@ -412,6 +412,31 @@
       "SELECT",
       "UPDATE"
     ],
+    "schedule_template_slots": [
+      "DELETE",
+      "INSERT",
+      "SELECT"
+    ],
+    "schedule_templates": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "schedule_week_publications": [
+      "INSERT",
+      "SELECT"
+    ],
+    "schedule_week_shifts": [
+      "DELETE",
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "schedule_weeks": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "sessions": [
       "INSERT",
       "SELECT",
@@ -687,6 +712,7 @@
     "app_rectify_shift_closure",
     "app_reset_credential_review_pending",
     "app_residential_close_establishment",
+    "app_residential_lock_establishment",
     "app_residential_shift_target_state",
     "app_review_activity_photo",
     "app_revoke_photo_consent",

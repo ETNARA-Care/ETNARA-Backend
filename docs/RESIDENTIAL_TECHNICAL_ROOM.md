@@ -23,6 +23,9 @@ a un establecimiento de hogar sin modificar la tabla `shifts` (decisión D2 del 
   `app_is_technical_unit()` / `app_is_technical_room()`.
 - Nunca mostrarla en los portales, ni en Central, ni en exportaciones.
 - Los turnos que la usan (F2 en adelante) se presentan como «del establecimiento».
+  F2 (172): el calendario semanal publica sus turnos en ella. Las respuestas de turnos devuelven `room_id` null cuando
+  es la técnica y `establishment_name` con el nombre del establecimiento (`scheduling.service.ts`); la verificación S23
+  de `scripts/verifyResidentialSchedule172.ts` busca su id en todas las respuestas.
 - El acceso a residentes nunca sale de la habitación técnica: sale de la asignación de residentes (F3).
 - Verificación: `scripts/verifyResidentialEstablishments171.ts` (V1 busca los identificadores y el centinela en todas
   las respuestas; V2 los conteos de Central).
