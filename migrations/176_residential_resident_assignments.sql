@@ -107,11 +107,12 @@ CREATE INDEX IF NOT EXISTS shift_coverage_alerts_open_idx ON shift_coverage_aler
 -- Sin sustituciones: el turno entero. Si sustituyó a alguien: desde la hora efectiva. Si la sustituyeron: hasta la
 -- hora efectiva. Es la base del «solape real» (turnos nocturnos, cambios de fecha y sustituciones parciales), del
 -- acceso a residentes y de que las horas no se dupliquen.
-CREATE OR REPLACE FUNCTION public.app_residential_coverage_bounds(p_shift_id uuid, p_membership_id uuid)
+-- Cálculo interno, SIN permiso para app_runtime: solo lo usan las funciones SECURITY DEFINER de esta migración (que ya
+-- limitan a la organización de la sesión y a quién pregunta) y nunca se expone directamente (auditoría 27-nov).
+CREATE OR REPLACE FUNCTION public.app_residential_coverage_bounds_internal(p_shift_id uuid, p_membership_id uuid)
 RETURNS TABLE (cov_start timestamptz, cov_end timestamptz)
 LANGUAGE sql
 STABLE
-SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
   SELECT GREATEST(s.scheduled_start, COALESCE((SELECT max(x.effective_at) FROM shift_substitutions x
@@ -119,6 +120,26 @@ AS $$
          LEAST(s.scheduled_end, COALESCE((SELECT min(x.effective_at) FROM shift_substitutions x
                                           WHERE x.shift_id = s.id AND x.original_membership_id = p_membership_id), s.scheduled_end))
   FROM shifts s WHERE s.id = p_shift_id
+$$;
+REVOKE ALL ON FUNCTION public.app_residential_coverage_bounds_internal(uuid, uuid) FROM PUBLIC;
+
+-- La que usa la aplicación: responde SOLO si el turno y la membresía son de la organización de la sesión y quien
+-- pregunta es su administración (ORGANIZATION_ADMIN o SUPERVISOR) o la propia persona (membresía activa suya). En
+-- cualquier otro caso no devuelve nada: ni otra organización, ni compañeras, ni sin contexto (auditoría 27-nov).
+CREATE OR REPLACE FUNCTION public.app_residential_coverage_bounds(p_shift_id uuid, p_membership_id uuid)
+RETURNS TABLE (cov_start timestamptz, cov_end timestamptz)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT b.cov_start, b.cov_end
+  FROM shifts s
+  JOIN organization_worker_memberships m ON m.id = p_membership_id AND m.organization_id = s.organization_id
+  CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, m.id) b
+  WHERE s.id = p_shift_id
+    AND s.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+    AND (public.app_is_org_manager() OR public.app_is_own_worker_membership(p_membership_id))
 $$;
 REVOKE ALL ON FUNCTION public.app_residential_coverage_bounds(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_residential_coverage_bounds(uuid, uuid) TO app_runtime;
@@ -135,7 +156,7 @@ AS $$
   SELECT public.app_is_org_manager() AND EXISTS (
     SELECT 1 FROM assignments a
     JOIN shifts s ON s.id = a.shift_id AND s.organization_id = a.organization_id
-    CROSS JOIN LATERAL public.app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
+    CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, a.organization_worker_membership_id) c
     WHERE a.organization_worker_membership_id = p_membership_id
       AND a.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
       AND a.response_status IN ('pending', 'accepted')
@@ -197,7 +218,7 @@ BEGIN
                  AND cr.location_id = NEW.location_id AND cr.status = 'active') THEN
     RAISE EXCEPTION 'RESIDENTIAL_ASSIGNMENT_RESIDENT_NOT_HERE' USING ERRCODE = 'P0001';
   END IF;
-  SELECT * INTO v_cov FROM public.app_residential_coverage_bounds(NEW.shift_id, NEW.organization_worker_membership_id);
+  SELECT * INTO v_cov FROM public.app_residential_coverage_bounds_internal(NEW.shift_id, NEW.organization_worker_membership_id);
   IF NEW.effective_from < v_cov.cov_start OR NEW.effective_from >= v_cov.cov_end THEN
     RAISE EXCEPTION 'RESIDENTIAL_ASSIGNMENT_OUTSIDE_COVERAGE' USING ERRCODE = 'P0001';
   END IF;
@@ -324,7 +345,7 @@ AS $$
     JOIN organization_worker_memberships m ON m.id = x.organization_worker_membership_id AND m.status = 'active'
     JOIN workers w ON w.id = m.worker_id AND w.user_id = p_user_id
     JOIN organization_memberships om ON om.user_id = p_user_id AND om.organization_id = x.organization_id AND om.status = 'active'
-    CROSS JOIN LATERAL public.app_residential_coverage_bounds(s.id, x.organization_worker_membership_id) c
+    CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, x.organization_worker_membership_id) c
     WHERE x.organization_id = p_organization_id
       AND x.care_recipient_id = p_care_recipient_id
       AND s.status::text <> 'cancelled'
@@ -369,7 +390,7 @@ AS $$
             JOIN shifts s ON s.id = x.shift_id
             JOIN organization_worker_memberships m ON m.id = x.organization_worker_membership_id AND m.status = 'active'
             JOIN workers w ON w.id = m.worker_id AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
-            CROSS JOIN LATERAL public.app_residential_coverage_bounds(s.id, x.organization_worker_membership_id) c
+            CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, x.organization_worker_membership_id) c
            WHERE x.shift_id = p_shift_id AND x.care_recipient_id = p_care_recipient_id
              AND x.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
              AND s.status::text <> 'cancelled'
@@ -508,7 +529,7 @@ AS $$
   JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id AND m.status = 'active'
   JOIN workers w ON w.id = m.worker_id
   LEFT JOIN establishment_settings es ON es.location_id = l.id
-  CROSS JOIN LATERAL public.app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) cov
+  CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, a.organization_worker_membership_id) cov
   WHERE cov.cov_end > cov.cov_start
     AND s.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
     AND w.user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid

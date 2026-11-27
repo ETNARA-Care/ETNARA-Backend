@@ -355,8 +355,8 @@ async function main() {
   const overlapsOf = async (p: P) => (await q<{ n: number }>(`
     SELECT count(*)::int n FROM assignments a1 JOIN assignments a2 ON a2.organization_worker_membership_id = a1.organization_worker_membership_id AND a2.id > a1.id
     JOIN shifts s1 ON s1.id = a1.shift_id JOIN shifts s2 ON s2.id = a2.shift_id
-    CROSS JOIN LATERAL app_residential_coverage_bounds(s1.id, a1.organization_worker_membership_id) c1
-    CROSS JOIN LATERAL app_residential_coverage_bounds(s2.id, a2.organization_worker_membership_id) c2
+    CROSS JOIN LATERAL app_residential_coverage_bounds_internal(s1.id, a1.organization_worker_membership_id) c1
+    CROSS JOIN LATERAL app_residential_coverage_bounds_internal(s2.id, a2.organization_worker_membership_id) c2
     WHERE a1.organization_worker_membership_id = $1 AND a1.response_status IN ('pending','accepted') AND a2.response_status IN ('pending','accepted')
       AND s1.status::text <> 'cancelled' AND s2.status::text <> 'cancelled' AND c1.cov_start < c2.cov_end AND c2.cov_start < c1.cov_end`, [p.owm])).rows[0].n;
   // K1. La misma sustituta a la vez en dos turnos solapados de dos establecimientos (cerrojos por turno distintos).
@@ -407,7 +407,7 @@ async function main() {
     const second = await subst(adminH, sA, a, y, { effectiveAt: at(30) });
     const subs = (await q<{ n: number }>(`SELECT count(*)::int n FROM shift_substitutions WHERE shift_id=$1`, [sA])).rows[0].n;
     // Nunca dos personas cubriendo a la vez el lugar de la original.
-    const both = (await q<{ n: number }>(`SELECT count(*)::int n FROM app_residential_coverage_bounds($1,$2) cx, app_residential_coverage_bounds($1,$3) cy
+    const both = (await q<{ n: number }>(`SELECT count(*)::int n FROM app_residential_coverage_bounds_internal($1,$2) cx, app_residential_coverage_bounds_internal($1,$3) cy
       WHERE cx.cov_start < cy.cov_end AND cy.cov_start < cx.cov_end AND cx.cov_end > cx.cov_start AND cy.cov_end > cy.cov_start
         AND EXISTS (SELECT 1 FROM assignments WHERE shift_id=$1 AND organization_worker_membership_id=$3 AND response_status='accepted')`, [sA, x.owm, y.owm])).rows[0].n;
     check("K3b. Una persona ya sustituida en un turno no se sustituye otra vez (ni con una hora anterior): 409 «ya no cubre», una sola sustitución y nunca dos sustitutas a la vez",
@@ -451,6 +451,33 @@ async function main() {
       && aSees.endsAt === local(T) && xSees.startsAt === local(T)
       && !!aPunch && !!xPunch && t(aPunch.scheduledEnd) === t(T) && t(xPunch.scheduledStart) === t(T),
       { T, aSees, xSees, cSees: !!cSees, ySees: !!ySees, aPunch: aPunch && [aPunch.scheduledStart, aPunch.scheduledEnd], xPunch: xPunch && [xPunch.scheduledStart, xPunch.scheduledEnd] });
+  }
+  // C3 (27-nov, auditoría GPT). app_residential_coverage_bounds llamada directamente como app_runtime: solo responde con
+  // turno y membresía de la organización de la sesión, y solo a su administración o a la propia persona.
+  {
+    const asUser = async (s: string, p: readonly unknown[], who: P | null, orgId: string | null) => {
+      await rtClient.query("BEGIN");
+      if (who) await rtClient.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [who.userId, orgId]);
+      try { return (await rtClient.query(s, [...p])).rowCount ?? 0; } catch (e) { return (e as Error).message; } finally { await rtClient.query("ROLLBACK"); }
+    };
+    const cov = (shiftId: string, owm: string) => [`SELECT * FROM app_residential_coverage_bounds($1,$2)`, [shiftId, owm]] as const;
+    const r = {
+      companeraVeLaDeOtra: await asUser(...cov(S1, w.w1.owm!), w.w2, H),
+      propia: await asUser(...cov(S1, w.w2.owm!), w.w2, H),
+      adminPropioHogar: await asUser(...cov(S1, w.w1.owm!), adminH, H),
+      adminOtroHogarConSuOrg: await asUser(...cov(S1, w.w1.owm!), adminH2, H2),
+      adminOtroHogarDiciendoOrgAjena: await asUser(...cov(S1, w.w1.owm!), adminH2, H),
+      adminMembresiaDeOtraOrg: await asUser(...cov(S1, wH2.owm!), adminH, H),
+      adminTurnoDeOtraOrg: await asUser(...cov(SH2, wH2.owm!), adminH, H),
+      personalDeOtroHogar: await asUser(...cov(S1, w.w1.owm!), wH2, H2),
+      agencia: await asUser(...cov(S1, w.w1.owm!), adminA, A),
+      sinContexto: await asUser(...cov(S1, w.w1.owm!), null, null),
+      internaDirecta: await asUser(`SELECT * FROM app_residential_coverage_bounds_internal($1,$2)`, [S1, w.w1.owm], adminH, H),
+    };
+    check("C3. Cobertura llamada directamente como app_runtime: la propia persona y la administración de su hogar sí; una compañera, otro hogar (con su organización o diciendo la ajena), membresía o turno de otra organización, agencia o sin contexto: nada; la función interna no se puede llamar",
+      r.propia === 1 && r.adminPropioHogar === 1 && r.companeraVeLaDeOtra === 0 && r.adminOtroHogarConSuOrg === 0 && r.adminOtroHogarDiciendoOrgAjena === 0
+      && r.adminMembresiaDeOtraOrg === 0 && r.adminTurnoDeOtraOrg === 0 && r.personalDeOtroHogar === 0 && r.agencia === 0 && r.sinContexto === 0
+      && typeof r.internaDirecta === "string" && /permission denied/.test(r.internaDirecta), r);
   }
 
   // ---- Agencias sin cambios y respuestas --------------------------------------------------------------------------------------
