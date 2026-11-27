@@ -192,6 +192,50 @@ async function main() {
   check("P4. Descanso y salida con el código de 6 dígitos → validados y ligados a la sesión; un fin de descanso sin descanso abierto → orden imposible, pendiente",
     bs.body.punch?.validation.initial === "validated" && be.body.punch?.validation.initial === "validated" && out1.body.punch?.validation.initial === "validated"
     && be2.body.punch?.validation.initial === "pending_review" && be2.body.punch.flags.includes("impossible_order"), [bs.body, be2.body, out1.body]);
+  // P5 (27-nov). Concurrencia: el teléfono reenvía el mismo ponche a la vez (cola sin conexión + reintento) y la misma
+  // persona entra dos veces a la vez desde dos pantallas. Nunca un 500, un solo ponche y una sola sesión abierta.
+  {
+    const w4 = await person(H, "w4", ["WORKER"], true), w5 = await person(H, "w5", ["WORKER"], true);
+    const S4 = await shift(H, L, -30, 450, [w4]), S5 = await shift(H, L, -30, 450, [w5]);
+    const same = punchBody(S4, "in", { method: "pin", pin: PIN, location: INSIDE });
+    const sameRuns = await Promise.all(Array.from({ length: 6 }, () => call("POST", `${AT(H)}/me/punch`, w4.token, same)));
+    const sameRows = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND client_event_id=$2`, [w4.userId, same.clientEventId])).rows[0].n;
+    const sameIds = new Set(sameRuns.map((r) => r.body.punch?.id));
+    // La salida y el descanso no tienen «sesión abierta» que devolver: es donde el reenvío simultáneo podía fallar.
+    const sameOut = punchBody(S4, "out", { method: "pin", pin: PIN, location: INSIDE });
+    const outRuns = await Promise.all(Array.from({ length: 6 }, () => call("POST", `${AT(H)}/me/punch`, w4.token, sameOut)));
+    const outRows = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND client_event_id=$2`, [w4.userId, sameOut.clientEventId])).rows[0].n;
+    const outIds = new Set(outRuns.map((r) => r.body.punch?.id));
+    const diffRuns = await Promise.all(Array.from({ length: 6 }, () => call("POST", `${AT(H)}/me/punch`, w5.token, punchBody(S5, "in", { method: "pin", pin: PIN, location: INSIDE }))));
+    const diffIn = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND shift_id=$2 AND punch_type='in'`, [w5.userId, S5])).rows[0].n;
+    // El descanso usa la sesión abierta por esas entradas.
+    const sameBreak = punchBody(S5, "break_start", { method: "pin", pin: PIN, location: INSIDE });
+    const brRuns = await Promise.all(Array.from({ length: 6 }, () => call("POST", `${AT(H)}/me/punch`, w5.token, sameBreak)));
+    const brRows = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND client_event_id=$2`, [w5.userId, sameBreak.clientEventId])).rows[0].n;
+    // Cliente defectuoso: el mismo client_event_id para dos turnos distintos a la vez (bloqueos distintos) → un ponche;
+    // el otro envío devuelve ese mismo ponche (200) o un conflicto del cliente (409), nunca un 500.
+    const S4b = await shift(H, L, 500, 900, [w4]);
+    const crossOut: Json[] = []; let crossRows = 0;
+    for (let i = 0; i < 3; i++) {
+      const id = randomUUID();
+      const r = await Promise.all([
+        call("POST", `${AT(H)}/me/punch`, w4.token, { ...punchBody(S4, "break_start", { method: "pin", pin: PIN, location: INSIDE }), clientEventId: id }),
+        call("POST", `${AT(H)}/me/punch`, w4.token, { ...punchBody(S4b, "in", { method: "pin", pin: PIN, location: INSIDE }), clientEventId: id }),
+      ]);
+      crossRows += (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND client_event_id=$2`, [w4.userId, id])).rows[0].n;
+      crossOut.push(r.map((x) => [x.status, x.body.error ?? null]));
+    }
+    const crossOk = crossRows === 3 && crossOut.every((pair) => (pair as [number, string | null][]).filter(([st]) => st === 201).length === 1
+      && (pair as [number, string | null][]).every(([st, er]) => st === 201 || st === 200 || (st === 409 && er === "ATTENDANCE_DUPLICATE_EVENT")));
+    const okRuns = (runs: { status: number }[]) => runs.every((r) => r.status === 200 || r.status === 201) && runs.filter((r) => r.status === 201).length === 1;
+    const diffIds = new Set(diffRuns.map((r) => r.body.punch?.id));
+    check("P5. Concurrencia: 6 envíos simultáneos del mismo ponche (entrada, salida y descanso) → nunca un 500, un solo ponche y todos devuelven el mismo; 6 entradas simultáneas distintas de la misma persona → una sola entrada y una sola sesión; el mismo identificador para dos turnos a la vez → un ponche y 200/409, nunca 500",
+      okRuns(sameRuns) && sameRows === 1 && sameIds.size === 1 && okRuns(outRuns) && outRows === 1 && outIds.size === 1
+      && okRuns(brRuns) && brRows === 1 && new Set(brRuns.map((r) => r.body.punch?.id)).size === 1
+      && diffRuns.every((r) => r.status === 200 || r.status === 201) && diffIn === 1 && diffIds.size === 1 && crossOk,
+      { crossOut, crossRows, same: sameRuns.map((r) => [r.status, r.body.error]), sameRows, out: outRuns.map((r) => [r.status, r.body.error]), outRows,
+        brk: brRuns.map((r) => [r.status, r.body.error]), brRows, diffs: diffRuns.map((r) => [r.status, r.body.error]), diffIn });
+  }
 
   // ---- Ubicación: fuera, precisión baja, sin consentimiento; sin coordenadas guardadas ----------------------------------
   const outIn = await call("POST", `${AT(H)}/me/punch`, w2.token, punchBody(S1, "in", { method: "qr", qr: QR, location: OUTSIDE }));

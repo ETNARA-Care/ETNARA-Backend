@@ -301,6 +301,12 @@ export function punch(userId: string, organizationId: string, input: z.infer<typ
     }
 
     await sql`SELECT pg_advisory_xact_lock(hashtext(${`attendance-punch:${userId}:${input.shiftId}`}))`.execute(trx);
+    // 27-nov: se repite la comprobación de idempotencia ya con el bloqueo. Si el teléfono envió el mismo ponche dos veces
+    // a la vez (cola sin conexión + reintento), el segundo envío espera al primero y devuelve el ponche ya registrado
+    // en lugar de chocar con el índice único (antes, un 500 en salidas y descansos).
+    const priorLocked = await sql<PunchRow & { effective_status: string }>`SELECT ${PUNCH_COLS}, ${EFFECTIVE} AS effective_status FROM attendance_punches p
+      WHERE p.organization_id = ${organizationId} AND p.user_id = ${userId} AND p.client_event_id = ${input.clientEventId}`.execute(trx);
+    if (priorLocked.rows[0]) return { blocked: false, duplicate: true, punch: presentPunch(priorLocked.rows[0]) };
     const offline = input.offline;
     const effectiveAt = offline ? new Date(input.declaredAt!) : now;
     const code = await evaluateCode(trx, organizationId, shift.location_id, effectiveAt, input);
