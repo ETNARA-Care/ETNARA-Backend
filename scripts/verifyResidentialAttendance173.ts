@@ -43,6 +43,14 @@ const INSIDE = { latitude: 18.401534, longitude: -66.051234, accuracy: 15 };    
 const OUTSIDE = { latitude: 18.409876, longitude: -66.051234, accuracy: 12 };    // ≈ 960 m
 const FUZZY = { latitude: 18.401300, longitude: -66.051200, accuracy: 450 };     // precisión baja
 
+// Z5 (27-nov): todo lo que la aplicación escribe en la consola se guarda para comprobar que nunca aparecen QR, códigos
+// de 6 dígitos ni coordenadas en los registros.
+const consoleLines: string[] = [];
+for (const m of ["log", "info", "warn", "error", "debug"] as const) {
+  const orig = console[m].bind(console);
+  console[m] = (...a: unknown[]) => { try { consoleLines.push(a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ")); } catch { /* */ } orig(...a); };
+}
+
 async function main() {
   const srv = new pg.Client({ connectionString: serverUrl }); await srv.connect();
   const dbName = `etnara_att_${randomBytes(4).toString("hex")}`;
@@ -218,18 +226,17 @@ async function main() {
     const crossOut: Json[] = []; let crossRows = 0;
     for (let i = 0; i < 3; i++) {
       const id = randomUUID();
-      const r = await Promise.all([
-        call("POST", `${AT(H)}/me/punch`, w4.token, { ...punchBody(S4, "break_start", { method: "pin", pin: PIN, location: INSIDE }), clientEventId: id }),
-        call("POST", `${AT(H)}/me/punch`, w4.token, { ...punchBody(S4b, "in", { method: "pin", pin: PIN, location: INSIDE }), clientEventId: id }),
-      ]);
+      const reqs = [{ shift: S4, type: "break_start" }, { shift: S4b, type: "in" }];
+      const r = await Promise.all(reqs.map((x) => call("POST", `${AT(H)}/me/punch`, w4.token, { ...punchBody(x.shift, x.type, { method: "pin", pin: PIN, location: INSIDE }), clientEventId: id })));
       crossRows += (await q(`SELECT count(*)::int n FROM attendance_punches WHERE user_id=$1 AND client_event_id=$2`, [w4.userId, id])).rows[0].n;
-      crossOut.push(r.map((x) => [x.status, x.body.error ?? null]));
+      // 200 solo si devuelve un ponche de ESE turno y ESE tipo (p. ej. la sesión ya abierta en S4b): nunca otro turno o tipo.
+      crossOut.push(r.map((x, i) => [x.status, x.body.error ?? null, x.status === 200 ? (x.body.punch?.shiftId === reqs[i].shift && x.body.punch?.type === reqs[i].type) : null]));
     }
-    const crossOk = crossRows === 3 && crossOut.every((pair) => (pair as [number, string | null][]).filter(([st]) => st === 201).length === 1
-      && (pair as [number, string | null][]).every(([st, er]) => st === 201 || st === 200 || (st === 409 && er === "ATTENDANCE_DUPLICATE_EVENT")));
+    const crossOk = crossRows === 3 && crossOut.every((pair) => (pair as [number, string | null, boolean | null][]).filter(([st]) => st === 201).length === 1
+      && (pair as [number, string | null, boolean | null][]).every(([st, er, match]) => st === 201 || (st === 409 && er === "ATTENDANCE_DUPLICATE_EVENT") || (st === 200 && match === true)));
     const okRuns = (runs: { status: number }[]) => runs.every((r) => r.status === 200 || r.status === 201) && runs.filter((r) => r.status === 201).length === 1;
     const diffIds = new Set(diffRuns.map((r) => r.body.punch?.id));
-    check("P5. Concurrencia: 6 envíos simultáneos del mismo ponche (entrada, salida y descanso) → nunca un 500, un solo ponche y todos devuelven el mismo; 6 entradas simultáneas distintas de la misma persona → una sola entrada y una sola sesión; el mismo identificador para dos turnos a la vez → un ponche y 200/409, nunca 500",
+    check("P5. Concurrencia: 6 envíos simultáneos del mismo ponche (entrada, salida y descanso) → nunca un 500, un solo ponche y todos devuelven el mismo; 6 entradas simultáneas distintas de la misma persona → una sola entrada y una sola sesión; el mismo identificador para dos turnos a la vez → un ponche y 409 (o la sesión ya abierta de ESE turno), nunca otro turno ni un 500",
       okRuns(sameRuns) && sameRows === 1 && sameIds.size === 1 && okRuns(outRuns) && outRows === 1 && outIds.size === 1
       && okRuns(brRuns) && brRows === 1 && new Set(brRuns.map((r) => r.body.punch?.id)).size === 1
       && diffRuns.every((r) => r.status === 200 || r.status === 201) && diffIn === 1 && diffIds.size === 1 && crossOk,
@@ -422,6 +429,88 @@ async function main() {
     longNow.created >= 2 && longAgain.created === 0 && job1.created === 0 && job2.created === 0 && h3codes === 0 && h2codes === 2
     && avail === h2Available && availTotal === avail && avail >= 1 && job1.notified === 0 && job2.notified === 0 && before >= 4, { longNow, job1, job2, h3codes, h2codes, avail, h2Available });
 
+  // ---- 27-nov · Auditoría GPT (B y C) -------------------------------------------------------------------------------
+  const adminHb = await person(H, "admin-hb", ["ORGANIZATION_ADMIN"]);
+  const L3 = await loc(H, "Casa Intentos");
+  const fresh = async (key: string, l: string) => { const w = await person(H, key, ["WORKER"], true); return { w, s: await shift(H, l, -30, 450, [w]) }; };
+  const PIN2 = reprint.body.print?.pin as string;
+  // P6. El mismo client_event_id para OTRO turno u OTRO tipo es un conflicto (409), nunca «el ponche anterior» (200).
+  {
+    const a = await fresh("w-p6a", L), b = await fresh("w-p6b", L);
+    const X = randomUUID();
+    const first = await call("POST", `${AT(H)}/me/punch`, a.w.token, { ...punchBody(a.s, "in", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: X });
+    const sameAgain = await call("POST", `${AT(H)}/me/punch`, a.w.token, { ...punchBody(a.s, "in", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: X });
+    const otherType = await call("POST", `${AT(H)}/me/punch`, a.w.token, { ...punchBody(a.s, "out", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: X });
+    const a2 = await shift(H, L, 500, 900, [a.w]);
+    const otherShift = await call("POST", `${AT(H)}/me/punch`, a.w.token, { ...punchBody(a2, "in", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: X });
+    // Simultáneos: mismo identificador con otro tipo (mismo turno) y con otro turno.
+    const Y = randomUUID(), Z = randomUUID();
+    const b2 = await shift(H, L, 500, 900, [b.w]);
+    await call("POST", `${AT(H)}/me/punch`, b.w.token, punchBody(b.s, "in", { method: "pin", pin: PIN2, location: INSIDE }));
+    const simType = await Promise.all([
+      call("POST", `${AT(H)}/me/punch`, b.w.token, { ...punchBody(b.s, "break_start", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: Y }),
+      call("POST", `${AT(H)}/me/punch`, b.w.token, { ...punchBody(b.s, "out", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: Y })]);
+    const simShift = await Promise.all([
+      call("POST", `${AT(H)}/me/punch`, b.w.token, { ...punchBody(b.s, "meal_start", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: Z }),
+      call("POST", `${AT(H)}/me/punch`, b.w.token, { ...punchBody(b2, "in", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: Z })]);
+    const conflictPair = (pair: { status: number; body: Json }[]) => pair.filter((r) => r.status === 201).length === 1
+      && pair.filter((r) => r.status === 409 && r.body.error === "ATTENDANCE_DUPLICATE_EVENT").length === 1;
+    const rowsOf = async (id: string) => (await q(`SELECT count(*)::int n FROM attendance_punches WHERE client_event_id=$1`, [id])).rows[0].n;
+    check("P6. El mismo identificador para OTRO tipo u OTRO turno → 409 ATTENDANCE_DUPLICATE_EVENT (seguidos y simultáneos), nunca el ponche anterior como si fuera el nuevo; el mismo ponche repetido → 200 con el mismo",
+      first.status === 201 && sameAgain.status === 200 && sameAgain.body.punch?.id === first.body.punch?.id
+      && otherType.status === 409 && otherType.body.error === "ATTENDANCE_DUPLICATE_EVENT" && otherShift.status === 409 && otherShift.body.error === "ATTENDANCE_DUPLICATE_EVENT"
+      && conflictPair(simType) && conflictPair(simShift) && (await rowsOf(X)) === 1 && (await rowsOf(Y)) === 1 && (await rowsOf(Z)) === 1,
+      { first: first.status, sameAgain: [sameAgain.status, sameAgain.body.punch?.type], otherType: [otherType.status, otherType.body.error, otherType.body.punch?.type],
+        otherShift: [otherShift.status, otherShift.body.error], simType: simType.map((r) => [r.status, r.body.error, r.body.punch?.type]), simShift: simShift.map((r) => [r.status, r.body.error, r.body.punch?.shiftId === b2 ? "b2" : "b"]) });
+  }
+  // K4. Intentos incorrectos simultáneos: el límite (5 por persona y 30 por establecimiento cada 15 min) no se rebasa a la vez.
+  {
+    const x = await fresh("w-k4", L3);
+    const wrong = (who: { w: P; s: string }) => call("POST", `${AT(H)}/me/punch`, who.w.token, punchBody(who.s, "in", { method: "pin", pin: String(100000 + Math.floor(Math.random() * 899999)), location: INSIDE }));
+    const burst = await Promise.all(Array.from({ length: 12 }, () => wrong(x)));
+    const userFailed = (await q(`SELECT count(*)::int n FROM attendance_code_attempts WHERE user_id=$1 AND outcome NOT IN ('current','transition','blocked')`, [x.w.userId])).rows[0].n;
+    const others: { w: P; s: string }[] = [];
+    for (const k of ["w-k4b", "w-k4c", "w-k4d", "w-k4e", "w-k4f", "w-k4g"]) others.push(await fresh(k, L3));
+    const burst2 = await Promise.all(others.flatMap((o) => Array.from({ length: 6 }, () => wrong(o))));
+    const locFailed = (await q(`SELECT count(*)::int n FROM attendance_code_attempts WHERE location_id=$1 AND outcome NOT IN ('current','transition','blocked')`, [L3])).rows[0].n;
+    check("K4. Intentos incorrectos simultáneos: 12 a la vez de una persona → como mucho 5 fallidos y el resto bloqueados (429); 36 a la vez en un establecimiento → como mucho 30 fallidos",
+      userFailed <= 5 && burst.filter((r) => r.status === 429).length >= 7 && locFailed <= 30 && [...burst, ...burst2].every((r) => r.status < 500),
+      { userFailed, blocked: burst.filter((r) => r.status === 429).length, locFailed, statuses: [...new Set([...burst, ...burst2].map((r) => r.status))] });
+  }
+  // R3. Revocación con ponches simultáneos: todo ponche posterior a la revocación lleva el código «revocado»; nunca un 500.
+  {
+    const people: { w: P; s: string }[] = [];
+    for (const k of ["w-r3a", "w-r3b", "w-r3c", "w-r3d", "w-r3e", "w-r3f"]) people.push(await fresh(k, L));
+    const fire = people.map((o) => call("POST", `${AT(H)}/me/punch`, o.w.token, punchBody(o.s, "in", { method: "pin", pin: PIN2, location: INSIDE })));
+    const rv = await call("POST", `${AT(H)}/establishments/${L}/codes/revoke`, adminH.token, { weekStart: week, reason: "Revocación durante ponches" });
+    const during = await Promise.all(fire);
+    const after = await Promise.all(people.slice(0, 3).map((o) => call("POST", `${AT(H)}/me/punch`, o.w.token, punchBody(o.s, "out", { method: "pin", pin: PIN2, location: INSIDE }))));
+    check("R3. Revocación con 6 ponches simultáneos: cada uno queda validado (antes) o «código no vigente» (después), ninguno falla; justo después de la revocación el código anterior ya no vale para nadie",
+      rv.status === 200 && during.every((r) => r.status === 201 && ["current", "invalid"].includes(r.body.punch?.code.status))
+      && after.every((r) => r.status === 201 && r.body.punch?.code.status === "invalid" && r.body.punch?.validation.initial === "pending_review"),
+      { rv: rv.status, during: during.map((r) => [r.status, r.body.punch?.code.status]), after: after.map((r) => [r.status, r.body.punch?.code.status]) });
+  }
+  // V4. Revisión concurrente: dos administradoras deciden a la vez sobre el mismo ponche y sobre la misma corrección.
+  {
+    const o = await fresh("w-v4", L);
+    const pend = await call("POST", `${AT(H)}/me/punch`, o.w.token, punchBody(o.s, "in", { method: "pin", pin: PIN2, location: OUTSIDE }));
+    const both = await Promise.all([
+      call("POST", `${AT(H)}/punches/review`, adminH.token, { punchIds: [pend.body.punch.id], decision: "validated", reason: "Revisado por la primera" }),
+      call("POST", `${AT(H)}/punches/review`, adminHb.token, { punchIds: [pend.body.punch.id], decision: "not_recognized", reason: "Revisado por la segunda" })]);
+    const hist = await call("GET", `${AT(H)}/punches/${pend.body.punch.id}`, adminH.token);
+    const revRows = (await q(`SELECT decision FROM attendance_reviews WHERE punch_id=$1 ORDER BY reviewed_at, id`, [pend.body.punch.id])).rows as { decision: string }[];
+    const cr = await call("POST", `${AT(H)}/me/corrections`, o.w.token, { shiftId: o.s, type: "break_start", requestedAt: new Date(Date.now() - 120_000).toISOString(), reason: "Sin señal" });
+    const decide = await Promise.all([
+      call("POST", `${AT(H)}/corrections/${cr.body.correction.id}/decision`, adminH.token, { approve: true, reason: "Aprobada por la primera" }),
+      call("POST", `${AT(H)}/corrections/${cr.body.correction.id}/decision`, adminHb.token, { approve: true, reason: "Aprobada por la segunda" })]);
+    const manualN = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE shift_id=$1 AND origin='manual'`, [o.s])).rows[0].n;
+    check("V4. Revisión concurrente: dos decisiones a la vez quedan las dos en el historial (solo se añade) y el estado es el de la última; dos aprobaciones a la vez de la misma corrección → una sola (la otra 409) y un solo ponche manual",
+      both.every((r) => r.status === 200) && revRows.length === 2 && hist.body.history?.punch.validation.initial === "pending_review"
+      && hist.body.history.punch.validation.effective === revRows[revRows.length - 1].decision
+      && decide.filter((r) => r.status === 200).length === 1 && decide.filter((r) => r.status === 409 && r.body.error === "ATTENDANCE_ALREADY_DECIDED").length === 1 && manualN === 1,
+      { both: both.map((r) => r.status), revRows, eff: hist.body.history?.punch.validation.effective, decide: decide.map((r) => [r.status, r.body.error]), manualN });
+  }
+
   // ---- Respuestas y no regresión ------------------------------------------------------------------------------------------
   const noStore = headers.filter((h, i) => bodies[i] && /"(punch|codes|print|result|history)"/.test(bodies[i])).every((h) => (h["cache-control"] ?? "").includes("no-store"));
   const qrLeak = bodies.filter((b) => b.includes(reprint.body.print.pin) && !b.includes('"print"')).length;
@@ -429,6 +518,30 @@ async function main() {
   const recA = (await q<{ id: string }>(`INSERT INTO care_recipients (organization_id,first_name,last_name) VALUES ($1,'Cliente','Ficticio') RETURNING id`, [A])).rows[0].id;
   const agencyShift = await call("POST", `/organizations/${A}/shifts`, adminA.token, { careRecipientId: recA, scheduledStart: new Date(Date.now() + 9 * 86_400_000).toISOString(), scheduledEnd: new Date(Date.now() + 9 * 86_400_000 + 3_600_000).toISOString() });
   check("Z2. Agencia sin cambios: crea y lista sus turnos como antes", agencyShift.status === 201 && (await call("GET", `/organizations/${A}/shifts`, adminA.token)).status === 200, agencyShift.status);
+  // Z5. Registros: nunca un QR, un código de 6 dígitos ni coordenadas en lo que escribe la aplicación.
+  {
+    const allPins = [PIN, PIN2, reprint.body.print?.pin].filter(Boolean) as string[];
+    console.log("Z5: la captura de la consola funciona"); // línea de control: demuestra que la captura registra
+    const secrets = [QR, ...allPins, String(INSIDE.latitude), String(OUTSIDE.latitude), String(FUZZY.latitude), String(INSIDE.longitude), String(CENTER.lat)];
+    const leaks = consoleLines.filter((l) => secrets.some((x) => x && l.includes(x)));
+    check("Z5. Registros de la aplicación: ningún QR, código de 6 dígitos ni coordenada aparece en la consola (errores incluidos)",
+      consoleLines.some((l) => l.includes("Z5: la captura")) && leaks.length === 0, { lines: consoleLines.length, leaks: leaks.slice(0, 3) });
+  }
+  // Z6. Coordenadas: en TODA la base (todas las tablas y filas) ninguna coordenada del teléfono; el centro de la geocerca solo en establishment_settings (171).
+  {
+    const tables = (await q<{ t: string }>(`SELECT tablename t FROM pg_tables WHERE schemaname='public'`)).rows.map((r) => r.t);
+    // Se excluyen los valores que forman parte del centro (la prueba usa la misma longitud que el centro).
+    const phone = [INSIDE, OUTSIDE, FUZZY].flatMap((p) => [String(p.latitude), String(p.longitude)])
+      .filter((v, i, a) => a.indexOf(v) === i && !String(CENTER.lng).includes(v) && !String(CENTER.lat).includes(v));
+    const hits: string[] = [];
+    for (const t of tables) {
+      const txt = (await q<{ j: string | null }>(`SELECT json_agg(x)::text j FROM "${t}" x`)).rows[0].j ?? "";
+      for (const v of phone) if (txt.includes(v)) hits.push(`${t}:${v}`);
+      // El centro es configuración del establecimiento (171): su tabla y su historial de cambios. Nunca en otro sitio.
+      if (t !== "establishment_settings" && t !== "establishment_settings_events" && txt.includes(String(CENTER.lat))) hits.push(`${t}:centro`);
+    }
+    check("Z6. Ninguna coordenada del teléfono en ninguna tabla de la base; el centro de la geocerca solo en la configuración del establecimiento de la 171 y su historial", hits.length === 0 && tables.length > 100, { hits, tables: tables.length });
+  }
   check("Z3. Nunca un 500 en todo el recorrido", errors500.length === 0, errors500);
   // Reversión con datos de personas: se niega (y en orden: 175 → 174 → 173).
   const { readFileSync } = await import("node:fs");
