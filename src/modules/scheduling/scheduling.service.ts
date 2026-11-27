@@ -46,6 +46,14 @@ export class RecipientNotInOrgError extends Error {
     this.name = "RecipientNotInOrgError";
   }
 }
+/** 171: el destino del turno es un establecimiento de hogar cerrado o una habitación archivada (409). */
+export class ResidentialShiftTargetError extends Error {
+  constructor(public readonly code: "RESIDENTIAL_ESTABLISHMENT_CLOSED" | "RESIDENTIAL_ROOM_ARCHIVED") {
+    super(code);
+    this.name = "ResidentialShiftTargetError";
+  }
+}
+
 export class RoomNotInOrgError extends Error {
   constructor() {
     super("ROOM_NOT_IN_ORGANIZATION");
@@ -191,6 +199,16 @@ export async function insertShiftInTransaction(
         SELECT id FROM rooms WHERE id = ${input.roomId} AND organization_id = ${organizationId} AND NOT app_is_technical_room(id) LIMIT 1
       `.execute(trx);
       if (!check.rows[0]) throw new RoomNotInOrgError();
+    }
+    // 171: en hogares, bloquea el establecimiento (frente a un cierre simultáneo) y exige que siga abierto y que la
+    // habitación esté activa. Fuera de hogares no hace nada.
+    if (input.roomId || input.careRecipientId) {
+      const target = await sql<{ state: string }>`
+        SELECT app_residential_shift_target_state(${input.roomId ?? null}::uuid, ${input.careRecipientId ?? null}::uuid) AS state
+      `.execute(trx);
+      const state = target.rows[0]?.state;
+      if (state === "establishment_closed") throw new ResidentialShiftTargetError("RESIDENTIAL_ESTABLISHMENT_CLOSED");
+      if (state === "room_archived") throw new ResidentialShiftTargetError("RESIDENTIAL_ROOM_ARCHIVED");
     }
 
     const serviceLocationId = input.careRecipientId
