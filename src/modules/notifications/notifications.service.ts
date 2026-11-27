@@ -86,6 +86,13 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "Horario semanal publicado";
     case "SCHEDULE_WEEK_UPDATED":
       return "Horario semanal modificado";
+    // 173–175 (hogares F4): avisos generales a la administración, sin nombres, horas ni ubicación.
+    case "ATTENDANCE_CODE_AVAILABLE":
+      return "Código de asistencia disponible para imprimir";
+    case "ATTENDANCE_REVIEW_NEEDED":
+      return "Ponche por revisar";
+    case "ATTENDANCE_ALERT":
+      return "Alerta de asistencia";
     case "SHIFT_ASSIGNMENT_ACCEPTED":
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":

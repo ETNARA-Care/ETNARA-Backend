@@ -9,6 +9,7 @@ import { startCoverageEscalationWorker } from "./modules/coverageOffers/coverage
 import { startLateArrivalWorker } from "./modules/verification/verification.arrival.js";
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
 import { startPushWorker } from "./modules/push/push.worker.js";
+import { startAttendanceWorker } from "./modules/residential/attendance.worker.js";
 
 const app = createApp();
 
@@ -36,6 +37,7 @@ app.listen(env.PORT, () => {
   // Web Push (146): off unless PUSH_ENABLED=on with VAPID keys; per agency PUSH_NOTIFICATIONS.
   // Counts only in logs (never an endpoint, key or notice).
   startPushWorker();
+  startAttendanceWorker();
   // Activity photos: once per start, only if the private photo bucket is configured.
   // Logs yes/no values only (no keys, names or URLs); never blocks the server.
   void photoStorageSelfCheck().then((r) => {

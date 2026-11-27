@@ -16,6 +16,44 @@
       "SELECT",
       "UPDATE"
     ],
+    "attendance_alerts": [
+      "SELECT",
+      "UPDATE"
+    ],
+    "attendance_code_attempts": [
+      "INSERT"
+    ],
+    "attendance_code_events": [
+      "INSERT",
+      "SELECT"
+    ],
+    "attendance_codes": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "attendance_correction_requests": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "attendance_geo_consents": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "attendance_policies": [
+      "INSERT",
+      "SELECT"
+    ],
+    "attendance_punches": [
+      "INSERT",
+      "SELECT"
+    ],
+    "attendance_reviews": [
+      "INSERT",
+      "SELECT"
+    ],
     "audit_log": [
       "INSERT",
       "SELECT"
@@ -593,6 +631,14 @@
     "app_activity_photo_for_view",
     "app_advance_due_coverage_campaigns",
     "app_attach_activity_photo",
+    "app_attendance_code_window",
+    "app_attendance_ensure_codes",
+    "app_attendance_failed_attempts",
+    "app_attendance_my_shifts",
+    "app_attendance_notify_available",
+    "app_attendance_record_blocked_attempt",
+    "app_attendance_record_punch_alerts",
+    "app_attendance_scan_long_sessions",
     "app_availability_covers",
     "app_billing_admins",
     "app_billing_bootstrap_permissions",
