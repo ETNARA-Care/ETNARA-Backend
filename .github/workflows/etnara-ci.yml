@@ -441,6 +441,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialEstablishments171.ts
 
+      - name: PostgreSQL 171 closure concurrency (two app_runtime sessions, both orders; closing while creating a room, placing a resident or creating a shift never leaves a closed establishment with anything active; agencies unchanged)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialClosureConcurrency171.ts
+
       - name: Residential 171 round trip (apply on 170 data, rollback restores the 170 schema and data exactly, reapply is idempotent, rollback refused once people's data exists)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
@@ -459,11 +465,41 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialSchedule172.ts
 
+      - name: PostgreSQL 172 schedule concurrency (two admins publishing, editing while publishing, closing while publishing, the same caregiver in two establishments, drafts never reach staff)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialScheduleConcurrency172.ts
+
+      - name: PostgreSQL 172 individual and weekly shift sync, establishment shifts, «Mi horario» (individual shifts shown once in the week, never duplicated by publish, warnings across both, establishment-only shifts on the technical room, own published shifts only, never drafts or colleagues, night shifts split by day, other modalities unchanged)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialScheduleSync172.ts
+
+      - name: PostgreSQL 172 F2 audit scenarios (creating and assigning an individual shift while another admin publishes the same caregiver's week, exact and partial overlaps, both orders, never two shifts or a partial publish; «Mi horario» after accept, edit, cancel, reject, reassign, entry edit/reassign/remove and republish; agencies and independents create shifts as before)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialScheduleScenarios172.ts
+
       - name: PostgreSQL 172 rollback (schema identical to 171, existing rows unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 172
+
+      - name: PostgreSQL 180 family RLS scope (family-only users in agencies, independents and homes read only their own user, the staff assigned to or recording activities of their family member with their credentials, and only the shifts and assignments of their family member; family portal unchanged; no GET route returns staff contacts, credentials or other residents; multi-role and multi-organization users keep legitimate access; SECURITY DEFINER helpers return only yes or no; never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyFamilyRlsScope180.ts
+
+      - name: PostgreSQL 180 rollback (schema identical to the previous migration, every row unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 180
 
       - name: PostgreSQL 173-175 residential attendance F4 (weekly QR and 6-digit codes derived with HMAC and never stored, punches validated only online with a current code inside the geofence, offline never auto-validated, transition only closes, revocation prevails, brute-force lockout, other establishment and other home refused, idempotent, no coordinates stored, versioned revocable consent, reviews and corrections append-only and never on oneself, alerts for perimeter, recidivism and 16 h sessions, policies versioned, idempotent job, three-modality isolation, agencies unchanged, never 500)
         env:

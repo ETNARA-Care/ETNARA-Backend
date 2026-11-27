@@ -5,7 +5,7 @@ import { InvalidTenantContextError, MembershipNotActiveError } from "../../conte
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
 import { ResidentialError, residentialDbErrorCode, residentialDbErrorStatus } from "./residentialErrors.js";
 import {
-  applyScheduleTemplate, copyScheduleWeek, createScheduleEntry, createScheduleTemplate, getScheduleWeek, listScheduleEstablishments,
+  applyScheduleTemplate, copyScheduleWeek, createScheduleEntry, createScheduleTemplate, getMyScheduleWeek, getScheduleWeek, listScheduleEstablishments,
   listSchedulePublications, listScheduleTemplates, publishScheduleWeek, removeScheduleEntry, ResidentialScheduleError,
   updateScheduleEntry, updateScheduleTemplate,
 } from "./residentialSchedule.service.js";
@@ -56,6 +56,9 @@ function parse<T>(schema: z.ZodType<T>, body: unknown): T {
   return r.data;
 }
 const WEEK = "/establishments/:locationId/weeks/:weekStart";
+
+// 27-nov (decisión de Rafa): «Mi horario» del cuidador. Sus propios turnos de la semana; nunca borradores ni compañeros.
+route("get", "/me/weeks/:weekStart", ["weekStart"], "schedule", (u, o, p) => getMyScheduleWeek(u, o, p.weekStart));
 const W = ["locationId", "weekStart"];
 
 route("get", "/establishments", [], "establishments", (u, o) => listScheduleEstablishments(u, o));
