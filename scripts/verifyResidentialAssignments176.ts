@@ -478,6 +478,30 @@ async function main() {
       r.propia === 1 && r.adminPropioHogar === 1 && r.companeraVeLaDeOtra === 0 && r.adminOtroHogarConSuOrg === 0 && r.adminOtroHogarDiciendoOrgAjena === 0
       && r.adminMembresiaDeOtraOrg === 0 && r.adminTurnoDeOtraOrg === 0 && r.personalDeOtroHogar === 0 && r.agencia === 0 && r.sinContexto === 0
       && typeof r.internaDirecta === "string" && /permission denied/.test(r.internaDirecta), r);
+    // C3b (27-nov, 2.ª ronda GPT). Con SU PROPIA membresía, una persona solo consulta la cobertura de turnos en los que está
+    // (o estuvo, por una sustitución). S1: w1 sustituida en parte por w3 (T); w2 sigue. S0: w3 sustituida del todo por w9.
+    const row = async (shiftId: string, who: P) => {
+      await rtClient.query("BEGIN");
+      await rtClient.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [who.userId, H]);
+      try { return (await rtClient.query<{ cov_start: Date; cov_end: Date }>(`SELECT * FROM app_residential_coverage_bounds($1,$2)`, [shiftId, who.owm])).rows; }
+      finally { await rtClient.query("ROLLBACK"); }
+    };
+    const T1 = (await q<{ t: Date }>(`SELECT effective_at t FROM shift_substitutions WHERE shift_id=$1 AND original_membership_id=$2`, [S1, w.w1.owm])).rows[0].t;
+    const T0 = (await q<{ t: Date }>(`SELECT effective_at t FROM shift_substitutions WHERE shift_id=$1 AND original_membership_id=$2`, [S0, w.w3.owm])).rows[0].t;
+    const h = {
+      noAsignadaEnS1: (await row(S1, w.w4)).length,
+      noAsignadaEnS0: (await row(S0, w.w2)).length,
+      noAsignadaEnOtroTurno: (await row(SCANCEL, w.w1)).length,
+      originalParcialHastaT: (await row(S1, w.w1)).map((x) => x.cov_end.getTime() === new Date(T1).getTime()),
+      sustitutaParcialDesdeT: (await row(S1, w.w3)).map((x) => x.cov_start.getTime() === new Date(T1).getTime()),
+      companeraQueSigue: (await row(S1, w.w2)).length,
+      originalCompletaSinTramo: (await row(S0, w.w3)).map((x) => x.cov_end.getTime() <= x.cov_start.getTime() && x.cov_end.getTime() === new Date(T0).getTime()),
+      sustitutaCompleta: (await row(S0, w.w9)).length,
+    };
+    check("C3b. Con su propia membresía nadie consulta un turno en el que no está (en S1, en S0 ni en otro turno: nada); se conserva lo legítimo tras una sustitución: la original parcial hasta la hora efectiva, la sustituta desde ella, la compañera que sigue, y la original de una completa ve que su tramo quedó vacío",
+      h.noAsignadaEnS1 === 0 && h.noAsignadaEnS0 === 0 && h.noAsignadaEnOtroTurno === 0
+      && JSON.stringify(h.originalParcialHastaT) === "[true]" && JSON.stringify(h.sustitutaParcialDesdeT) === "[true]" && h.companeraQueSigue === 1
+      && JSON.stringify(h.originalCompletaSinTramo) === "[true]" && h.sustitutaCompleta === 1, h);
   }
 
   // ---- Agencias sin cambios y respuestas --------------------------------------------------------------------------------------

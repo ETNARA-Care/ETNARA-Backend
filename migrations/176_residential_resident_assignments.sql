@@ -124,8 +124,9 @@ $$;
 REVOKE ALL ON FUNCTION public.app_residential_coverage_bounds_internal(uuid, uuid) FROM PUBLIC;
 
 -- La que usa la aplicación: responde SOLO si el turno y la membresía son de la organización de la sesión y quien
--- pregunta es su administración (ORGANIZATION_ADMIN o SUPERVISOR) o la propia persona (membresía activa suya). En
--- cualquier otro caso no devuelve nada: ni otra organización, ni compañeras, ni sin contexto (auditoría 27-nov).
+-- pregunta es su administración (ORGANIZATION_ADMIN o SUPERVISOR) o la propia persona (membresía activa suya) en un
+-- turno en el que está o estuvo. En cualquier otro caso no devuelve nada: ni otra organización, ni compañeras, ni
+-- turnos ajenos, ni sin contexto (auditoría 27-nov).
 CREATE OR REPLACE FUNCTION public.app_residential_coverage_bounds(p_shift_id uuid, p_membership_id uuid)
 RETURNS TABLE (cov_start timestamptz, cov_end timestamptz)
 LANGUAGE sql
@@ -139,7 +140,14 @@ AS $$
   CROSS JOIN LATERAL public.app_residential_coverage_bounds_internal(s.id, m.id) b
   WHERE s.id = p_shift_id
     AND s.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
-    AND (public.app_is_org_manager() OR public.app_is_own_worker_membership(p_membership_id))
+    AND (public.app_is_org_manager()
+         OR (public.app_is_own_worker_membership(p_membership_id)
+             -- La propia persona, solo en un turno en el que está (asignación pendiente o aceptada) o estuvo por una
+             -- sustitución (como original o sustituta): así conserva su historial y nunca ve turnos ajenos.
+             AND (EXISTS (SELECT 1 FROM assignments a WHERE a.shift_id = s.id AND a.organization_id = s.organization_id
+                            AND a.organization_worker_membership_id = p_membership_id AND a.response_status IN ('pending', 'accepted'))
+                  OR EXISTS (SELECT 1 FROM shift_substitutions x WHERE x.shift_id = s.id AND x.organization_id = s.organization_id
+                               AND p_membership_id IN (x.original_membership_id, x.substitute_membership_id)))))
 $$;
 REVOKE ALL ON FUNCTION public.app_residential_coverage_bounds(uuid, uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_residential_coverage_bounds(uuid, uuid) TO app_runtime;
