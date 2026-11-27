@@ -57,7 +57,11 @@ async function main() {
   try {
     // 1. Hasta la 170, con datos previos ficticios.
     await quiet(() => applyPendingMigrations(db, upTo170));
+    // Base = todas las migraciones salvo la 171 (en producción: 170 + 180). Se exige la 170 registrada y la 171 no.
+    const expectedLast = readdirSync(upTo170).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort().at(-1);
     const last = (await q<{ f: string }>(`SELECT max(filename) f FROM schema_migrations`)).rows[0].f;
+    const has170 = (await q<{ n: number }>(`SELECT count(*)::int n FROM schema_migrations WHERE filename = '170_residential_modality_foundation.sql'`)).rows[0].n === 1;
+    const has171 = (await q<{ n: number }>(`SELECT count(*)::int n FROM schema_migrations WHERE filename LIKE '171_%'`)).rows[0].n > 0;
     const org = async (n: string, t: string) => (await q<{ id: string }>(`INSERT INTO organizations (name,organization_type,status) VALUES ($1,$2,'active') RETURNING id`, [n, t])).rows[0].id;
     const H = await org("Hogar Ficticio RT", "RESIDENTIAL_CARE_HOME"), A = await org("Agencia Ficticia RT", "HOME_CARE_AGENCY");
     for (const [o, tag] of [[H, "H"], [A, "A"]] as const) {
@@ -68,7 +72,7 @@ async function main() {
     }
     const fp170 = (await q<{ h: string; n: number }>(FINGERPRINT)).rows[0];
     const d170 = (await q(DATA)).rows[0];
-    check("P1. Base en la 170 con datos previos ficticios (hogar y agencia)", last === "170_residential_modality_foundation.sql" && d170.locations === 2 && d170.rooms === 2, [last, d170]);
+    check("P1. Base anterior a la 171 (170 y, si existen, posteriores como la 180) con datos previos ficticios (hogar y agencia)", has170 && !has171 && last === expectedLast && d170.locations === 2 && d170.rooms === 2, [last, expectedLast, d170]);
 
     // 2. Aplicar la 171.
     await quiet(() => applyPendingMigrations(db, upTo171));

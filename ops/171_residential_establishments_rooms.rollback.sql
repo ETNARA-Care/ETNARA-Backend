@@ -59,6 +59,8 @@ DELETE FROM rooms WHERE id IN (SELECT id FROM _r171_rooms);
 DELETE FROM units WHERE id IN (SELECT id FROM _r171_units);
 
 DROP FUNCTION IF EXISTS public.app_residential_close_establishment(uuid, text);
+DROP FUNCTION IF EXISTS public.app_residential_shift_target_state(uuid, uuid);
+DROP FUNCTION IF EXISTS public.app_residential_lock_establishment(uuid);
 DROP FUNCTION IF EXISTS public.app_residential_settings_history();
 DROP FUNCTION IF EXISTS public.app_residential_settings_guard();
 DROP FUNCTION IF EXISTS public.app_residential_room_profile_guard();
