@@ -510,6 +510,73 @@ async function main() {
       && decide.filter((r) => r.status === 200).length === 1 && decide.filter((r) => r.status === 409 && r.body.error === "ATTENDANCE_ALREADY_DECIDED").length === 1 && manualN === 1,
       { both: both.map((r) => r.status), revRows, eff: hist.body.history?.punch.validation.effective, decide: decide.map((r) => [r.status, r.body.error]), manualN });
   }
+  // P7 (27-nov, 2.ª ronda). El mismo client_event_id a la vez en turnos de DOS establecimientos distintos (cerrojos de
+  // intentos y de ponche diferentes): solo uno se guarda; el otro es 409, nunca 500 ni dos filas. Varias rondas.
+  {
+    const pinL2 = otherLoc.pin as string;
+    const rounds: Json[] = [];
+    let ok = true;
+    for (let i = 0; i < 6; i++) {
+      const w = await person(H, `w-p7-${i}`, ["WORKER"], true);
+      const sL = await shift(H, L, -30, 450, [w]), sL2 = await shift(H, L2, -30, 450, [w]);
+      const X = randomUUID();
+      const pair = await Promise.all([
+        call("POST", `${AT(H)}/me/punch`, w.token, { ...punchBody(sL, "in", { method: "pin", pin: PIN2, location: INSIDE }), clientEventId: X }),
+        call("POST", `${AT(H)}/me/punch`, w.token, { ...punchBody(sL2, "in", { method: "pin", pin: pinL2, location: INSIDE }), clientEventId: X })]);
+      const rows = (await q(`SELECT count(*)::int n FROM attendance_punches WHERE client_event_id=$1`, [X])).rows[0].n;
+      const won = pair.find((r) => r.status === 201);
+      const pass = pair.filter((r) => r.status === 201).length === 1
+        && pair.filter((r) => r.status === 409 && r.body.error === "ATTENDANCE_DUPLICATE_EVENT").length === 1 && rows === 1;
+      // Repetir después el ganador → 200 con el mismo; repetir el perdedor → 409.
+      const winShift = won?.body.punch?.shiftId, loseShift = winShift === sL ? sL2 : sL;
+      const again = await call("POST", `${AT(H)}/me/punch`, w.token, { ...punchBody(winShift, "in", { method: "pin", pin: winShift === sL ? PIN2 : pinL2, location: INSIDE }), clientEventId: X });
+      const loser = await call("POST", `${AT(H)}/me/punch`, w.token, { ...punchBody(loseShift, "in", { method: "pin", pin: loseShift === sL ? PIN2 : pinL2, location: INSIDE }), clientEventId: X });
+      const seq = again.status === 200 && again.body.punch?.id === won?.body.punch?.id && loser.status === 409 && loser.body.error === "ATTENDANCE_DUPLICATE_EVENT";
+      ok = ok && pass && seq;
+      rounds.push({ pair: pair.map((r) => [r.status, r.body.error ?? (r.body.punch?.shiftId === sL ? "L" : "L2")]), rows, again: again.status, loser: loser.status });
+    }
+    check("P7. El mismo identificador a la vez en turnos de dos establecimientos distintos (6 rondas): uno 201 y el otro 409 ATTENDANCE_DUPLICATE_EVENT, una sola fila, nunca 500; luego el ganador repetido → 200 y el perdedor → 409",
+      ok, rounds);
+  }
+  // W2 (27-nov, 2.ª ronda). Fuera de las tolerancias o de la ventana del turno el ponche SIEMPRE se guarda (nunca se
+  // rechaza por la hora): queda pendiente con su marca, la administración lo ve, lo revisa con motivo y lo puede corregir.
+  {
+    const L4 = await loc(H, "Casa Tolerancias");
+    await q("BEGIN"); await q(`SELECT set_config('app.residential_change_reason','Centro ficticio de la prueba',true)`);
+    await q(`UPDATE establishment_settings SET geofence_latitude=$2, geofence_longitude=$3, geofence_radius_m=100 WHERE location_id=$1`, [L4, CENTER.lat, CENTER.lng]); await q("COMMIT");
+    const pin4 = (await call("POST", `${AT(H)}/establishments/${L4}/codes/print`, adminH.token, { weekStart: week })).body.print?.pin as string;
+    const pol4 = await call("GET", `${AT(H)}/establishments/${L4}/policy`, adminH.token);
+    const wl = await person(H, "w-w2-late", ["WORKER"], true), we = await person(H, "w-w2-early", ["WORKER"], true);
+    const wa = await person(H, "w-w2-after", ["WORKER"], true), wb = await person(H, "w-w2-before", ["WORKER"], true);
+    const sLate = await shift(H, L4, -90, 390, [wl]);      // entra 90 min tarde: más que la tardanza (10) y la ausencia (60)
+    const sEarly = await shift(H, L4, -30, 450, [we]);     // sale 7 h 30 min antes del fin: más que la salida anticipada (10)
+    const sAfter = await shift(H, L4, -600, -300, [wa]);   // terminó hace 5 h: fuera de la ventana (4 h después)
+    const sBefore = await shift(H, L4, 120, 600, [wb]);    // empieza en 2 h: fuera de la ventana (60 min antes)
+    const late = await call("POST", `${AT(H)}/me/punch`, wl.token, punchBody(sLate, "in", { method: "pin", pin: pin4, location: INSIDE }));
+    await call("POST", `${AT(H)}/me/punch`, we.token, punchBody(sEarly, "in", { method: "pin", pin: pin4, location: INSIDE }));
+    const early = await call("POST", `${AT(H)}/me/punch`, we.token, punchBody(sEarly, "out", { method: "pin", pin: pin4, location: INSIDE }));
+    const after = await call("POST", `${AT(H)}/me/punch`, wa.token, punchBody(sAfter, "in", { method: "pin", pin: pin4, location: INSIDE }));
+    const before = await call("POST", `${AT(H)}/me/punch`, wb.token, punchBody(sBefore, "in", { method: "pin", pin: pin4, location: INSIDE }));
+    const outside = [after, before];
+    const pendList = (await call("GET", `${AT(H)}/punches?status=pending_review&locationId=${L4}`, adminH.token)).body.result?.punches ?? [];
+    const listed = outside.every((r) => pendList.some((p: Json) => p.id === r.body.punch?.id));
+    const rev = await call("POST", `${AT(H)}/punches/review`, adminH.token, { punchIds: [after.body.punch?.id], decision: "justified", reason: "Turno extendido acordado con la dirección" });
+    const revNoReason = await call("POST", `${AT(H)}/punches/review`, adminH.token, { punchIds: [before.body.punch?.id], decision: "validated" });
+    const selfRev = await call("POST", `${AT(H)}/punches/review`, wb.token, { punchIds: [before.body.punch?.id], decision: "validated", reason: "Yo misma" });
+    const hist = await call("GET", `${AT(H)}/punches/${after.body.punch?.id}`, adminH.token);
+    const corr = await call("POST", `${AT(H)}/me/corrections`, wb.token, { shiftId: sBefore, type: "in", requestedAt: new Date(Date.now() + 115 * 60_000).toISOString(), reason: "Llegué antes por error del horario" });
+    const wk = await call("GET", `${AT(H)}/establishments/${L4}/weeks/${week}`, adminH.token);
+    const rowOf = (u: P) => wk.body.week?.rows.find((r: Json) => r.membershipId === u.owm);
+    const lateRow = rowOf(wl), earlyRow = rowOf(we);
+    check("W2. Fuera de tolerancias o de la ventana del turno el ponche se guarda (201), nunca se rechaza por la hora: tarde (90 min, más que la ausencia) y salida anticipada como dato administrativo; antes/después de la ventana → pendiente con «outside_shift_window», visible en la revisión, revisable con motivo (sin motivo 400, por sí misma 403) y corregible",
+      pol4.body.policy?.lateToleranceMinutes === 10 && pol4.body.policy?.earlyLeaveToleranceMinutes === 10 && pol4.body.policy?.absenceAfterMinutes === 60
+      && late.status === 201 && early.status === 201 && outside.every((r) => r.status === 201 && r.body.punch?.flags.includes("outside_shift_window") && r.body.punch?.validation.initial === "pending_review")
+      && listed && rev.status === 200 && hist.body.history?.punch.validation.effective === "justified" && revNoReason.status === 400 && selfRev.status === 403
+      && corr.status === 201 && wk.status === 200 && lateRow?.lateMinutes >= 85 && lateRow?.absent === false && earlyRow?.earlyLeaveMinutes >= 400,
+      { pol4: pol4.body.policy, late: [late.status, late.body.punch?.flags, late.body.punch?.validation], early: [early.status, early.body.punch?.flags],
+        outside: outside.map((r) => [r.status, r.body.punch?.flags, r.body.punch?.validation?.initial]), listed, rev: rev.status, revNoReason: revNoReason.status, selfRev: selfRev.status,
+        eff: hist.body.history?.punch.validation.effective, corr: [corr.status, corr.body.error], lateRow, earlyRow });
+  }
 
   // ---- Respuestas y no regresión ------------------------------------------------------------------------------------------
   const noStore = headers.filter((h, i) => bodies[i] && /"(punch|codes|print|result|history)"/.test(bodies[i])).every((h) => (h["cache-control"] ?? "").includes("no-store"));
