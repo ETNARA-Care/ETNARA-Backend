@@ -47,6 +47,14 @@ export class RecipientNotInOrgError extends Error {
   }
 }
 /** 171: el destino del turno es un establecimiento de hogar cerrado o una habitación archivada (409). */
+/** 27-nov: establishmentId solo en hogares y de un establecimiento activo de la organización (400). */
+export class EstablishmentNotInOrgError extends Error {
+  constructor() {
+    super("Establishment does not belong to this residential organization");
+    this.name = "EstablishmentNotInOrgError";
+  }
+}
+
 export class ResidentialShiftTargetError extends Error {
   constructor(public readonly code: "RESIDENTIAL_ESTABLISHMENT_CLOSED" | "RESIDENTIAL_ROOM_ARCHIVED") {
     super(code);
@@ -106,14 +114,19 @@ export const createShiftSchema = z
   .object({
     careRecipientId: z.string().uuid().optional(),
     roomId: z.string().uuid().optional(),
+    /** 27-nov (hogares): turno del establecimiento sin residente concreto. El servidor lo lleva a su habitación técnica. */
+    establishmentId: z.string().uuid().optional(),
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
     requiredRole: z.string().trim().min(1).max(80).optional(),
     /** Gate 6: confirmed service address (one of the person's addresses). Defaults to the primary one. */
     serviceLocationId: z.string().uuid().optional(),
   })
-  .refine((d) => d.careRecipientId || d.roomId, {
-    message: "Either careRecipientId (home care) or roomId (residential) is required",
+  .refine((d) => d.careRecipientId || d.roomId || d.establishmentId, {
+    message: "Either careRecipientId (home care), roomId or establishmentId (residential) is required",
+  })
+  .refine((d) => !d.establishmentId || (!d.careRecipientId && !d.roomId), {
+    message: "establishmentId is a shift for the whole establishment: no careRecipientId or roomId",
   })
   .refine((d) => new Date(d.scheduledStart).getTime() < new Date(d.scheduledEnd).getTime(), {
     message: "scheduledStart must be strictly before scheduledEnd",
@@ -187,6 +200,18 @@ export async function insertShiftInTransaction(
     throw new InvalidShiftTimesError();
   }
   {
+    // 27-nov (hogares): turno del establecimiento sin residente. Solo hogares; se resuelve a su habitación técnica, que
+    // nunca sale en ninguna respuesta (las filas devuelven room_id NULL y el nombre del establecimiento).
+    let technicalRoomId: string | null = null;
+    if (input.establishmentId) {
+      const t = await sql<{ room_id: string }>`
+        SELECT t.room_id FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id
+        WHERE t.location_id = ${input.establishmentId} AND l.organization_id = ${organizationId}
+          AND l.archived_at IS NULL AND app_org_is_residential(${organizationId}::uuid) LIMIT 1
+      `.execute(trx);
+      if (!t.rows[0]) throw new EstablishmentNotInOrgError();
+      technicalRoomId = t.rows[0].room_id;
+    }
     if (input.careRecipientId) {
       const check = await sql<{ id: string }>`
         SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
@@ -202,9 +227,9 @@ export async function insertShiftInTransaction(
     }
     // 171: en hogares, bloquea el establecimiento (frente a un cierre simultáneo) y exige que siga abierto y que la
     // habitación esté activa. Fuera de hogares no hace nada.
-    if (input.roomId || input.careRecipientId) {
+    if (input.roomId || input.careRecipientId || technicalRoomId) {
       const target = await sql<{ state: string }>`
-        SELECT app_residential_shift_target_state(${input.roomId ?? null}::uuid, ${input.careRecipientId ?? null}::uuid) AS state
+        SELECT app_residential_shift_target_state(${technicalRoomId ?? input.roomId ?? null}::uuid, ${input.careRecipientId ?? null}::uuid) AS state
       `.execute(trx);
       const state = target.rows[0]?.state;
       if (state === "establishment_closed") throw new ResidentialShiftTargetError("RESIDENTIAL_ESTABLISHMENT_CLOSED");
@@ -216,7 +241,7 @@ export async function insertShiftInTransaction(
       : null;
     const result = await sql<ShiftRow>`
       INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id)
-      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
+      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${technicalRoomId ?? input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
       RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];

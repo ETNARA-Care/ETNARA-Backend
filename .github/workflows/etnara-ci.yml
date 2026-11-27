@@ -471,6 +471,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyResidentialScheduleConcurrency172.ts
 
+      - name: PostgreSQL 172 individual and weekly shift sync, establishment shifts, «Mi horario» (individual shifts shown once in the week, never duplicated by publish, warnings across both, establishment-only shifts on the technical room, own published shifts only, never drafts or colleagues, night shifts split by day, other modalities unchanged)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialScheduleSync172.ts
+
       - name: PostgreSQL 172 rollback (schema identical to 171, existing rows unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
