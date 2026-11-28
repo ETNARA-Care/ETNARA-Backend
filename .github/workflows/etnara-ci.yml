@@ -561,6 +561,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigration177ProductionOrder.ts
 
+      - name: Residential care homes F6 integrated walkthrough in an isolated database (Central creates the home and switches, 6 rooms and 12 beds, 10 residents, 15 staff, day-evening-night template and published week, staff accept, assignments and a blocked and a completed substitution, punches inside, outside the perimeter, offline and manual, access per person, activities, family per D5 with administration-only messages, attendance and assignments reports, full panel, Central alert excluding Hogar Demo, agency regression, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialWalkthroughF6.ts
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
