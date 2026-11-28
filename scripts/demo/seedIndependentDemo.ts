@@ -346,13 +346,26 @@ async function selfCheck(db: Client) {
       log(`Hogar Demo: 4 habitaciones, 6 residentes, 5 personas, turnos de esta semana y la siguiente, asignaciones y una sustitución (todo ficticio)`);
     } else log("carga de Hogar Demo (K10) ya hecha antes: no se repite");
 
+    // K11 (27-nov, a pedido de Rafa): quitar los borradores de la semana en curso (plantilla aplicada a una semana ya empezada,
+    // que no se puede publicar por tener turnos en el pasado) y apagar DEMO_ENVIRONMENT (su franja choca con la cabecera; la demo ya tiene la suya).
+    {
+      const drafts = (await db.query(`SELECT e.id FROM schedule_week_shifts e JOIN schedule_weeks w ON w.id=e.week_id
+        WHERE w.organization_id=$1 AND w.location_id=$2 AND w.week_start=$3::date AND e.shift_id IS NULL AND e.removed_at IS NULL`, [H, L, mondayOf(new Date())])).rows.map((r) => r.id as string);
+      let removed = 0; for (const id of drafts) if ((await call("DELETE", `${S}/entries/${id}`, tH)).s === 200) removed++;
+      if (drafts.length) log(`semana en curso: ${removed} de ${drafts.length} borradores quitados (los turnos publicados no se tocan)`);
+      const de = (await db.query(`SELECT enabled FROM organization_features WHERE organization_id=$1 AND feature_code='DEMO_ENVIRONMENT'`, [H])).rows[0]?.enabled;
+      if (de) { must(await call("PUT", `/platform/organizations/${H}/features/DEMO_ENVIRONMENT`, C, { enabled: false, reason: "Demo: su franja se superpone a la cabecera; la demo ya muestra su propia franja DEMO" }), [200], "apagar DEMO_ENVIRONMENT"); log("DEMO_ENVIRONMENT apagado en Hogar Demo"); }
+    }
+
     const mar = must(await call("POST", "/auth/login", undefined, { email: "marisol@demo.invalid", password: env("DEMO_PW_HOGAR_CUIDADORA") }), [200], "login Marisol").token;
     await call("POST", "/me/active-organization", mar, { organizationId: H });
     const ov = await call("GET", `${R}/overview`, tH);
     const on = (ov.j.overview?.features ?? []).filter((f: any) => f.enabled).map((f: any) => f.code ?? f.feature);
-    ck("K10a Hogar Demo: calendario, asignaciones, ponches y DEMO encendidos solo en la demo", ov.s === 200 && on.length >= 4, { s: ov.s, on });
+    ck("K10a Hogar Demo: calendario, asignaciones y ponches encendidos solo en la demo", ov.s === 200 && on.length >= 3, { s: ov.s, on });
     const wk = mondayOf(new Date());
     const week = await call("GET", `${S}/establishments/${L}/weeks/${wk}`, tH);
+    const pendingDrafts = ((week.j.schedule?.entries ?? []) as any[]).filter((e) => e.published === false).length;
+    ck("K11 semana en curso sin borradores pendientes de publicar", week.s === 200 && pendingDrafts === 0, { pendingDrafts });
     const nextW = await call("GET", `${S}/establishments/${L}/weeks/${mondayOf(new Date(Date.now() + 7 * 86_400_000))}`, tH);
     ck("K10b calendario semanal: esta semana y la siguiente con turnos", week.s === 200 && nextW.s === 200 && (week.j.schedule?.entries ?? []).length + (nextW.j.schedule?.entries ?? []).length >= 6, { a: week.s, b: nextW.s, n: [(week.j.schedule?.entries ?? []).length, (nextW.j.schedule?.entries ?? []).length] });
     const mine = await call("GET", `${S}/me/weeks/${wk}`, mar);
