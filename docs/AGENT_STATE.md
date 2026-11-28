@@ -1,5 +1,30 @@
 # ETNARA Agent State
 
+## 2026-11-28 — Antes de fusionar integracion-connect (PR #301; sin fusionar ni desplegar)
+- 181: una residencia (hogar) no puede generar código de vínculo con Connect (CONNECT_ORG_TYPE_NOT_ALLOWED, 409). verifyConnect181 19/19.
+- 182: varias personas atendidas por familia: connect_transfers.connect_recipient_ref; connect_recipient_links por (organización, persona de Connect); payload persona.etiqueta (≤ 40). verifyConnect182 10/10.
+- 183: sin cobros superpuestos Connect → Premium: connect_links.connect_plan_until (aviso de Connect por /integrations/connect/plan, máximo 400 días), checkout con trial_end, saas_pending_changes + app_saas_upgrade_premium (programa o cambia el precio de la MISMA suscripción con prorrateo), trabajador cada 10 min. verifyConnect183 13/13. Suite 912/912.
+- RESERVA DE NÚMEROS: las migraciones 181, 182 y 183 están reservadas para integracion-connect. El desarrollo de hogares debe usar 184 en adelante (o renumerar si se fusiona antes, avisando). Ninguna rama de hogares usa ≥ 181 al 28-nov.
+
+## 2026-11-28 — 183 C-5: Stripe del ecosistema ETNARA en modo de prueba (rama integracion-connect; sin fusionar ni desplegar)
+- saas_prices (Care Esencial/Profesional/Avanzado y Premium; precio de Stripe solo lo fija el dueño del esquema, con historial; nunca real), saas_customers, saas_subscriptions (UNA viva por organización: un solo cobro; cambiar de plan = misma suscripción), saas_events (idempotente). No confundir con billing_* (facturación de agencias a clientes).
+- Webhook /integrations/stripe/webhook con cuerpo exacto (express.raw antes de express.json), firma ±5 min, modo real ignorado/bloqueado; checkout para administración; GET de plan para miembros. Apagado salvo SAAS_STRIPE=on; una clave real detiene el módulo.
+- Los hechos firmados para Connect incluyen premium/premiumUntil; un cambio de Premium avisa a Connect al instante.
+- Pruebas: verifyConnect183 10/10, rollback 183 4/4, tests/saas183.test.ts 3, suite 909/909 (+3).
+
+## 2026-11-28 — 181 C-1 y 182 C-4 (rama integracion-connect, PR #301 en borrador; sin fusionar ni desplegar)
+- C-1: POST /organizations/:id/connect/login → aserción Ed25519 de 2 min (persona, correo, organización, referencia) en el fragmento de la URL de Connect; el estado del vínculo lo ve cualquier miembro activo. El inicio de sesión de Care no cambia.
+- 182: connect_transfers (una viva por acuerdo de Connect y organización; idempotente), connect_recipient_links (una familia de Connect ↔ una persona atendida); recibir/retirar servidor a servidor; bandeja y decisión de administración o supervisión (crear persona atendida por la vía normal con RLS en la misma transacción, o usar la enlazada); la decisión va a Connect por la bandeja firmada (TRANSFER_DECIDED). Rechazo o retiro borran los datos de la familia.
+- Pruebas: verifyConnect181 18/18, verifyConnect182 9/9, rollback 181 y 182 4/4, suite 909/909.
+
+## 2026-11-28 — 181 Integración Care ↔ Connect C-2/C-3: vínculo de cuentas y estado firmado con aviso inmediato (rama integracion-connect, local, sin publicar; aprobada por Rafa 28-nov como rama independiente)
+- 181: connect_link_codes (solo la huella SHA-256 del código; un solo uso; ≤ 10 min), connect_links (una fila por organización; referencia de Connect única entre vínculos activos; revocación con autor), connect_outbox (ORG_STATUS_CHANGED / LINK_REVOKED, reintentos exponenciales hasta 1 h, 7 días de vida). FORCE RLS; app_runtime no lee ni escribe las tablas: todo pasa por funciones SECURITY DEFINER (crear código solo administración de la organización y no suspendida; canjear evita duplicados en ambos sentidos; estado por referencia; desvincular; reclamar y reportar la bandeja). Disparador AFTER UPDATE OF status, archived_at en organizations: solo organizaciones vinculadas.
+- Hechos que se comparten con Connect: organizationId, tipo (agencia/independiente/hogar), activa, suspendida, contrato satisfecho, orden de suscripción, referencia. Ninguna persona, residente ni monto.
+- src/modules/connect: firma Ed25519 compacta (iss/aud/typ/iat/exp ≤ 24 h/jti), configuración apagada salvo CONNECT_INTEGRATION=on con CONNECT_SIGNING_KEY, CONNECT_SERVICE_TOKEN_SHA256 y CONNECT_WEBHOOK_URL (https), rutas /organizations/:id/connect{,/link-code,/unlink} e /integrations/connect/{redeem,status/:ref,public-key} (404 si apagada), repartidor cada 30 s + aviso inmediato tras updatePlatformOrganizationLifecycle y tras desvincular.
+- El inicio de sesión de Care no cambia. Bases de datos independientes.
+- Pruebas: verifyConnect181 17/17, rollback 181 4/4, verifyTenantIsolation OK, tests/connect181.test.ts 6, suite 909/909; manifiesto de privilegios regenerado.
+- Sin fusionar, publicar, desplegar ni migrar. Producción necesitará las tres variables (con autorización) y la URL real de Connect.
+
 ## 2026-11-28 — Hogares F6 actualizado sobre main (F0–F5, 180 y body-parser en producción; sin migración)
 - Recorrido F6 14/14 con la corrección de F5 (presentes solo con entrada confirmada). Procedimientos al día: integración hecha; Hogar Demo permanente como propuesta de procedimiento definitivo (sección 2), nada ejecutado.
 

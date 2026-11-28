@@ -10,6 +10,8 @@ import { startLateArrivalWorker } from "./modules/verification/verification.arri
 import { startShiftReportWorker } from "./modules/shiftReports/shiftReportsCaregiver.service.js";
 import { startPushWorker } from "./modules/push/push.worker.js";
 import { startAttendanceWorker } from "./modules/residential/attendance.worker.js";
+import { startConnectWorker } from "./modules/connect/connect.worker.js";
+import { startSaasWorker } from "./modules/saas/saas.routes.js";
 
 const app = createApp();
 
@@ -28,6 +30,8 @@ app.listen(env.PORT, () => {
   startLateArrivalWorker();
   // Informe de Turno F2 (128): drafts appear when a visit ends; counts only in logs.
   startShiftReportWorker();
+  startConnectWorker();
+  startSaasWorker();
   // Activity photos v2 (142): expiry/purge job. Off unless PHOTO_RETENTION_JOB=simulate|on;
   // deleting expired photos also needs the retention policy APPROVED (database).
   startPhotoRetentionWorker();

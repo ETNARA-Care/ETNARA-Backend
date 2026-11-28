@@ -2,6 +2,10 @@
 
 ## In Progress
 
+### CONNECT-181 — Integración Care ↔ Connect C-2/C-3 (vínculo de cuentas, estado firmado, aviso inmediato)
+- Estado (28-nov): C-1 a C-6 implementados en integracion-connect (PR #301 en borrador); verifyConnect181 19/19, 182 10/10, 183 13/13, rollbacks 4/4, suite 912/912. Pendiente: autorización de fusión y despliegue (secuencia en el procedimiento de lanzamiento del proyecto Connect). Migraciones 181–183 reservadas; hogares usa 184+.
+- No fusionar, desplegar ni activar sin autorización de Rafa.
+
 ### CARE-TYPES-148 — Tipos de registro de cuidado por defecto para agencias nuevas (A1, bloqueante del piloto)
 
 - Status: PR de backend (migración 148 + verifyDefaultCareEventTypes 26/26 en ambos modos + rollback 19/19). Sin cambios en el portal. Not authorized: merge, deploy, applying 148 in production.
