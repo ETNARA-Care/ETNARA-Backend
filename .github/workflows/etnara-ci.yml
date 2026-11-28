@@ -555,6 +555,12 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigrationRollback.ts 177
 
+      - name: PostgreSQL 177 on the production sequence (175 → 180 → 176 → 177 gives the same schema as 176 → 177 → 180, rolling 177 back leaves production exactly as it is with 180 and 176, re-apply identical, 180 and 176 objects untouched, only the messaging window redefined)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigration177ProductionOrder.ts
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci

@@ -18,6 +18,8 @@ if (!admin || process.env.ETNARA_DISPOSABLE_DB !== "true") throw new Error("Requ
 if (process.env.NODE_ENV === "production") throw new Error("Production prohibited");
 if (/railway|rlwy|amazonaws|supabase|neon\.tech/i.test(admin)) throw new Error("Hosted database refused");
 const repo = process.cwd();
+// Solo lo que había al llegar la 176: hasta la 176 y la 180 (las fases posteriores, 177…, no cuentan aquí).
+const upTo176 = (n: number) => n <= 176 || n === 180;
 const ALL = join(repo, "migrations");
 const files = readdirSync(ALL).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
 const dir = (pick: (n: number) => boolean) => { const d = mkdtempSync(join(tmpdir(), "o176-")); for (const f of files.filter((f) => pick(Number(f.slice(0, 3))))) copyFileSync(join(ALL, f), join(d, f)); return d; };
@@ -42,14 +44,14 @@ const results: { name: string; pass: boolean; detail: string }[] = [];
 const check = (name: string, pass: boolean, detail: unknown = "") => results.push({ name, pass, detail: typeof detail === "string" ? detail : JSON.stringify(detail).slice(0, 1500) });
 try {
   // Producción hoy: todo ≤175 y 180 (sin 176)
-  const prod = await db("prod"); await quiet(() => applyPendingMigrations(prod, dir((n) => n !== 176)));
+  const prod = await db("prod"); await quiet(() => applyPendingMigrations(prod, dir((n) => n !== 176 && upTo176(n))));
   const sProd = await snap(prod);
   // Producción tras integrar F3: …175 → 180 → 176
-  await quiet(() => applyPendingMigrations(prod, dir(() => true)));
+  await quiet(() => applyPendingMigrations(prod, dir(upTo176)));
   const sProd176 = await snap(prod);
   const order = (await prod.query(`SELECT filename FROM schema_migrations WHERE filename >= '170' ORDER BY applied_at, filename`)).rows.map((r) => r.filename.slice(0, 3));
   // CI / base limpia: …175 → 176 → 180
-  const ci = await db("ci"); await quiet(() => applyPendingMigrations(ci, dir(() => true)));
+  const ci = await db("ci"); await quiet(() => applyPendingMigrations(ci, dir(upTo176)));
   const sCi = await snap(ci);
   const d1 = diff(sProd176, sCi);
   check("O1. Mismo esquema final en el orden de producción (180 → 176) y en el de una base limpia (176 → 180)", d1.soloA.length === 0 && d1.soloB.length === 0, d1);
@@ -62,7 +64,7 @@ try {
   const reg = (await prod.query(`SELECT count(*)::int n FROM schema_migrations WHERE filename LIKE '176_%'`)).rows[0].n;
   check("O2. Revertir la 176 sobre producción deja el esquema idéntico al de hoy (con la 180) y la desregistra", d2.soloA.length === 0 && d2.soloB.length === 0 && reg === 0, { ...d2, reg });
   // Volver a aplicar tras revertir = aplicación limpia
-  await quiet(() => applyPendingMigrations(prod, dir(() => true)));
+  await quiet(() => applyPendingMigrations(prod, dir(upTo176)));
   const d3 = diff(await snap(prod), sProd176);
   check("O3. Volver a aplicar la 176 tras revertirla da el mismo esquema que la primera vez", d3.soloA.length === 0 && d3.soloB.length === 0, d3);
   // 180 intacta tras 176: sus políticas y funciones no cambian
