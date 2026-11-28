@@ -1,6 +1,7 @@
 import { sql, type Transaction } from "kysely";
 import type { z } from "zod";
 import { withTenantContext } from "../../context/tenantContext.js";
+import { lockWorkerSchedule } from "../assignments/assignments.service.js";
 import { evaluateWorkerEligibilityInTransaction } from "../eligibility/eligibility.service.js";
 import { ResidentialError, RESIDENTIAL_MANAGER_REQUIRED, RESIDENTIAL_NOT_FOUND } from "./residentialErrors.js";
 import type { assignResidentsSchema, redistributeSchema, substitutionPreviewSchema, substitutionSchema } from "./residentAssignments.schemas.js";
@@ -306,7 +307,11 @@ async function evaluateSubstitution(trx: Trx, organizationId: string, shiftId: s
   if (effective.getTime() >= new Date(shift.scheduled_end).getTime()) blocks.push("shift_ended");
   const staff = await shiftStaff(trx, shiftId);
   const original = staff.find((s) => s.membership_id === input.originalMembershipId && s.assignment_status === "accepted");
-  if (!original || new Date(original.cov_end).getTime() <= effective.getTime()) blocks.push("original_not_covering");
+  // 27-nov: una persona ya sustituida en este turno no se vuelve a sustituir (ni con una hora anterior): su cobertura ya
+  // terminó y habría dos sustitutas cubriendo a la vez su lugar. Para cambiar a la sustituta, se sustituye a la sustituta.
+  const alreadySubstituted = (await sql<{ n: number }>`SELECT count(*)::int AS n FROM shift_substitutions
+    WHERE shift_id = ${shiftId} AND original_membership_id = ${input.originalMembershipId}`.execute(trx)).rows[0]?.n ?? 0;
+  if (!original || alreadySubstituted > 0 || new Date(original.cov_end).getTime() <= effective.getTime()) blocks.push("original_not_covering");
   if (staff.some((s) => s.membership_id === input.substituteMembershipId)) blocks.push("already_assigned");
   const sub = (await sql<{ status: string; internal_role: string | null; authorized: boolean }>`
     SELECT m.status, m.internal_role,
@@ -350,6 +355,10 @@ export function substitute(userId: string, organizationId: string, shiftId: stri
   return manage(userId, organizationId, async (trx) => {
     await requireBothFeatures(trx, organizationId);
     await sql`SELECT pg_advisory_xact_lock(hashtext(${`residential-assign:${shiftId}`}))`.execute(trx);
+    // 27-nov: como toda decisión de horario (Turnos, calendario, SmartMatch), la sustituta se serializa con el cerrojo de
+    // su membresía DESPUÉS del del turno: dos decisiones a la vez sobre la misma persona ya no pasan las dos los
+    // controles de solape, ni chocan al guardar su elegibilidad (antes daba 500).
+    await lockWorkerSchedule(trx, input.substituteMembershipId);
     const e = await evaluateSubstitution(trx, organizationId, shiftId, input, now);
     if (e.blocks.length > 0) throw new AssignmentError("RESIDENTIAL_SUBSTITUTION_BLOCKED", 409, { blocks: e.blocks });
     if (e.availabilityWarning && !input.confirmAvailability) throw new AssignmentError("RESIDENTIAL_SUBSTITUTION_AVAILABILITY_CONFIRMATION_REQUIRED", 409);

@@ -27,6 +27,10 @@ function fail(error: unknown, res: Response, operation: string) {
   if (isTenantAccessDenied(error)) return void res.status(403).json(TENANT_ACCESS_DENIED_BODY);
   if (error instanceof AttendanceError) return void res.status(error.status).json({ error: error.code, ...(error.details ? { details: error.details } : {}) });
   if (error instanceof ResidentialError) return void res.status(error.status).json({ error: error.code });
+  // Último recurso: el mismo client_event_id reenviado para OTRO turno (cliente defectuoso) choca con el índice único;
+  // es un conflicto del cliente, no un fallo del servidor. Nunca se crea un segundo ponche.
+  const pg = error as { code?: string; constraint?: string };
+  if (pg?.code === "23505" && pg.constraint === "attendance_punches_client_event_uidx") return void res.status(409).json({ error: "ATTENDANCE_DUPLICATE_EVENT" });
   const code = residentialDbErrorCode(error);
   if (code) return void res.status(residentialDbErrorStatus(code)).json({ error: code });
   if (error instanceof MembershipNotActiveError) return void res.status(403).json({ error: "ORGANIZATION_ACCESS_DENIED" });

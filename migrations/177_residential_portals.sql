@@ -143,7 +143,8 @@ CREATE POLICY residential_family_own_user ON users AS RESTRICTIVE FOR ALL TO app
   USING (NOT public.app_residential_family_only() OR id = NULLIF(current_setting('app.current_user_id', true), '')::uuid);
 
 -- 4. Autor de cada actividad para la familia de un hogar: SOLO nombre y puesto, y solo de quien registró actividades de
--- SU familiar (relación activa con el rol FAMILY). Sustituye la lectura directa de workers y memberships, que la RLS de
+-- SU familiar (relación activa con el rol FAMILY), y solo en un hogar (en agencias e independientes no devuelve nada).
+-- Sustituye la lectura directa de workers y memberships, que la RLS de
 -- arriba cierra para la familia.
 CREATE OR REPLACE FUNCTION public.app_family_activity_authors(p_care_recipient_id uuid)
 RETURNS TABLE (membership_id uuid, display_name text, internal_role text)
@@ -158,6 +159,7 @@ AS $$
   JOIN public.workers w ON w.id = owm.worker_id
   WHERE ce.care_recipient_id = p_care_recipient_id
     AND ce.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid
+    AND public.app_org_is_residential(ce.organization_id)
     AND NOT public.app_is_superadmin()
     AND EXISTS (
       SELECT 1 FROM public.family_relationships fr

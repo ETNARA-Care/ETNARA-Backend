@@ -342,6 +342,168 @@ async function main() {
     && hist.body.history.substitutions[0].reasonCode === "unplanned_absence" && ["redistribution", "substitution", "ended", "transfer"].every((r) => histText.includes(r))
     && !/diagn|medic|salud/i.test(Object.keys(hist.body.history.substitutions[0]).join()), { n: hist.body.history?.periods.length, subs: hist.body.history?.substitutions });
 
+  // ---- 27-nov · Preparación de la integración: concurrencia, «Mi horario» y ponches tras una sustitución -------------------------
+  const adminHb = await person(H, "admin-hb", ["ORGANIZATION_ADMIN"]);
+  const fresh = async (key: string) => {
+    const p = await person(H, key, ["WORKER"], true);
+    for (const l of [L, L2]) await q(`INSERT INTO establishment_worker_assignments (organization_id,location_id,organization_worker_membership_id) VALUES ($1,$2,$3)`, [H, l, p.owm]);
+    return p;
+  };
+  const subst = (by: P, shiftId: string, orig: P, sub: P, extra: Json = {}) =>
+    call("POST", `${SU(H)}/shifts/${shiftId}`, by.token, { originalMembershipId: orig.owm, substituteMembershipId: sub.owm, reasonCode: "operational", ...extra });
+  // Turnos vivos de la persona (aceptados o pendientes, no cancelados) que se solapan entre sí, con su cobertura.
+  const overlapsOf = async (p: P) => (await q<{ n: number }>(`
+    SELECT count(*)::int n FROM assignments a1 JOIN assignments a2 ON a2.organization_worker_membership_id = a1.organization_worker_membership_id AND a2.id > a1.id
+    JOIN shifts s1 ON s1.id = a1.shift_id JOIN shifts s2 ON s2.id = a2.shift_id
+    CROSS JOIN LATERAL app_residential_coverage_bounds_internal(s1.id, a1.organization_worker_membership_id) c1
+    CROSS JOIN LATERAL app_residential_coverage_bounds_internal(s2.id, a2.organization_worker_membership_id) c2
+    WHERE a1.organization_worker_membership_id = $1 AND a1.response_status IN ('pending','accepted') AND a2.response_status IN ('pending','accepted')
+      AND s1.status::text <> 'cancelled' AND s2.status::text <> 'cancelled' AND c1.cov_start < c2.cov_end AND c2.cov_start < c1.cov_end`, [p.owm])).rows[0].n;
+  // K1. La misma sustituta a la vez en dos turnos solapados de dos establecimientos (cerrojos por turno distintos).
+  {
+    const rounds: Json[] = []; let ok = true;
+    for (let i = 0; i < 4; i++) {
+      const a = await fresh(`k1a-${i}`), b = await fresh(`k1b-${i}`), x = await fresh(`k1x-${i}`);
+      const sA = await shift(H, L, -30, 450, [a]), sB = await shift(H, L2, -20, 440, [b]);
+      const pair = await Promise.all([subst(adminH, sA, a, x), subst(adminHb, sB, b, x)]);
+      const ov = await overlapsOf(x);
+      const pass = pair.filter((r) => r.status === 201).length === 1 && pair.filter((r) => r.status === 409).length === 1 && ov === 0;
+      ok = ok && pass; rounds.push({ st: pair.map((r) => [r.status, r.body.error, r.body.blocks ?? r.body.details?.blocks]), ov });
+    }
+    check("K1. La misma persona sustituta a la vez en dos turnos solapados (dos establecimientos, 4 rondas): solo una sustitución, la otra 409; nunca dos turnos solapados", ok, rounds);
+  }
+  // K2. Sustitución a la vez que la asignación normal (la del portal y del calendario) de la misma persona en un turno solapado.
+  {
+    const rounds: Json[] = []; let ok = true;
+    for (let i = 0; i < 4; i++) {
+      const a = await fresh(`k2a-${i}`), b = await fresh(`k2b-${i}`), x = await fresh(`k2x-${i}`);
+      const sA = await shift(H, L, -30, 450, [a]), sB = await shift(H, L2, -20, 440, [b]);
+      const pair = await Promise.all([subst(adminH, sA, a, x), call("POST", `/organizations/${H}/shifts/${sB}/assignments`, adminHb.token, { organizationWorkerMembershipId: x.owm })]);
+      const ov = await overlapsOf(x);
+      const pass = pair.filter((r) => r.status === 201).length === 1 && pair.filter((r) => r.status === 409).length === 1 && ov === 0;
+      ok = ok && pass; rounds.push({ st: pair.map((r) => [r.status, r.body.error]), ov });
+    }
+    check("K2. Sustitución y asignación normal a la vez de la misma persona en turnos solapados (4 rondas): una gana y la otra 409; nunca dos turnos solapados", ok, rounds);
+  }
+  // K3. Dos administradoras sustituyen a la vez a la misma persona del mismo turno con sustitutas distintas.
+  {
+    const rounds: Json[] = []; let ok = true;
+    for (let i = 0; i < 3; i++) {
+      const a = await fresh(`k3a-${i}`), x = await fresh(`k3x-${i}`), y = await fresh(`k3y-${i}`);
+      const sA = await shift(H, L, -30, 450, [a]);
+      const pair = await Promise.all([subst(adminH, sA, a, x), subst(adminHb, sA, a, y)]);
+      const subs = (await q<{ n: number }>(`SELECT count(*)::int n FROM shift_substitutions WHERE shift_id=$1`, [sA])).rows[0].n;
+      const pass = pair.filter((r) => r.status === 201).length === 1 && pair.filter((r) => r.status === 409).length === 1 && subs === 1;
+      ok = ok && pass; rounds.push({ st: pair.map((r) => [r.status, r.body.error]), subs });
+    }
+    check("K3. Dos administradoras sustituyen a la vez a la misma persona del mismo turno (3 rondas): una sustitución, la otra 409", ok, rounds);
+  }
+  // K3b. Sin concurrencia: sustituir a la misma persona del mismo turno dos veces, la segunda con una hora ANTERIOR a la primera.
+  {
+    const a = await fresh("k3b-a"), x = await fresh("k3b-x"), y = await fresh("k3b-y");
+    const sA = await shift(H, L, -30, 450, [a]);
+    const at = (min: number) => new Date(Date.now() + min * 60_000).toISOString();
+    const first = await subst(adminH, sA, a, x, { effectiveAt: at(60) });
+    const second = await subst(adminH, sA, a, y, { effectiveAt: at(30) });
+    const subs = (await q<{ n: number }>(`SELECT count(*)::int n FROM shift_substitutions WHERE shift_id=$1`, [sA])).rows[0].n;
+    // Nunca dos personas cubriendo a la vez el lugar de la original.
+    const both = (await q<{ n: number }>(`SELECT count(*)::int n FROM app_residential_coverage_bounds_internal($1,$2) cx, app_residential_coverage_bounds_internal($1,$3) cy
+      WHERE cx.cov_start < cy.cov_end AND cy.cov_start < cx.cov_end AND cx.cov_end > cx.cov_start AND cy.cov_end > cy.cov_start
+        AND EXISTS (SELECT 1 FROM assignments WHERE shift_id=$1 AND organization_worker_membership_id=$3 AND response_status='accepted')`, [sA, x.owm, y.owm])).rows[0].n;
+    check("K3b. Una persona ya sustituida en un turno no se sustituye otra vez (ni con una hora anterior): 409 «ya no cubre», una sola sustitución y nunca dos sustitutas a la vez",
+      first.status === 201 && second.status === 409 && JSON.stringify(second.body).includes("original_not_covering") && subs === 1 && both === 0,
+      { first: first.status, second: [second.status, second.body], subs, both });
+  }
+  // K4. Sustitución completa (antes del inicio) a la vez que se cancela el turno: nunca un 500 y el estado final es coherente.
+  {
+    const rounds: Json[] = []; let ok = true;
+    for (let i = 0; i < 3; i++) {
+      const a = await fresh(`k4a-${i}`), x = await fresh(`k4x-${i}`);
+      const sF = await shift(H, L, 300 + i * 600, 700 + i * 600, [a]);
+      const pair = await Promise.all([subst(adminH, sF, a, x), call("POST", `/organizations/${H}/shifts/${sF}/cancel`, adminHb.token)]);
+      const st = (await q<{ status: string }>(`SELECT status::text FROM shifts WHERE id=$1`, [sF])).rows[0].status;
+      const wk = (await q<{ week: string }>(`SELECT to_char(date_trunc('week', scheduled_start AT TIME ZONE 'America/Puerto_Rico'), 'YYYY-MM-DD') AS week FROM shifts WHERE id=$1`, [sF])).rows[0].week;
+      const xWeek = (await call("GET", `/organizations/${H}/residential/schedule/me/weeks/${wk}`, x.token)).body.schedule?.shifts ?? [];
+      const pass = pair.every((r) => r.status < 500) && (st !== "cancelled" || !xWeek.some((s: Json) => (s.shiftId ?? s.id) === sF));
+      ok = ok && pass; rounds.push({ st: pair.map((r) => [r.status, r.body.error]), shift: st, enHorario: xWeek.some((s: Json) => (s.shiftId ?? s.id) === sF) });
+    }
+    check("K4. Sustitución completa y cancelación del turno a la vez (3 rondas): nunca un 500; si el turno queda cancelado, no aparece en «Mi horario» de la sustituta", ok, rounds);
+  }
+  // M1. «Mi horario» y «Ponchar» después de una sustitución parcial y de una completa.
+  {
+    const a = await fresh("m1a"), x = await fresh("m1x"), c = await fresh("m1c"), y = await fresh("m1y");
+    const sP = await shift(H, L, -30, 450, [a]), sF = await shift(H, L, 1500, 1980, [c]);
+    const part = await subst(adminH, sP, a, x), full = await subst(adminH, sF, c, y);
+    const T = part.body.substitution?.effectiveAt as string;
+    const weekOf = async (shiftId: string) => (await q<{ week: string }>(`SELECT to_char(date_trunc('week', scheduled_start AT TIME ZONE 'America/Puerto_Rico'), 'YYYY-MM-DD') AS week FROM shifts WHERE id=$1`, [shiftId])).rows[0].week;
+    const mine = async (p: P, shiftId: string) => {
+      const wk = await call("GET", `/organizations/${H}/residential/schedule/me/weeks/${await weekOf(shiftId)}`, p.token);
+      return (wk.body.schedule?.shifts ?? []).find((s: Json) => (s.shiftId ?? s.id) === shiftId) ?? null;
+    };
+    const punchList = async (p: P) => ((await call("GET", `/organizations/${H}/residential/attendance/me`, p.token)).body.attendance?.shifts ?? []) as Json[];
+    const [aSees, xSees, cSees, ySees] = [await mine(a, sP), await mine(x, sP), await mine(c, sF), await mine(y, sF)];
+    const aPunch = (await punchList(a)).find((s) => s.shiftId === sP), xPunch = (await punchList(x)).find((s) => s.shiftId === sP);
+    const t = (v: unknown) => (v ? new Date(String(v)).getTime() : NaN);
+    // «Mi horario» da la hora local de Puerto Rico al minuto (YYYY-MM-DDTHH:MI).
+    const local = (iso: string) => new Date(iso).toLocaleString("sv-SE", { timeZone: "America/Puerto_Rico" }).replace(" ", "T").slice(0, 16);
+    check("M1. Tras una sustitución parcial, «Mi horario» y «Ponchar» muestran a cada persona SU parte (la original hasta la hora efectiva, la sustituta desde ella); tras una completa, solo la sustituta lo ve",
+      part.status === 201 && full.status === 201 && !!aSees && !!xSees && !cSees && !!ySees
+      && aSees.endsAt === local(T) && xSees.startsAt === local(T)
+      && !!aPunch && !!xPunch && t(aPunch.scheduledEnd) === t(T) && t(xPunch.scheduledStart) === t(T),
+      { T, aSees, xSees, cSees: !!cSees, ySees: !!ySees, aPunch: aPunch && [aPunch.scheduledStart, aPunch.scheduledEnd], xPunch: xPunch && [xPunch.scheduledStart, xPunch.scheduledEnd] });
+  }
+  // C3 (27-nov, auditoría GPT). app_residential_coverage_bounds llamada directamente como app_runtime: solo responde con
+  // turno y membresía de la organización de la sesión, y solo a su administración o a la propia persona.
+  {
+    const asUser = async (s: string, p: readonly unknown[], who: P | null, orgId: string | null) => {
+      await rtClient.query("BEGIN");
+      if (who) await rtClient.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [who.userId, orgId]);
+      try { return (await rtClient.query(s, [...p])).rowCount ?? 0; } catch (e) { return (e as Error).message; } finally { await rtClient.query("ROLLBACK"); }
+    };
+    const cov = (shiftId: string, owm: string) => [`SELECT * FROM app_residential_coverage_bounds($1,$2)`, [shiftId, owm]] as const;
+    const r = {
+      companeraVeLaDeOtra: await asUser(...cov(S1, w.w1.owm!), w.w2, H),
+      propia: await asUser(...cov(S1, w.w2.owm!), w.w2, H),
+      adminPropioHogar: await asUser(...cov(S1, w.w1.owm!), adminH, H),
+      adminOtroHogarConSuOrg: await asUser(...cov(S1, w.w1.owm!), adminH2, H2),
+      adminOtroHogarDiciendoOrgAjena: await asUser(...cov(S1, w.w1.owm!), adminH2, H),
+      adminMembresiaDeOtraOrg: await asUser(...cov(S1, wH2.owm!), adminH, H),
+      adminTurnoDeOtraOrg: await asUser(...cov(SH2, wH2.owm!), adminH, H),
+      personalDeOtroHogar: await asUser(...cov(S1, w.w1.owm!), wH2, H2),
+      agencia: await asUser(...cov(S1, w.w1.owm!), adminA, A),
+      sinContexto: await asUser(...cov(S1, w.w1.owm!), null, null),
+      internaDirecta: await asUser(`SELECT * FROM app_residential_coverage_bounds_internal($1,$2)`, [S1, w.w1.owm], adminH, H),
+    };
+    check("C3. Cobertura llamada directamente como app_runtime: la propia persona y la administración de su hogar sí; una compañera, otro hogar (con su organización o diciendo la ajena), membresía o turno de otra organización, agencia o sin contexto: nada; la función interna no se puede llamar",
+      r.propia === 1 && r.adminPropioHogar === 1 && r.companeraVeLaDeOtra === 0 && r.adminOtroHogarConSuOrg === 0 && r.adminOtroHogarDiciendoOrgAjena === 0
+      && r.adminMembresiaDeOtraOrg === 0 && r.adminTurnoDeOtraOrg === 0 && r.personalDeOtroHogar === 0 && r.agencia === 0 && r.sinContexto === 0
+      && typeof r.internaDirecta === "string" && /permission denied/.test(r.internaDirecta), r);
+    // C3b (27-nov, 2.ª ronda GPT). Con SU PROPIA membresía, una persona solo consulta la cobertura de turnos en los que está
+    // (o estuvo, por una sustitución). S1: w1 sustituida en parte por w3 (T); w2 sigue. S0: w3 sustituida del todo por w9.
+    const row = async (shiftId: string, who: P) => {
+      await rtClient.query("BEGIN");
+      await rtClient.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [who.userId, H]);
+      try { return (await rtClient.query<{ cov_start: Date; cov_end: Date }>(`SELECT * FROM app_residential_coverage_bounds($1,$2)`, [shiftId, who.owm])).rows; }
+      finally { await rtClient.query("ROLLBACK"); }
+    };
+    const T1 = (await q<{ t: Date }>(`SELECT effective_at t FROM shift_substitutions WHERE shift_id=$1 AND original_membership_id=$2`, [S1, w.w1.owm])).rows[0].t;
+    const T0 = (await q<{ t: Date }>(`SELECT effective_at t FROM shift_substitutions WHERE shift_id=$1 AND original_membership_id=$2`, [S0, w.w3.owm])).rows[0].t;
+    const h = {
+      noAsignadaEnS1: (await row(S1, w.w4)).length,
+      noAsignadaEnS0: (await row(S0, w.w2)).length,
+      noAsignadaEnOtroTurno: (await row(SCANCEL, w.w1)).length,
+      originalParcialHastaT: (await row(S1, w.w1)).map((x) => x.cov_end.getTime() === new Date(T1).getTime()),
+      sustitutaParcialDesdeT: (await row(S1, w.w3)).map((x) => x.cov_start.getTime() === new Date(T1).getTime()),
+      companeraQueSigue: (await row(S1, w.w2)).length,
+      originalCompletaSinTramo: (await row(S0, w.w3)).map((x) => x.cov_end.getTime() <= x.cov_start.getTime() && x.cov_end.getTime() === new Date(T0).getTime()),
+      sustitutaCompleta: (await row(S0, w.w9)).length,
+    };
+    check("C3b. Con su propia membresía nadie consulta un turno en el que no está (en S1, en S0 ni en otro turno: nada); se conserva lo legítimo tras una sustitución: la original parcial hasta la hora efectiva, la sustituta desde ella, la compañera que sigue, y la original de una completa ve que su tramo quedó vacío",
+      h.noAsignadaEnS1 === 0 && h.noAsignadaEnS0 === 0 && h.noAsignadaEnOtroTurno === 0
+      && JSON.stringify(h.originalParcialHastaT) === "[true]" && JSON.stringify(h.sustitutaParcialDesdeT) === "[true]" && h.companeraQueSigue === 1
+      && JSON.stringify(h.originalCompletaSinTramo) === "[true]" && h.sustitutaCompleta === 1, h);
+  }
+
   // ---- Agencias sin cambios y respuestas --------------------------------------------------------------------------------------
   const agencySees = await sees(wA, A), agencyRls = await rlsCount(wA, A);
   check("Z1. Agencia sin cambios (regresión de la 030): la cuidadora con asignación aceptada sigue viendo a su persona atendida",
