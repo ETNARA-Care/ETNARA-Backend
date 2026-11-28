@@ -22,9 +22,9 @@ export const fetchPoster: ConnectPoster = async (url, body) => {
 export async function runConnectOutboxTick(cfg: ConnectConfig | null = connectConfig(), post: ConnectPoster = fetchPoster) {
   const result = { delivered: 0, retry: 0 };
   if (!cfg) return result;
-  const jobs = (await sql<{ id: string; event_type: string; facts: OrgFacts | null; connect_provider_ref: string | null }>`SELECT * FROM public.app_connect_outbox_claim(50)`.execute(db)).rows;
+  const jobs = (await sql<{ id: string; event_type: string; facts: OrgFacts | null; connect_provider_ref: string | null; payload?: unknown }>`SELECT * FROM public.app_connect_outbox_claim(50)`.execute(db)).rows;
   for (const j of jobs) {
-    const body = signMessage(cfg.key, "care.org.event", { event: j.event_type, connectProviderRef: j.connect_provider_ref, facts: j.facts });
+    const body = signMessage(cfg.key, "care.org.event", { event: j.event_type, connectProviderRef: j.connect_provider_ref, facts: j.facts, ...(j.payload ? { transfer: j.payload } : {}) });
     const status = await post(cfg.webhookUrl, body);
     await sql`SELECT public.app_connect_outbox_report(${j.id}::bigint, ${status})`.execute(db);
     if (status >= 200 && status < 300) result.delivered++; else result.retry++;

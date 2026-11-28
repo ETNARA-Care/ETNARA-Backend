@@ -1,5 +1,10 @@
 # ETNARA Agent State
 
+## 2026-11-28 — 181 C-1 y 182 C-4 (rama integracion-connect, PR #301 en borrador; sin fusionar ni desplegar)
+- C-1: POST /organizations/:id/connect/login → aserción Ed25519 de 2 min (persona, correo, organización, referencia) en el fragmento de la URL de Connect; el estado del vínculo lo ve cualquier miembro activo. El inicio de sesión de Care no cambia.
+- 182: connect_transfers (una viva por acuerdo de Connect y organización; idempotente), connect_recipient_links (una familia de Connect ↔ una persona atendida); recibir/retirar servidor a servidor; bandeja y decisión de administración o supervisión (crear persona atendida por la vía normal con RLS en la misma transacción, o usar la enlazada); la decisión va a Connect por la bandeja firmada (TRANSFER_DECIDED). Rechazo o retiro borran los datos de la familia.
+- Pruebas: verifyConnect181 18/18, verifyConnect182 9/9, rollback 181 y 182 4/4, suite 909/909.
+
 ## 2026-11-28 — 181 Integración Care ↔ Connect C-2/C-3: vínculo de cuentas y estado firmado con aviso inmediato (rama integracion-connect, local, sin publicar; aprobada por Rafa 28-nov como rama independiente)
 - 181: connect_link_codes (solo la huella SHA-256 del código; un solo uso; ≤ 10 min), connect_links (una fila por organización; referencia de Connect única entre vínculos activos; revocación con autor), connect_outbox (ORG_STATUS_CHANGED / LINK_REVOKED, reintentos exponenciales hasta 1 h, 7 días de vida). FORCE RLS; app_runtime no lee ni escribe las tablas: todo pasa por funciones SECURITY DEFINER (crear código solo administración de la organización y no suspendida; canjear evita duplicados en ambos sentidos; estado por referencia; desvincular; reclamar y reportar la bandeja). Disparador AFTER UPDATE OF status, archived_at en organizations: solo organizaciones vinculadas.
 - Hechos que se comparten con Connect: organizationId, tipo (agencia/independiente/hogar), activa, suspendida, contrato satisfecho, orden de suscripción, referencia. Ninguna persona, residente ni monto.

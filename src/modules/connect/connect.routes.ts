@@ -5,6 +5,7 @@ import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/
 import { respondInternalError } from "../../observability/internalError.js";
 import { connectConfig, serviceTokenMatches } from "./connect.config.js";
 import { publicKeyPem, signMessage } from "./connect.signing.js";
+import { decideTransfer, Decide, InboundTransfer, listTransfers, receiveTransfer, Withdraw, withdrawTransfer } from "./connect.transfers.js";
 import { ConnectError, createLinkCode, linkStatus, loginFacts, redeemLinkCode, statusByRef, unlink } from "./connect.service.js";
 
 /**
@@ -17,6 +18,9 @@ import { ConnectError, createLinkCode, linkStatus, loginFacts, redeemLinkCode, s
  *     POST /integrations/connect/redeem                       canjea el código y devuelve el estado FIRMADO
  *     GET  /integrations/connect/status/:connectProviderRef   estado FIRMADO vigente (respaldo)
  *     POST /organizations/:organizationId/connect/login     C-1: aserción firmada (2 min, un solo uso) para entrar en Connect
+ *     GET  /organizations/:organizationId/connect/transfers               C-4: servicios que familias autorizaron pasar a Care
+ *     POST /organizations/:organizationId/connect/transfers/:id/decision  aceptar (persona nueva o existente) o rechazar
+ *   Servidor a servidor: POST /integrations/connect/transfers y /integrations/connect/transfers/withdraw (C-4)
  *   Pública: GET /integrations/connect/public-key (llave pública para verificar las firmas).
  * El inicio de sesión de Care no cambia.
  */
@@ -83,6 +87,26 @@ router.get("/integrations/connect/status/:ref", service, async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({ status: signMessage(connectConfig()!.key, "care.org.status", facts) });
   } catch (e) { fail(res, e, req); }
+});
+router.get("/organizations/:organizationId/connect/transfers", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = orgId(req); if (!o) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try { res.setHeader("Cache-Control", "no-store"); res.json({ transfers: await listTransfers(req.auth!.userId, o) }); } catch (e) { fail(res, e, req); }
+});
+router.post("/organizations/:organizationId/connect/transfers/:transferId/decision", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = orgId(req); const t = uuid.safeParse(req.params.transferId); const b = Decide.safeParse(req.body);
+  if (!o || !t.success || !b.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
+  try { res.json(await decideTransfer(req.auth!.userId, o, t.data, b.data)); } catch (e) { fail(res, e, req); }
+});
+router.post("/integrations/connect/transfers", service, async (req, res) => {
+  const p = InboundTransfer.safeParse(req.body); if (!p.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
+  try {
+    const r = await receiveTransfer(p.data);
+    res.status(r === "received" || r === "duplicate" ? 200 : r === "not_linked" ? 404 : 400).json({ result: r });
+  } catch (e) { fail(res, e, req); }
+});
+router.post("/integrations/connect/transfers/withdraw", service, async (req, res) => {
+  const p = Withdraw.safeParse(req.body); if (!p.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
+  try { const r = await withdrawTransfer(p.data); res.status(r === "unknown" ? 404 : r === "already_decided" ? 409 : 200).json({ result: r }); } catch (e) { fail(res, e, req); }
 });
 router.get("/integrations/connect/public-key", (_req, res) => {
   res.type("application/x-pem-file").send(publicKeyPem(connectConfig()!.key));
