@@ -257,6 +257,20 @@ async function main() {
     aOne.status === 200 && aOne.body.recipient && !("residence" in aOne.body.recipient)
     && (await call("GET", `/organizations/${A}/care-recipients/${RA}/family-shifts`, famA.token)).body.shifts?.length === 1, aOne.body);
 
+  // F6 (auditoría GPT 28-nov): los campos estructurados y la función de autores son SOLO de hogares. En una agencia el
+  // historial familiar queda exactamente como antes (sin «fields», que podrían llevar un número que el resumen omite) y
+  // la función no devuelve nada aunque la llame una familia con relación activa.
+  const evA = (await q<{ id: string }>(`INSERT INTO care_events (organization_id, shift_id, care_recipient_id, organization_worker_membership_id, care_event_type_id, occurred_at, structured_data)
+    SELECT $1,$2,$3,$4,t.id,now() - interval '5 minutes','{"amount": 250}'::jsonb FROM care_event_types t WHERE t.code='HYDRATION' RETURNING id`, [A, SA, RA, wA.owm])).rows[0].id;
+  const tlA = await call("GET", `/organizations/${A}/care-recipients/${RA}/timeline`, famA.token);
+  const itA = (tlA.body.items as Json[] | undefined)?.find((i) => i.id === evA);
+  const authorsA = await asUser<{ n: number }>(famA, A, `SELECT count(*)::int AS n FROM app_family_activity_authors($1)`, [RA]);
+  const authorsH = await asUser<{ n: number }>(famR1, H, `SELECT count(*)::int AS n FROM app_family_activity_authors($1)`, [R1]);
+  check("F6. Agencias e independientes sin novedades: el historial familiar de la agencia no lleva «fields» y conserva su autor por la vía anterior; app_family_activity_authors no devuelve nada fuera de un hogar y sigue funcionando en el hogar",
+    tlA.status === 200 && !!itA && !("fields" in itA) && itA.summary === "Hidratación registrada" && itA.caregiver?.displayName === "Ficticia wa"
+    && authorsA[0]?.n === 0 && (authorsH[0]?.n ?? 0) >= 1 && !!item?.fields,
+    { tlA: tlA.status, itA, authorsA, authorsH });
+
   // ---- R. Informe de asistencia --------------------------------------------------------------------------------------------
   const PUN = `/organizations/${H}/residential/attendance`;
   const t0 = Date.now();
@@ -264,14 +278,14 @@ async function main() {
   await mp(SPAST, w1, "in", 26 * 60); await mp(SPAST, w1, "out", 18 * 60);
   await mp(S1, w1, "in", 55);
   // w2: ponches sin conexión (como los envía el teléfono): quedan pendientes de revisión, nunca validados solos.
-  const offline = async (type: "in" | "out", minAgo: number, sessionIn: string | null = null) => {
+  const offline = async (type: "in" | "out", minAgo: number, sessionIn: string | null = null, who: P = w2) => {
     await db.query("BEGIN");
-    await db.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [w2.userId, H]);
+    await db.query(`SELECT set_config('app.current_user_id',$1,true), set_config('app.current_org_id',$2,true)`, [who.userId, H]);
     const id = (await q<{ id: string }>(`INSERT INTO attendance_punches
     (organization_id, location_id, shift_id, organization_worker_membership_id, user_id, punch_type, client_event_id, origin, declared_at, effective_at,
      code_method, code_status, location_status, initial_validation, session_in_punch_id, created_by_user_id)
     VALUES ($1,$2,$3,$4,$5,$6,gen_random_uuid(),'offline',$7,$7,'pin','invalid','unavailable','pending_review',$8,$5) RETURNING id`,
-    [H, L, S1, w2.owm, w2.userId, type, new Date(t0 - minAgo * 60_000).toISOString(), sessionIn])).rows[0].id;
+    [H, L, S1, who.owm, who.userId, type, new Date(t0 - minAgo * 60_000).toISOString(), sessionIn])).rows[0].id;
     await db.query("COMMIT"); return id;
   };
   const w2in = await offline("in", 50); await offline("out", 20, w2in);
@@ -328,6 +342,26 @@ async function main() {
     { occ: panel?.occupancy && { ...panel.occupancy, establishments: undefined }, att: panel?.attendance, asg: panel?.assignments });
   check("P2. Cada parte del panel solo con su interruptor (sin HOGAR_PONCHES la asistencia es null); el personal no ve el panel (403)",
     ov2.status === 200 && ov2.body.overview.panel.attendance === null && ov2.body.overview.panel.assignments !== null && ovW.status === 403, [ov2.body.overview?.panel?.attendance, ovW.status]);
+
+  // P3 (auditoría GPT 28-nov): presentes = solo entradas confirmadas (validadas o justificadas). Una entrada pendiente de
+  // revisión no es presencia confirmada (cuenta en «por revisar»). Una salida no reconocida no cierra una sesión válida;
+  // una salida pendiente sí la cierra (la persona declaró que salió), como en el cálculo de horas de F4.
+  const w2open = await offline("in", 10);
+  const w1in = (await q<{ id: string }>(`SELECT id FROM attendance_punches WHERE shift_id=$1 AND organization_worker_membership_id=$2 AND punch_type='in'`, [S1, w1.owm])).rows[0].id;
+  const w1badOut = await offline("out", 5, w1in, w1);
+  const rv = await call("POST", `${PUN}/punches/review`, adminH.token, { punchIds: [w1badOut], decision: "not_recognized", reason: "Salida ficticia no reconocida" });
+  const ov3 = await call("GET", `/organizations/${H}/residential/overview`, adminH.token);
+  const att3 = ov3.body.overview?.panel?.attendance;
+  const rep3 = await call("GET", `${PUN}/establishments/${L}/report?from=${day(0)}&to=${day(0)}`, adminH.token);
+  const w1rows = ((rep3.body.report?.rows ?? []) as Json[]).filter((r) => r.shiftId === S1 && r.membershipId === w1.owm);
+  check("P3. Panel: una entrada pendiente de revisión no aparece como presente (sigue en «por revisar») y una salida no reconocida no cierra la sesión válida (w1 sigue presente, igual que en el informe)",
+    rv.status === 200 && ov3.status === 200 && att3?.present?.length === 1 && att3.present[0].workerName === "Ficticia w1" && !att3.present.some((x: Json) => x.workerName === "Ficticia w2")
+    && att3.pendingReview === 3 && w1rows.length === 1 && w1rows[0].openSession === true,
+    { rv: rv.status, att3, w1rows: w1rows.map((r) => r.openSession), w2open: !!w2open });
+  const w1goodOut = await mp(S1, w1, "out", 2);
+  const ov4 = await call("GET", `/organizations/${H}/residential/overview`, adminH.token);
+  check("P4. Una salida válida sí cierra la sesión: w1 deja de estar presente",
+    w1goodOut.status === 201 && ov4.status === 200 && ov4.body.overview?.panel?.attendance?.present?.length === 0, { out: w1goodOut.status, att: ov4.body.overview?.panel?.attendance });
 
   // ---- O. Centro operacional --------------------------------------------------------------------------------------------------
   const opsH = await call("GET", `/organizations/${H}/operations/center`, adminH.token);

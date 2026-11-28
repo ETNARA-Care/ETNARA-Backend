@@ -646,8 +646,11 @@ export function attendanceEstablishments(userId: string, organizationId: string)
 
 /**
  * 177 (F5): parte de asistencia del panel del hogar (solo administración; el llamador ya comprobó el rol y el interruptor).
- * Presentes: sesiones abiertas ahora (entrada sin salida posterior en un turno no cancelado, de las últimas 24 h y no
- * marcada como no reconocida). Solo nombre del personal y establecimiento: sin ubicación ni datos del ponche.
+ * Presentes: sesiones abiertas ahora con la entrada CONFIRMADA (validada o justificada; una entrada pendiente de revisión
+ * no es presencia confirmada y solo cuenta en «por revisar»), en un turno no cancelado y de las últimas 24 h. La sesión
+ * se cierra con la misma regla que el cálculo de horas (attendanceModel): una salida de esa sesión (o sin sesión y
+ * posterior) que no esté marcada como no reconocida. Solo nombre del personal y establecimiento: sin ubicación ni datos
+ * del ponche.
  */
 export async function attendancePanelSection(trx: Trx, organizationId: string, now = new Date()) {
   const present = (await sql<{ worker_name: string | null; location_name: string; since: string }>`
@@ -656,10 +659,12 @@ export async function attendancePanelSection(trx: Trx, organizationId: string, n
     JOIN shifts s ON s.id = p.shift_id AND s.status::text <> 'cancelled'
     JOIN organization_worker_memberships m ON m.id = p.organization_worker_membership_id
     JOIN workers w ON w.id = m.worker_id JOIN locations l ON l.id = p.location_id
-    WHERE p.organization_id = ${organizationId} AND p.punch_type = 'in' AND ${EFFECTIVE} <> 'not_recognized'
+    WHERE p.organization_id = ${organizationId} AND p.punch_type = 'in' AND ${EFFECTIVE} IN ('validated', 'justified')
       AND p.effective_at <= ${now.toISOString()}::timestamptz AND p.effective_at > ${now.toISOString()}::timestamptz - interval '24 hours'
       AND NOT EXISTS (SELECT 1 FROM attendance_punches o WHERE o.shift_id = p.shift_id
-        AND o.organization_worker_membership_id = p.organization_worker_membership_id AND o.punch_type = 'out' AND o.effective_at >= p.effective_at)
+        AND o.organization_worker_membership_id = p.organization_worker_membership_id AND o.punch_type = 'out'
+        AND (o.session_in_punch_id = p.id OR (o.session_in_punch_id IS NULL AND o.effective_at > p.effective_at))
+        AND COALESCE((SELECT r.decision FROM attendance_reviews r WHERE r.punch_id = o.id ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), o.initial_validation) <> 'not_recognized')
     ORDER BY p.organization_worker_membership_id, p.effective_at DESC`.execute(trx)).rows;
   const counts = (await sql<{ pending: number; alerts: number }>`
     SELECT (SELECT count(*)::int FROM attendance_punches p WHERE p.organization_id = ${organizationId} AND ${EFFECTIVE} = 'pending_review') AS pending,

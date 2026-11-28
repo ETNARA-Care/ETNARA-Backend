@@ -44,7 +44,8 @@ interface TimelineItem {
   caregiver: { displayName: string | null; role: string | null };
   /**
    * 177 (hogares F5): los mismos datos ya resumidos, en campos de una lista cerrada, para que el portal los traduzca
-   * (español e inglés). Aditivo: el resumen en español no cambia y el portal de agencias no lo usa.
+   * (español e inglés). Solo en hogares: en agencias e independientes la respuesta queda exactamente como antes (los
+   * campos podrían llevar un valor numérico que el resumen omite). El resumen en español no cambia.
    */
   fields?: Record<string, string | number>;
   /** availableUntil: end of the (provisional) retention period, after which nobody sees it. */
@@ -183,12 +184,13 @@ export async function getFamilyTimeline(
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
+    // 177 (hogares F5): autor por función y campos estructurados solo en hogares; agencias e independientes sin cambios.
+    const residential = (await sql<{ r: boolean }>`SELECT app_org_is_residential(${organizationId}::uuid) AS r`.execute(trx)).rows[0]?.r === true;
     const membershipIds = [...new Set(pageRows.map((r) => r.membership_id))];
     const caregiverMap = new Map<string, { displayName: string | null; role: string | null }>();
     if (membershipIds.length > 0) {
       // 177 (hogares F5, D5): en un hogar la RLS cierra workers y memberships a la familia; el autor sale de una
       // función que da SOLO nombre y puesto de quien registró actividades de su familiar. Agencias: sin cambios.
-      const residential = (await sql<{ r: boolean }>`SELECT app_org_is_residential(${organizationId}::uuid) AS r`.execute(trx)).rows[0]?.r === true;
       const caregivers = residential
         ? await sql<{ membership_id: string; display_name: string | null; internal_role: string | null }>`
             SELECT a.membership_id, a.display_name, a.internal_role FROM app_family_activity_authors(${careRecipientId}::uuid) a
@@ -222,7 +224,7 @@ export async function getFamilyTimeline(
     const items: TimelineItem[] = pageRows.map((row) => {
       const { title, summary } = summarizeEvent(row.type_code, row.structured_data, row.note_text);
       const caregiver = caregiverMap.get(row.membership_id) ?? { displayName: null, role: null };
-      const fields = structuredFields(row.type_code, row.structured_data, row.note_text);
+      const fields = residential ? structuredFields(row.type_code, row.structured_data, row.note_text) : undefined;
       const item: TimelineItem = { id: row.id, type: row.type_code, occurredAt: row.occurred_at, title, summary, caregiver, ...(fields ? { fields } : {}) };
       const ref = photoRefMap.get(row.id);
       if (ref) item.photo = { visible: true, reference: ref.id, availableUntil: ref.until };
