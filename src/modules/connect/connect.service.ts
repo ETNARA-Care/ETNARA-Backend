@@ -15,7 +15,7 @@ export class ConnectError extends Error {
 }
 const DB_ERRORS: Record<string, number> = {
   CONNECT_ORG_ADMIN_REQUIRED: 403, CONNECT_ORG_SUSPENDED: 409, CONNECT_NOT_LINKED: 404, CONNECT_CODE_INVALID: 404,
-  CONNECT_PROVIDER_ALREADY_LINKED: 409, CONNECT_ORG_ALREADY_LINKED: 409,
+  CONNECT_PROVIDER_ALREADY_LINKED: 409, CONNECT_ORG_ALREADY_LINKED: 409, CONNECT_MEMBERSHIP_REQUIRED: 403,
 };
 function translate(err: unknown): never {
   const message = err instanceof Error ? err.message : "";
@@ -58,4 +58,13 @@ export async function redeemLinkCode(code: string, connectProviderRef: string): 
 
 export async function statusByRef(connectProviderRef: string): Promise<OrgFacts | null> {
   return (await sql<{ f: OrgFacts | null }>`SELECT public.app_connect_status_by_ref(${connectProviderRef}) AS f`.execute(db)).rows[0]?.f ?? null;
+}
+
+export type LoginFacts = { careUserId: string; email: string; organizationId: string; connectProviderRef: string };
+/** C-1 · Hechos para entrar en Connect con la cuenta de Care (persona de la sesión, organización activa vinculada). */
+export async function loginFacts(userId: string, organizationId: string): Promise<LoginFacts> {
+  try {
+    return await withTenantContext({ userId, organizationId }, async (trx) =>
+      (await sql<{ f: LoginFacts }>`SELECT public.app_connect_login_facts() AS f`.execute(trx)).rows[0].f);
+  } catch (e) { return translate(e); }
 }

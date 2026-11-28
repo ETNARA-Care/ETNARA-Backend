@@ -8,6 +8,7 @@ DROP FUNCTION IF EXISTS public.app_connect_outbox_claim(integer);
 DROP FUNCTION IF EXISTS public.app_connect_status_by_ref(text);
 DROP FUNCTION IF EXISTS public.app_connect_redeem_link_code(text, text);
 DROP FUNCTION IF EXISTS public.app_connect_unlink();
+DROP FUNCTION IF EXISTS public.app_connect_login_facts();
 DROP FUNCTION IF EXISTS public.app_connect_link_status();
 DROP FUNCTION IF EXISTS public.app_connect_create_link_code(text);
 DROP FUNCTION IF EXISTS public.app_connect_org_facts(uuid);

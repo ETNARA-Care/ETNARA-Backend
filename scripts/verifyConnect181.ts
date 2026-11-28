@@ -205,6 +205,20 @@ async function main() {
   check("K13. Tras desvincular, la organización puede volver a vincularse (sin duplicar la fila)", reLink.status === 200
     && (await q<{ n: string }>(`SELECT count(*)::text n FROM connect_links WHERE organization_id=$1`, [A])).rows[0].n === "1", [reLink.status, reLink.body]);
 
+  // K13b C-1 · aserción para entrar en Connect (cualquier miembro activo; nunca de otra organización ni sin vínculo)
+  const asr = await call("POST", `/organizations/${A}/connect/login`, tSup);
+  const tokA = String(asr.body.url ?? "").split("#a=")[1] ?? "";
+  const va = tokA ? verifyMessage<any>(pem, tokA) : null;
+  const stSup = await call("GET", `/organizations/${A}/connect`, tSup);
+  const asrCross = await call("POST", `/organizations/${A}/connect/login`, tB);
+  const asrNoLink = await call("POST", `/organizations/${B}/connect/login`, tB);
+  check("K13b. C-1: un miembro activo recibe una aserción FIRMADA de 2 minutos con su persona, organización y referencia; otra organización 403; organización sin vínculo (aquí suspendida) sin aserción",
+    asr.status === 200 && String(asr.body.url).startsWith("http://127.0.0.1:") && String(asr.body.url).includes("/care/entrar#a=") && asr.headers.get("cache-control") === "no-store"
+    && va?.typ === "care.user.assertion" && va.exp - va.iat === 120 && va.data.careUserId === supA.id && va.data.email === supA.email.toLowerCase()
+    && va.data.organizationId === A && va.data.connectProviderRef === refA2 && Object.keys(va.data).length === 4
+    && asrCross.status === 403 && [403, 404].includes(asrNoLink.status) && stSup.status === 200 && stSup.body.linked === true,
+    { asr: [asr.status, asr.body.url ? "url" : asr.body], va, cross: [asrCross.status, asrCross.body], noLink: [asrNoLink.status, asrNoLink.body] });
+
   // K14 la aplicación no lee ni escribe las tablas directamente
   const rt = new pg.Client({ connectionString: process.env.DATABASE_URL }); await rt.connect();
   const deny: string[] = [];

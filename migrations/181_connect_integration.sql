@@ -123,14 +123,47 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE v_org uuid := NULLIF(current_setting('app.current_org_id', true), '')::uuid;
+        v_user uuid := NULLIF(current_setting('app.current_user_id', true), '')::uuid;
 BEGIN
-  IF NOT public.app_is_org_admin() THEN RAISE EXCEPTION 'CONNECT_ORG_ADMIN_REQUIRED' USING ERRCODE = '42501'; END IF;
+  -- Cualquier miembro activo ve si la organización está vinculada (para «Abrir ETNARA Connect»); solo la administración
+  -- emite códigos o desvincula.
+  IF v_org IS NULL OR v_user IS NULL OR NOT EXISTS (
+       SELECT 1 FROM public.organization_memberships m WHERE m.organization_id = v_org AND m.user_id = v_user AND m.status = 'active') THEN
+    RAISE EXCEPTION 'CONNECT_MEMBERSHIP_REQUIRED' USING ERRCODE = '42501';
+  END IF;
   RETURN (SELECT jsonb_build_object('linked', l.organization_id IS NOT NULL, 'linkedAt', l.linked_at)
             FROM (SELECT 1) x LEFT JOIN public.connect_links l ON l.organization_id = v_org AND l.revoked_at IS NULL);
 END;
 $$;
 REVOKE ALL ON FUNCTION public.app_connect_link_status() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.app_connect_link_status() TO app_runtime;
+
+-- C-1 · Entrar en Connect con la cuenta de Care: hechos para la aserción firmada (persona de la sesión, organización
+-- activa vinculada). Solo miembros activos. Sin contraseñas, roles internos ni datos de residentes.
+CREATE OR REPLACE FUNCTION public.app_connect_login_facts()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE v_org uuid := NULLIF(current_setting('app.current_org_id', true), '')::uuid;
+        v_user uuid := NULLIF(current_setting('app.current_user_id', true), '')::uuid;
+        v_ref uuid; v_email text;
+BEGIN
+  IF v_org IS NULL OR v_user IS NULL OR NOT EXISTS (
+       SELECT 1 FROM public.organization_memberships m WHERE m.organization_id = v_org AND m.user_id = v_user AND m.status = 'active') THEN
+    RAISE EXCEPTION 'CONNECT_MEMBERSHIP_REQUIRED' USING ERRCODE = '42501';
+  END IF;
+  SELECT l.connect_provider_ref INTO v_ref FROM public.connect_links l WHERE l.organization_id = v_org AND l.revoked_at IS NULL;
+  IF v_ref IS NULL THEN RAISE EXCEPTION 'CONNECT_NOT_LINKED' USING ERRCODE = 'P0002'; END IF;
+  SELECT lower(u.email) INTO v_email FROM public.users u WHERE u.id = v_user AND u.status = 'active';
+  IF v_email IS NULL THEN RAISE EXCEPTION 'CONNECT_MEMBERSHIP_REQUIRED' USING ERRCODE = '42501'; END IF;
+  RETURN jsonb_build_object('careUserId', v_user, 'email', v_email, 'organizationId', v_org, 'connectProviderRef', v_ref);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.app_connect_login_facts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_connect_login_facts() TO app_runtime;
 
 CREATE OR REPLACE FUNCTION public.app_connect_unlink()
 RETURNS void

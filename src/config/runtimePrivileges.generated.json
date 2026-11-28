@@ -662,6 +662,7 @@
     "app_close_shift_without_service",
     "app_connect_create_link_code",
     "app_connect_link_status",
+    "app_connect_login_facts",
     "app_connect_outbox_claim",
     "app_connect_outbox_report",
     "app_connect_redeem_link_code",

@@ -5,7 +5,7 @@ import { createHash, createPrivateKey, createPublicKey, randomUUID, sign, verify
  * La llave privada solo vive en el servidor (CONNECT_SIGNING_KEY, PKCS#8 PEM en base64); Connect solo tiene la pública.
  * Cada mensaje lleva emisor, destinatario, tipo, emisión, vencimiento (máx. 24 h) e identificador único.
  */
-export type ConnectMessageType = "care.org.status" | "care.org.event";
+export type ConnectMessageType = "care.org.status" | "care.org.event" | "care.user.assertion";
 export interface ConnectEnvelope<T> { iss: "etnara-care"; aud: "etnara-connect"; typ: ConnectMessageType; iat: number; exp: number; jti: string; data: T }
 
 const b64u = (b: Buffer) => b.toString("base64url");

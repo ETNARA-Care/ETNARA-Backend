@@ -5,7 +5,7 @@ import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/
 import { respondInternalError } from "../../observability/internalError.js";
 import { connectConfig, serviceTokenMatches } from "./connect.config.js";
 import { publicKeyPem, signMessage } from "./connect.signing.js";
-import { ConnectError, createLinkCode, linkStatus, redeemLinkCode, statusByRef, unlink } from "./connect.service.js";
+import { ConnectError, createLinkCode, linkStatus, loginFacts, redeemLinkCode, statusByRef, unlink } from "./connect.service.js";
 
 /**
  * 181 · Rutas de la integración con ETNARA Connect. Con CONNECT_INTEGRATION apagado (o incompleto), todas responden 404.
@@ -16,6 +16,7 @@ import { ConnectError, createLinkCode, linkStatus, redeemLinkCode, statusByRef, 
  *   Servidor a servidor (Connect, token de servicio):
  *     POST /integrations/connect/redeem                       canjea el código y devuelve el estado FIRMADO
  *     GET  /integrations/connect/status/:connectProviderRef   estado FIRMADO vigente (respaldo)
+ *     POST /organizations/:organizationId/connect/login     C-1: aserción firmada (2 min, un solo uso) para entrar en Connect
  *   Pública: GET /integrations/connect/public-key (llave pública para verificar las firmas).
  * El inicio de sesión de Care no cambia.
  */
@@ -46,6 +47,19 @@ router.post("/organizations/:organizationId/connect/link-code", requireAuth, asy
 router.post("/organizations/:organizationId/connect/unlink", requireAuth, async (req: AuthenticatedRequest, res) => {
   const o = orgId(req); if (!o) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
   try { await unlink(req.auth!.userId, o); const { kickConnectOutbox } = await import("./connect.worker.js"); kickConnectOutbox(); res.status(204).end(); } catch (e) { fail(res, e, req); }
+});
+
+// C-1 · «Abrir ETNARA Connect»: cualquier miembro activo de una organización vinculada. La aserción solo sustituye la
+// contraseña de Connect: allí se sigue pidiendo el segundo factor. Viaja en el fragmento (#), que no llega a servidores.
+router.post("/organizations/:organizationId/connect/login", requireAuth, async (req: AuthenticatedRequest, res) => {
+  const o = orgId(req); if (!o) { res.status(400).json({ error: "INVALID_ORGANIZATION_ID" }); return; }
+  try {
+    const cfg = connectConfig()!;
+    const f = await loginFacts(req.auth!.userId, o);
+    const token = signMessage(cfg.key, "care.user.assertion", f, Date.now(), 120);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ url: `${new URL(cfg.webhookUrl).origin}/care/entrar#a=${token}` });
+  } catch (e) { fail(res, e, req); }
 });
 
 function service(req: Request, res: Response, next: NextFunction) {
