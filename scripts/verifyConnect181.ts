@@ -118,7 +118,7 @@ async function main() {
   const keys = v ? Object.keys(v.data ?? {}).sort().join(",") : "";
   check("K03. Canje: exige el token de servicio; devuelve el estado FIRMADO (Ed25519) verificable con la llave pública, sin datos personales",
     badTok.status === 401 && noTok.status === 401 && red.status === 200 && !!v && v.typ === "care.org.status" && v.data.organizationId === A && v.data.type === "agencia" && v.data.active === true && v.data.suspended === false && v.data.connectProviderRef === refA
-    && keys === "active,connectProviderRef,contractSatisfied,organizationId,subscriptionOrder,suspended,type" && v.exp - v.iat <= 86400,
+    && keys === "active,connectProviderRef,contractSatisfied,organizationId,premium,premiumUntil,subscriptionOrder,suspended,type" && v.data.premium === false && v.exp - v.iat <= 86400,
     { badTok: badTok.status, noTok: noTok.status, red: red.status, v, keys });
   const pk = await call("GET", "/integrations/connect/public-key", "");
   const tamper = red.body.status ? verifyMessage<any>(pem, ((t: string) => { const [b, g] = t.split("."); const d = JSON.parse(Buffer.from(b, "base64url").toString()); d.data.suspended = false; d.data.active = true; d.data.organizationId = B; return Buffer.from(JSON.stringify(d)).toString("base64url") + "." + g; })(red.body.status)) : "x";
