@@ -244,9 +244,12 @@ async function main() {
   const rep = await call("GET", `${PUN}/establishments/${L}/report?from=${day}&to=${day}`, admin.token);
   const arep = await call("GET", `${A}/establishments/${L}/report?from=${day}&to=${day}`, admin.token);
   const ov = await call("GET", `/organizations/${H}/residential/overview`, admin.token);
-  check("F5b. Informes: asistencia del día con validadas y pendientes por separado; asignaciones con la sustitución; panel con presentes, ponches por revisar y sin residentes sin cobertura",
+  // Desde la corrección de F5 aprobada en la auditoría (28-nov): presentes solo con la entrada confirmada. e1 (validada)
+  // está presente; e2 (fuera del perímetro) y e4 (sin conexión) quedan en «por revisar» hasta que la administración decida.
+  const presentNames = ((ov.body.overview?.panel?.attendance?.present ?? []) as Json[]).map((x) => x.workerName);
+  check("F5b. Informes: asistencia del día con validadas y pendientes por separado; asignaciones con la sustitución; panel con presentes confirmados (las entradas pendientes en «por revisar»), y sin residentes sin cobertura",
     rep.status === 200 && rep.body.report.rows.length === 3 && arep.status === 200 && arep.body.report.totals.substitutions === 1
-    && ov.body.overview.panel.attendance.present.length === 3 && ov.body.overview.panel.attendance.pendingReview === 2 && ov.body.overview.panel.assignments.uncovered.length === 0
+    && presentNames.length === 1 && presentNames[0] === "Ficticia e1" && ov.body.overview.panel.attendance.pendingReview === 2 && ov.body.overview.panel.assignments.uncovered.length === 0
     && ov.body.overview.panel.occupancy.bedsRegistered === 12,
     { rep: [rep.status, rep.body.report?.rows?.length], arep: arep.body.report?.totals, panel: ov.body.overview?.panel && { att: ov.body.overview.panel.attendance, asg: ov.body.overview.panel.assignments } });
   await q(`INSERT INTO care_recipients (organization_id,location_id,first_name,last_name,status) VALUES ($1,$2,'Kevin','Ficticio','active')`, [H, L]);

@@ -1,5 +1,8 @@
 # ETNARA Agent State
 
+## 2026-11-28 — Hogares F6 actualizado sobre main (F0–F5, 180 y body-parser en producción; sin migración)
+- Recorrido F6 14/14 con la corrección de F5 (presentes solo con entrada confirmada). Procedimientos al día: integración hecha; Hogar Demo permanente como propuesta de procedimiento definitivo (sección 2), nada ejecutado.
+
 ## 2026-11-26 — Hogares F6: ensayo integral en entorno aislado (rama claude/hogares-f6, apilada sobre claude/177-hogares-f5; PR en borrador; sin migración)
 - scripts/verifyResidentialWalkthroughF6.ts: recorrido completo por la API real con la operación representativa de D9 en una base desechable (Central, establecimiento, 6 habitaciones y 12 camas, 10 residentes, 15 empleados, plantillas de día, tarde y noche, semanas publicadas y aceptadas, asignaciones, sustitución bloqueada y completada, ponches dentro, fuera, sin conexión y manual, acceso por persona, actividades, familia según D5, informes, panel, Central con Hogar Demo excluido y regresión de agencia). 14/14.
 - docs/HOGARES_F6_PROCEDIMIENTOS_PRODUCCION.md: integración secuencial, creación y carga de Hogar Demo, recorrido desde el iPhone por los tres roles, regresión de agencias e independientes y criterios de cierre. Nada ejecutado en producción.
