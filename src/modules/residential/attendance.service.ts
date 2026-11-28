@@ -283,16 +283,30 @@ async function evaluateCode(trx: Trx, organizationId: string, locationId: string
 
 export type PunchResult = { blocked: true } | { blocked: false; duplicate: boolean; punch: ReturnType<typeof presentPunch> };
 
+/**
+ * 27-nov (auditoría GPT, B): un client_event_id ya usado solo es «el mismo ponche» si es del mismo turno y del mismo tipo.
+ * Si llega con otro turno u otro tipo, es un conflicto del cliente (409): nunca se devuelve el ponche anterior como si
+ * fuera el nuevo.
+ */
+function sameEventOrConflict(prior: PunchRow & { effective_status: string }, input: { shiftId: string; type: string }) {
+  if (prior.shift_id !== input.shiftId || prior.punch_type !== input.type) throw new AttendanceError("ATTENDANCE_DUPLICATE_EVENT", 409);
+  return { blocked: false as const, duplicate: true, punch: presentPunch(prior) };
+}
+
 export function punch(userId: string, organizationId: string, input: z.infer<typeof punchSchema>, now = new Date()): Promise<PunchResult> {
   keys();
   return withTenantContext({ userId, organizationId }, async (trx): Promise<PunchResult> => {
     // Idempotencia: el mismo client_event_id devuelve el ponche ya registrado.
     const prior = await sql<PunchRow & { effective_status: string }>`SELECT ${PUNCH_COLS}, ${EFFECTIVE} AS effective_status FROM attendance_punches p
       WHERE p.organization_id = ${organizationId} AND p.user_id = ${userId} AND p.client_event_id = ${input.clientEventId}`.execute(trx);
-    if (prior.rows[0]) return { blocked: false, duplicate: true, punch: presentPunch(prior.rows[0]) };
+    if (prior.rows[0]) return sameEventOrConflict(prior.rows[0], input);
     const shift = await myShift(trx, input.shiftId);
     if (!shift || shift.shift_status === "cancelled") throw new AttendanceError("ATTENDANCE_NOT_AUTHORIZED", 403);
 
+    // 27-nov (auditoría GPT, C): los intentos de un establecimiento se cuentan y registran de uno en uno (bloqueo hasta el
+    // final de la transacción). Antes, varios intentos incorrectos simultáneos leían el mismo recuento y rebasaban el
+    // límite (comprobado: 12 de 12 a la vez para una persona). Se toma ANTES del bloqueo por persona y turno (orden fijo).
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${`attendance-attempts:${shift.location_id}`}))`.execute(trx);
     const failed = (await sql<{ user_failed: number; location_failed: number }>`SELECT * FROM app_attendance_failed_attempts(${shift.location_id}::uuid)`.execute(trx)).rows[0];
     if (!failed || failed.user_failed >= MAX_USER_FAILED || failed.location_failed >= MAX_LOCATION_FAILED) {
       await sql`INSERT INTO attendance_code_attempts (organization_id, location_id, user_id, method, outcome)
@@ -302,6 +316,12 @@ export function punch(userId: string, organizationId: string, input: z.infer<typ
     }
 
     await sql`SELECT pg_advisory_xact_lock(hashtext(${`attendance-punch:${userId}:${input.shiftId}`}))`.execute(trx);
+    // 27-nov: se repite la comprobación de idempotencia ya con el bloqueo. Si el teléfono envió el mismo ponche dos veces
+    // a la vez (cola sin conexión + reintento), el segundo envío espera al primero y devuelve el ponche ya registrado
+    // en lugar de chocar con el índice único (antes, un 500 en salidas y descansos).
+    const priorLocked = await sql<PunchRow & { effective_status: string }>`SELECT ${PUNCH_COLS}, ${EFFECTIVE} AS effective_status FROM attendance_punches p
+      WHERE p.organization_id = ${organizationId} AND p.user_id = ${userId} AND p.client_event_id = ${input.clientEventId}`.execute(trx);
+    if (priorLocked.rows[0]) return sameEventOrConflict(priorLocked.rows[0], input);
     const offline = input.offline;
     const effectiveAt = offline ? new Date(input.declaredAt!) : now;
     const code = await evaluateCode(trx, organizationId, shift.location_id, effectiveAt, input);

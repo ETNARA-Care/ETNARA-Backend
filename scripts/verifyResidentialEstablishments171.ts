@@ -338,9 +338,13 @@ async function main() {
   const reopen = await call("PATCH", `/organizations/${H}/establishments/${E2}`, tH, { status: "active" });
   const reclose = await call("POST", `${R}/establishments/${E2}/close`, tH, { reason: "Otra vez" });
   const placeClosed = await pl(r2, { roomId: null, establishmentId: E2 });
-  check("K5. Cerrado: no admite habitaciones, geocerca, reapertura ordinaria, segundo cierre ni residentes",
-    postRoom.status === 409 && postGeo.status === 409 && reopen.status === 409 && reopen.body.error === "RESIDENTIAL_CLOSURE_REQUIRED" && reclose.status === 409 && placeClosed.status === 409,
-    [postRoom.body, postGeo.body, reopen.body, reclose.body, placeClosed.body]);
+  // Auditoría 26-nov: tampoco admite turnos nuevos por la ruta genérica sobre una habitación del establecimiento cerrado.
+  const closedRoom = (await q<{ id: string }>(`SELECT r.id FROM rooms r JOIN units u ON u.id=r.unit_id WHERE u.location_id=$1 AND NOT app_is_technical_room(r.id) ORDER BY r.created_at LIMIT 1`, [E2])).rows[0]?.id;
+  const shiftClosed = await call("POST", `/organizations/${H}/shifts`, tH, { roomId: closedRoom, scheduledStart: future, scheduledEnd: futureEnd });
+  check("K5. Cerrado: no admite habitaciones, geocerca, reapertura ordinaria, segundo cierre, residentes ni turnos nuevos",
+    postRoom.status === 409 && postGeo.status === 409 && reopen.status === 409 && reopen.body.error === "RESIDENTIAL_CLOSURE_REQUIRED" && reclose.status === 409 && placeClosed.status === 409
+    && !!closedRoom && shiftClosed.status === 409 && shiftClosed.body.error === "RESIDENTIAL_ESTABLISHMENT_CLOSED",
+    [postRoom.body, postGeo.body, reopen.body, reclose.body, placeClosed.body, shiftClosed.status, shiftClosed.body]);
   const closureForge = await suErr(`DELETE FROM establishment_closures WHERE location_id=$1`, [E2]);
   check("K6. El registro de cierre es solo de anexos", closureForge.includes("RESIDENTIAL_HISTORY_APPEND_ONLY"), closureForge);
 

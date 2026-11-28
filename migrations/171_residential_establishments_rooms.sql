@@ -256,6 +256,71 @@ CREATE TRIGGER locations_residential_ensure AFTER INSERT ON locations
 
 -- 5. Guardas ------------------------------------------------------------------------------------------------------
 -- 5a. Establecimientos de hogar: solo se archivan (o reabren) mediante el procedimiento de cierre.
+-- 5·0. Concurrencia con el cierre (auditoría 26-nov). El cierre bloquea la fila del establecimiento (FOR UPDATE); todo
+-- lo que añade algo a un establecimiento (unidad, habitación, residente ubicado, turno) bloquea esa misma fila en modo
+-- compartido (FOR SHARE) y comprueba que sigue abierto. Si el cierre va primero, la otra operación espera y, al
+-- confirmarse el cierre, ve el establecimiento cerrado y se rechaza. Si va después, el cierre espera y ve lo creado
+-- (lo rechaza o lo archiva). Todos bloquean primero el establecimiento: sin interbloqueos.
+CREATE OR REPLACE FUNCTION public.app_residential_lock_establishment(p_location_id uuid)
+RETURNS boolean
+LANGUAGE sql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+  SELECT l.archived_at IS NULL FROM public.locations l
+  WHERE l.id = p_location_id
+    AND (NULLIF(current_setting('app.current_org_id', true), '') IS NULL
+         OR l.organization_id = NULLIF(current_setting('app.current_org_id', true), '')::uuid)
+  FOR SHARE;
+$$;
+REVOKE ALL ON FUNCTION public.app_residential_lock_establishment(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_residential_lock_establishment(uuid) TO app_runtime;
+
+-- Destino de un turno nuevo en un hogar: bloquea el establecimiento de la habitación y el del residente y devuelve
+-- 'ok', 'establishment_closed' o 'room_archived'. Fuera de hogares devuelve 'ok' sin bloquear nada.
+CREATE OR REPLACE FUNCTION public.app_residential_shift_target_state(p_room_id uuid, p_care_recipient_id uuid)
+RETURNS text
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_org uuid := NULLIF(current_setting('app.current_org_id', true), '')::uuid;
+  v_room_loc uuid;
+  v_room_archived timestamptz;
+  v_unit_archived timestamptz;
+  v_rec_loc uuid;
+BEGIN
+  IF v_org IS NULL OR NOT public.app_org_is_residential(v_org) THEN
+    RETURN 'ok';
+  END IF;
+  IF p_room_id IS NOT NULL THEN
+    SELECT u.location_id INTO v_room_loc FROM public.rooms r JOIN public.units u ON u.id = r.unit_id
+    WHERE r.id = p_room_id AND r.organization_id = v_org;
+    IF v_room_loc IS NOT NULL AND NOT COALESCE(public.app_residential_lock_establishment(v_room_loc), false) THEN
+      RETURN 'establishment_closed';
+    END IF;
+    -- Tras el bloqueo: estado vigente de la habitación y su unidad.
+    SELECT r.archived_at, u.archived_at INTO v_room_archived, v_unit_archived
+    FROM public.rooms r JOIN public.units u ON u.id = r.unit_id WHERE r.id = p_room_id;
+    IF v_room_archived IS NOT NULL OR v_unit_archived IS NOT NULL THEN
+      RETURN 'room_archived';
+    END IF;
+  END IF;
+  IF p_care_recipient_id IS NOT NULL THEN
+    SELECT cr.location_id INTO v_rec_loc FROM public.care_recipients cr WHERE cr.id = p_care_recipient_id AND cr.organization_id = v_org;
+    IF v_rec_loc IS NOT NULL AND NOT COALESCE(public.app_residential_lock_establishment(v_rec_loc), false) THEN
+      RETURN 'establishment_closed';
+    END IF;
+  END IF;
+  RETURN 'ok';
+END;
+$$;
+REVOKE ALL ON FUNCTION public.app_residential_shift_target_state(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_residential_shift_target_state(uuid, uuid) TO app_runtime;
+
 CREATE OR REPLACE FUNCTION public.app_residential_location_guard()
 RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public
 AS $$
@@ -300,9 +365,10 @@ BEGIN
     IF TG_OP = 'UPDATE' THEN
       RAISE EXCEPTION 'RESIDENTIAL_UNIT_LOCATION_IMMUTABLE' USING ERRCODE = 'P0001';
     END IF;
-    IF EXISTS (SELECT 1 FROM public.locations l WHERE l.id = NEW.location_id AND l.archived_at IS NOT NULL) THEN
-      RAISE EXCEPTION 'RESIDENTIAL_ESTABLISHMENT_CLOSED' USING ERRCODE = 'P0001';
-    END IF;
+  END IF;
+  IF NEW.archived_at IS NULL AND (TG_OP = 'INSERT' OR OLD.archived_at IS NOT NULL)
+     AND NOT COALESCE(public.app_residential_lock_establishment(NEW.location_id), false) THEN
+    RAISE EXCEPTION 'RESIDENTIAL_ESTABLISHMENT_CLOSED' USING ERRCODE = 'P0001';
   END IF;
   IF NEW.archived_at IS NULL AND (TG_OP = 'INSERT' OR lower(btrim(NEW.name)) IS DISTINCT FROM lower(btrim(OLD.name)) OR OLD.archived_at IS NOT NULL)
      AND EXISTS (SELECT 1 FROM public.units u WHERE u.location_id = NEW.location_id AND u.id <> NEW.id AND u.archived_at IS NULL
@@ -350,6 +416,9 @@ BEGIN
   END IF;
   SELECT u.location_id INTO v_new_loc FROM public.units u WHERE u.id = NEW.unit_id;
   IF TG_OP = 'INSERT' OR NEW.unit_id IS DISTINCT FROM OLD.unit_id OR (OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL) THEN
+    IF NEW.archived_at IS NULL AND NOT COALESCE(public.app_residential_lock_establishment(v_new_loc), false) THEN
+      RAISE EXCEPTION 'RESIDENTIAL_ESTABLISHMENT_CLOSED' USING ERRCODE = 'P0001';
+    END IF;
     IF EXISTS (SELECT 1 FROM public.units u WHERE u.id = NEW.unit_id AND u.archived_at IS NOT NULL) THEN
       RAISE EXCEPTION 'RESIDENTIAL_UNIT_ARCHIVED' USING ERRCODE = 'P0001';
     END IF;
@@ -402,10 +471,17 @@ BEGIN
                    AND s.status NOT IN ('cancelled', 'completed') AND s.scheduled_end > now()) THEN
     RAISE EXCEPTION 'RESIDENTIAL_TRANSFER_ACTIVE_SHIFTS' USING ERRCODE = 'P0001';
   END IF;
+  IF NEW.location_id IS NOT NULL AND NEW.status = 'active' AND public.app_org_is_residential(NEW.organization_id)
+     AND (TG_OP = 'INSERT' OR NEW.location_id IS DISTINCT FROM OLD.location_id OR NEW.room_id IS DISTINCT FROM OLD.room_id
+          OR NEW.status IS DISTINCT FROM OLD.status)
+     AND NOT COALESCE(public.app_residential_lock_establishment(NEW.location_id), false) THEN
+    RAISE EXCEPTION 'RESIDENTIAL_ESTABLISHMENT_CLOSED' USING ERRCODE = 'P0001';
+  END IF;
   IF NEW.room_id IS NULL OR NOT public.app_org_is_residential(NEW.organization_id) THEN
     RETURN NEW;
   END IF;
-  IF TG_OP = 'UPDATE' AND NEW.room_id IS NOT DISTINCT FROM OLD.room_id AND NEW.location_id IS NOT DISTINCT FROM OLD.location_id THEN
+  IF TG_OP = 'UPDATE' AND NEW.room_id IS NOT DISTINCT FROM OLD.room_id AND NEW.location_id IS NOT DISTINCT FROM OLD.location_id
+     AND NEW.status IS NOT DISTINCT FROM OLD.status THEN
     RETURN NEW;
   END IF;
   SELECT u.location_id, r.archived_at, u.archived_at INTO v_room_loc, v_room_archived, v_unit_archived
@@ -421,7 +497,7 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.app_residential_recipient_room_guard() FROM PUBLIC;
 DROP TRIGGER IF EXISTS care_recipients_residential_room_guard ON care_recipients;
-CREATE TRIGGER care_recipients_residential_room_guard BEFORE INSERT OR UPDATE OF room_id, location_id ON care_recipients
+CREATE TRIGGER care_recipients_residential_room_guard BEFORE INSERT OR UPDATE OF room_id, location_id, status ON care_recipients
   FOR EACH ROW EXECUTE FUNCTION public.app_residential_recipient_room_guard();
 
 -- 5e. Historial de ubicación de residentes (hogares). El motivo llega por app.residential_change_reason.

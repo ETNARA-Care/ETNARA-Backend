@@ -40,6 +40,11 @@ function requireMonday(weekStart: string) {
 }
 
 async function activeEstablishment(trx: Trx, organizationId: string, locationId: string) {
+  // Auditoría F2 (26-nov): bloquea el establecimiento en modo compartido (el mismo bloqueo de la 171 que el cierre toma
+  // en exclusiva). Publicar o editar el calendario y cerrar el establecimiento no pueden cruzarse: si el cierre va
+  // primero, esto espera y ve el establecimiento cerrado; si va después, el cierre espera y ve los turnos creados.
+  const lock = await sql<{ open: boolean | null }>`SELECT app_residential_lock_establishment(${locationId}::uuid) AS open`.execute(trx);
+  if (lock.rows[0]?.open !== true) throw notFound();
   const r = await sql<{ id: string; name: string }>`
     SELECT l.id, l.name FROM locations l
     WHERE l.id = ${locationId} AND l.organization_id = ${organizationId} AND l.archived_at IS NULL`.execute(trx);
@@ -118,6 +123,61 @@ const presentEntry = (e: EntryRow) => ({
   substitution: e.substitute_name ? { substituteName: e.substitute_name, effectiveAt: e.substitution_at ?? null } : null,
 });
 
+/**
+ * Decisión de Rafa (27-nov): los turnos individuales (creados desde «Turnos») y la planificación semanal están
+ * sincronizados. La semana muestra, solo lectura, los turnos vigentes del establecimiento que NO vienen del calendario
+ * (de la habitación técnica, de sus habitaciones o de sus residentes); cuentan en las horas y entran en los avisos de
+ * solape y duplicado, así que publicar nunca crea un segundo turno para la misma persona y franja. Los turnos que creó
+ * el calendario aparecen una sola vez (como entradas), nunca también como individuales.
+ */
+type IndividualRow = {
+  id: string; starts_local: string; ends_local: string; starts_at: string; ends_at: string; status: string; required_role: string;
+  target: "establishment" | "room" | "resident"; room_name: string | null; resident_name: string | null;
+  membership_id: string | null; worker_name: string | null; assignment_status: string | null;
+};
+async function individualShifts(trx: Trx, organizationId: string, locationId: string, weekStart: string): Promise<IndividualRow[]> {
+  const r = await sql<IndividualRow>`
+    SELECT s.id,
+           to_char(s.scheduled_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
+           to_char(s.scheduled_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
+           s.scheduled_start AS starts_at, s.scheduled_end AS ends_at, s.status::text AS status, s.required_role,
+           CASE WHEN app_is_technical_room(s.room_id) THEN 'establishment' WHEN s.room_id IS NOT NULL THEN 'room' ELSE 'resident' END AS target,
+           CASE WHEN s.room_id IS NOT NULL AND NOT app_is_technical_room(s.room_id) THEN rm.name END AS room_name,
+           CASE WHEN s.care_recipient_id IS NOT NULL THEN btrim(concat_ws(' ', cr.first_name, cr.last_name)) END AS resident_name,
+           a.organization_worker_membership_id AS membership_id, w.display_name AS worker_name, a.response_status::text AS assignment_status
+    FROM shifts s
+    LEFT JOIN rooms rm ON rm.id = s.room_id
+    LEFT JOIN units un ON un.id = rm.unit_id
+    LEFT JOIN care_recipients cr ON cr.id = s.care_recipient_id
+    LEFT JOIN LATERAL (SELECT a.organization_worker_membership_id, a.response_status FROM assignments a
+                       WHERE a.shift_id = s.id AND a.response_status IN ('pending', 'accepted') ORDER BY a.created_at DESC LIMIT 1) a ON true
+    LEFT JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id
+    LEFT JOIN workers w ON w.id = m.worker_id
+    WHERE s.organization_id = ${organizationId}
+      AND s.status <> 'cancelled'
+      AND s.scheduled_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
+      AND s.scheduled_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
+      AND (un.location_id = ${locationId} OR (s.room_id IS NULL AND cr.location_id = ${locationId}))
+      AND NOT EXISTS (SELECT 1 FROM schedule_week_shifts e WHERE e.shift_id = s.id)
+    ORDER BY s.scheduled_start, s.id`.execute(trx);
+  return r.rows;
+}
+const individualModel = (i: IndividualRow): ScheduleEntryLike => ({
+  id: `shift:${i.id}`, startsAt: new Date(i.starts_at), endsAt: new Date(i.ends_at), membershipId: i.membership_id, requiredRole: i.required_role,
+});
+const presentIndividual = (i: IndividualRow) => ({
+  shiftId: i.id, startsAt: i.starts_local, endsAt: i.ends_local,
+  durationMinutes: Math.round((new Date(i.ends_at).getTime() - new Date(i.starts_at).getTime()) / 60_000),
+  target: i.target, roomName: i.room_name, residentName: i.resident_name, requiredRole: i.required_role,
+  membershipId: i.membership_id, workerName: i.worker_name, assignmentStatus: i.assignment_status, shiftStatus: i.status,
+});
+/** Avisos del calendario contando los turnos individuales; solo los que afectan a alguna entrada del calendario. */
+function weekWarnings(active: EntryRow[], individual: IndividualRow[]) {
+  return scheduleWarnings([...active.map(asModel), ...individual.map(individualModel)])
+    .filter((w) => w.entryIds.some((id) => !id.startsWith("shift:")))
+    .map((w) => ({ ...w, entryIds: w.entryIds.filter((id) => !id.startsWith("shift:")), shiftIds: w.entryIds.filter((id) => id.startsWith("shift:")).map((id) => id.slice(6)) }));
+}
+
 export function listScheduleEstablishments(userId: string, organizationId: string) {
   return manage(userId, organizationId, async (trx) => {
     const r = await sql<{ id: string; name: string }>`
@@ -143,7 +203,9 @@ export function getScheduleWeek(userId: string, organizationId: string, location
       FROM organization_worker_memberships m JOIN workers w ON w.id = m.worker_id
       WHERE m.organization_id = ${organizationId} AND m.status = 'active'
       ORDER BY w.display_name, m.id`.execute(trx);
-    const summary = scheduleSummary(active.map(asModel));
+    const individual = await individualShifts(trx, organizationId, locationId, weekStart);
+    // Las horas incluyen los turnos individuales; «sin persona» sigue contando solo entradas del calendario.
+    const summary = { ...scheduleSummary([...active.map(asModel), ...individual.map(individualModel)]), unassignedEntries: active.filter((e) => !e.membership_id).length };
     return {
       establishment,
       week: {
@@ -153,8 +215,9 @@ export function getScheduleWeek(userId: string, organizationId: string, location
       },
       entries: rows.filter((e) => e.shift_status !== "cancelled" || e.removed_at === null).map(presentEntry),
       staff: staff.rows.map((s) => ({ membershipId: s.membership_id, name: s.name, role: s.role, eligibility: s.eligibility ?? "unknown" })),
+      individualShifts: individual.map(presentIndividual),
       summary,
-      warnings: scheduleWarnings(active.map(asModel)),
+      warnings: weekWarnings(active, individual),
     };
   });
 }
@@ -311,7 +374,7 @@ export function publishScheduleWeek(userId: string, organizationId: string, loca
       throw new ResidentialError("RESIDENTIAL_SCHEDULE_NOTHING_TO_PUBLISH", 409);
     }
     const active = rows.filter((e) => e.removed_at === null && e.shift_status !== "cancelled");
-    const warnings = scheduleWarnings(active.map(asModel));
+    const warnings = weekWarnings(active, await individualShifts(trx, organizationId, locationId, weekStart));
     if (warnings.length > 0) throw new ResidentialScheduleError("RESIDENTIAL_SCHEDULE_OVERLAP", 409, { warnings });
     const past = toCreate.filter((e) => new Date(e.starts_at).getTime() <= Date.now());
     if (past.length > 0) throw new ResidentialScheduleError("RESIDENTIAL_SCHEDULE_IN_PAST", 409, { entryIds: past.map((e) => e.id) });
@@ -447,5 +510,71 @@ export function updateScheduleTemplate(userId: string, organizationId: string, t
     if (input.archived !== undefined) await sql`UPDATE schedule_templates SET archived_at = ${input.archived ? sql`now()` : null} WHERE id = ${templateId}`.execute(trx);
     if (input.slots) await replaceSlots(trx, organizationId, templateId, input.slots);
     return (await templatesOf(trx, organizationId, t.rows[0].location_id)).find((x) => x.id === templateId);
+  });
+}
+
+/**
+ * Decisión de Rafa (27-nov): «Mi horario» del cuidador. Solo sus propios turnos (asignación pendiente o aceptada, con
+ * membresía activa) que se cruzan con la semana, vengan del calendario publicado o de «Turnos». Los borradores no son
+ * turnos, así que nunca aparecen; tampoco los de compañeros. Días y horas en la hora local (los turnos nocturnos se
+ * reparten entre los dos días). Nunca la habitación técnica: el lugar es el establecimiento.
+ */
+type MyShiftRow = {
+  id: string; starts_local: string; ends_local: string; starts_at: string; ends_at: string; status: string;
+  assignment_status: string; establishment_name: string | null; room_name: string | null; resident_name: string | null;
+};
+export function getMyScheduleWeek(userId: string, organizationId: string, weekStart: string) {
+  requireMonday(weekStart);
+  return withTenantContext({ userId, organizationId }, async (trx) => {
+    const worker = await sql<{ id: string }>`
+      SELECT w.id FROM workers w JOIN organization_worker_memberships m ON m.worker_id = w.id
+      WHERE w.user_id = ${userId} AND m.organization_id = ${organizationId} AND m.status = 'active' LIMIT 1`.execute(trx);
+    if (!worker.rows[0]) throw new ResidentialError("RESIDENTIAL_SCHEDULE_STAFF_ONLY", 403);
+    const r = await sql<MyShiftRow>`
+      SELECT s.id,
+             to_char(c.cov_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
+             to_char(c.cov_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
+             c.cov_start AS starts_at, c.cov_end AS ends_at, s.status::text AS status, a.response_status::text AS assignment_status,
+             COALESCE((SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id),
+                      (SELECT l.name FROM rooms r JOIN units u ON u.id = r.unit_id JOIN locations l ON l.id = u.location_id WHERE r.id = s.room_id),
+                      (SELECT l.name FROM care_recipients c JOIN locations l ON l.id = c.location_id WHERE c.id = s.care_recipient_id)) AS establishment_name,
+             CASE WHEN s.room_id IS NOT NULL AND NOT app_is_technical_room(s.room_id) THEN (SELECT r.name FROM rooms r WHERE r.id = s.room_id) END AS room_name,
+             prev.display_name AS resident_name
+      FROM shifts s
+      JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
+      JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id AND m.status = 'active'
+      LEFT JOIN LATERAL app_my_shift_preview(s.id) prev ON true
+      -- 176 (F3): tras una sustitución parcial, cada persona ve SU parte (la original hasta la hora efectiva, la sustituta
+      -- desde ella), igual que en «Ponchar» y en las horas; sin sustitución, la cobertura es el turno entero.
+      CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
+      WHERE s.organization_id = ${organizationId}
+        AND m.worker_id = ${worker.rows[0].id}
+        AND s.status <> 'cancelled'
+        AND c.cov_end > c.cov_start
+        AND c.cov_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
+        AND c.cov_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
+      ORDER BY c.cov_start, s.id`.execute(trx);
+    const shifts = r.rows.map((x) => ({
+      shiftId: x.id, startsAt: x.starts_local, endsAt: x.ends_local,
+      durationMinutes: Math.round((new Date(x.ends_at).getTime() - new Date(x.starts_at).getTime()) / 60_000),
+      status: x.status, assignmentStatus: x.assignment_status,
+      establishmentName: x.establishment_name, roomName: x.room_name, residentName: x.resident_name,
+      _start: new Date(x.starts_at), _end: new Date(x.ends_at),
+    }));
+    const summary = scheduleSummary(shifts.map((x) => ({ id: x.shiftId, startsAt: x._start, endsAt: x._end, membershipId: null, requiredRole: "" })));
+    const byDay = new Map(summary.byDay.map((d: { date: string; minutes: number }) => [d.date, d.minutes]));
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = addDays(weekStart, i);
+      const dayStart = new Date(`${date}T04:00:00Z`).getTime(), dayEnd = dayStart + 86_400_000; // 00:00 en Puerto Rico (UTC-4, sin horario de verano)
+      return {
+        date, minutes: byDay.get(date) ?? 0,
+        shiftIds: shifts.filter((x) => x._start.getTime() < dayEnd && x._end.getTime() > dayStart).map((x) => x.shiftId),
+      };
+    });
+    return {
+      // Solo los minutos que caen dentro de la semana (un turno del domingo por la noche termina el lunes siguiente).
+      weekStart, weekEnd: addDays(weekStart, 6), totalMinutes: days.reduce((sum, d) => sum + d.minutes, 0),
+      days, shifts: shifts.map(({ _start, _end, ...rest }) => rest),
+    };
   });
 }

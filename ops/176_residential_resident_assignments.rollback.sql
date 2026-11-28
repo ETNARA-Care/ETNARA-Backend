@@ -150,5 +150,6 @@ DROP FUNCTION IF EXISTS public.app_residential_substitution_guard();
 DROP FUNCTION IF EXISTS public.app_residential_assignment_guard();
 DROP FUNCTION IF EXISTS public.app_residential_membership_busy(uuid, timestamptz, timestamptz, uuid);
 DROP FUNCTION IF EXISTS public.app_residential_coverage_bounds(uuid, uuid);
+DROP FUNCTION IF EXISTS public.app_residential_coverage_bounds_internal(uuid, uuid);
 DELETE FROM schema_migrations WHERE filename = '176_residential_resident_assignments.sql';
 COMMIT;
