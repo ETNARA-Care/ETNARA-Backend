@@ -5,6 +5,9 @@ import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js
 import { withTenantContext } from "../../context/tenantContext.js";
 import { InvalidTenantContextError, MembershipNotActiveError } from "../../context/errors.js";
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
+import { occupancyFor } from "./residentialEstablishments.service.js";
+import { attendancePanelSection } from "./attendance.service.js";
+import { assignmentsPanelSection } from "./residentAssignments.service.js";
 
 /**
  * 170 · Panel base del hogar (F0). Solo lectura, solo administración del hogar (ORGANIZATION_ADMIN o
@@ -29,7 +32,27 @@ export async function getResidentialOverview(userId: string, organizationId: str
       WHERE organization_id = ${organizationId} AND feature_code IN ('HOGAR_CALENDARIO', 'HOGAR_ASIGNACIONES', 'HOGAR_PONCHES', 'DEMO_ENVIRONMENT')`.execute(trx);
     const enabled = new Map(features.rows.map((f) => [f.feature_code, f.enabled === true]));
     const residents = counts.rows[0]?.residents ?? 0;
+    // 177 (F5): panel completo. Ocupación siempre; asistencia solo con HOGAR_PONCHES y asignaciones solo con
+    // HOGAR_ASIGNACIONES (null si están apagados). Solo administración; sin datos clínicos ni ubicaciones.
+    const locs = (await sql<{ id: string; name: string }>`SELECT l.id, l.name FROM locations l WHERE l.organization_id = ${organizationId} AND l.archived_at IS NULL
+      AND EXISTS (SELECT 1 FROM establishment_technical_rooms t WHERE t.location_id = l.id) ORDER BY l.name, l.id`.execute(trx)).rows;
+    const occ = await occupancyFor(trx, organizationId, locs.map((l) => l.id));
+    const sum = (k: "rooms" | "bedsRegistered" | "bedsOccupied" | "bedsAvailable" | "activeResidents" | "residentsWithoutRoom") => [...occ.values()].reduce((n, o) => n + o[k], 0);
+    const beds = sum("bedsRegistered");
+    const occupancy = {
+      rooms: sum("rooms"), bedsRegistered: beds, bedsOccupied: sum("bedsOccupied"), bedsAvailable: sum("bedsAvailable"),
+      activeResidents: sum("activeResidents"), residentsWithoutRoom: sum("residentsWithoutRoom"),
+      occupancyPercent: beds > 0 ? Math.round((sum("bedsOccupied") / beds) * 100) : null,
+      capacityConfigured: [...occ.values()].some((o) => o.capacityConfigured), overCapacity: [...occ.values()].some((o) => o.overCapacity),
+      establishments: locs.map((l) => ({ id: l.id, name: l.name, ...(occ.get(l.id) ?? null) })),
+    };
+    const panel = {
+      occupancy,
+      attendance: enabled.get("HOGAR_PONCHES") ? await attendancePanelSection(trx, organizationId) : null,
+      assignments: enabled.get("HOGAR_ASIGNACIONES") ? await assignmentsPanelSection(trx, organizationId) : null,
+    };
     return {
+      panel,
       establishments: counts.rows[0]?.establishments ?? 0,
       activeResidents: residents,
       planResidentLimit: RESIDENTIAL_PLAN_RESIDENT_LIMIT,

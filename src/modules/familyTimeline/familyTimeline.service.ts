@@ -42,6 +42,12 @@ interface TimelineItem {
   title: string;
   summary: string;
   caregiver: { displayName: string | null; role: string | null };
+  /**
+   * 177 (hogares F5): los mismos datos ya resumidos, en campos de una lista cerrada, para que el portal los traduzca
+   * (español e inglés). Solo en hogares: en agencias e independientes la respuesta queda exactamente como antes (los
+   * campos podrían llevar un valor numérico que el resumen omite). El resumen en español no cambia.
+   */
+  fields?: Record<string, string | number>;
   /** availableUntil: end of the (provisional) retention period, after which nobody sees it. */
   photo?: { visible: boolean; reference?: string; availableUntil?: string };
 }
@@ -99,6 +105,24 @@ function summarizeEvent(
     default:
       return { title: "Evento", summary: "Evento registrado" };
   }
+}
+
+const FIELD_KEYS: Record<string, string[]> = {
+  MEAL: ["mealType", "amountConsumed"], HYDRATION: ["amount"], TOILETING: ["result"], MOBILITY: ["activity"],
+  ACTIVITY: ["label", "durationMinutes"], MOOD: ["mood"],
+};
+function structuredFields(typeCode: string, structuredData: unknown, noteText: string | null): Record<string, string | number> | undefined {
+  const data = (structuredData ?? {}) as Record<string, unknown>;
+  const out: Record<string, string | number> = {};
+  for (const k of FIELD_KEYS[typeCode] ?? []) {
+    const v = data[k];
+    if ((typeof v === "string" && v.length > 0 && v.length <= 200) || (typeof v === "number" && Number.isFinite(v))) out[k] = v;
+  }
+  if (typeCode === "NOTE") {
+    const trimmed = (noteText ?? "").trim();
+    if (trimmed) out.note = trimmed.length > MAX_NOTE_CHARS ? trimmed.slice(0, MAX_NOTE_CHARS) + "…" : trimmed;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export async function getFamilyTimeline(
@@ -160,10 +184,18 @@ export async function getFamilyTimeline(
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
+    // 177 (hogares F5): autor por función y campos estructurados solo en hogares; agencias e independientes sin cambios.
+    const residential = (await sql<{ r: boolean }>`SELECT app_org_is_residential(${organizationId}::uuid) AS r`.execute(trx)).rows[0]?.r === true;
     const membershipIds = [...new Set(pageRows.map((r) => r.membership_id))];
     const caregiverMap = new Map<string, { displayName: string | null; role: string | null }>();
     if (membershipIds.length > 0) {
-      const caregivers = await sql<{ membership_id: string; display_name: string | null; internal_role: string | null }>`
+      // 177 (hogares F5, D5): en un hogar la RLS cierra workers y memberships a la familia; el autor sale de una
+      // función que da SOLO nombre y puesto de quien registró actividades de su familiar. Agencias: sin cambios.
+      const caregivers = residential
+        ? await sql<{ membership_id: string; display_name: string | null; internal_role: string | null }>`
+            SELECT a.membership_id, a.display_name, a.internal_role FROM app_family_activity_authors(${careRecipientId}::uuid) a
+            WHERE a.membership_id = ANY(${membershipIds})`.execute(trx)
+        : await sql<{ membership_id: string; display_name: string | null; internal_role: string | null }>`
         SELECT owm.id as membership_id, w.display_name, owm.internal_role
         FROM organization_worker_memberships owm
         JOIN workers w ON w.id = owm.worker_id
@@ -192,7 +224,8 @@ export async function getFamilyTimeline(
     const items: TimelineItem[] = pageRows.map((row) => {
       const { title, summary } = summarizeEvent(row.type_code, row.structured_data, row.note_text);
       const caregiver = caregiverMap.get(row.membership_id) ?? { displayName: null, role: null };
-      const item: TimelineItem = { id: row.id, type: row.type_code, occurredAt: row.occurred_at, title, summary, caregiver };
+      const fields = residential ? structuredFields(row.type_code, row.structured_data, row.note_text) : undefined;
+      const item: TimelineItem = { id: row.id, type: row.type_code, occurredAt: row.occurred_at, title, summary, caregiver, ...(fields ? { fields } : {}) };
       const ref = photoRefMap.get(row.id);
       if (ref) item.photo = { visible: true, reference: ref.id, availableUntil: ref.until };
       else if (row.type_code === "PHOTO") item.photo = { visible: false };

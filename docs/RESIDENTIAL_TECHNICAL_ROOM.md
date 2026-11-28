@@ -33,5 +33,8 @@ a un establecimiento de hogar sin modificar la tabla `shifts` (decisión D2 del 
   técnica, persona y residente. `app_worker_has_recipient_assignment` (134) y `app_worker_messaging_window` (132) ganan
   una rama OR que solo se cumple con una asignación activa AHORA (aceptada, turno no cancelado, membresía activa, dentro
   de la cobertura recortada por sustituciones); sin las 24 h de gracia en hogares. Fuera de los hogares nada cambia.
+  F5 (177): el centro operacional excluye los turnos de la habitación técnica (no son visitas; su seguimiento es la
+  asistencia del hogar) y la familia de un hogar no lee el registro de la habitación técnica por RLS. La conversación
+  familiar de un hogar es solo con la administración.
 - Verificación: `scripts/verifyResidentialEstablishments171.ts` (V1 busca los identificadores y el centinela en todas
   las respuestas; V2 los conteos de Central).

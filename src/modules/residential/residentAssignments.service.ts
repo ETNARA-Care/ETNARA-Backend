@@ -382,3 +382,79 @@ export function substitute(userId: string, organizationId: string, shiftId: stri
     return { id, effectiveAt: e.at.toISOString(), fullReplacement: e.at.getTime() <= new Date(e.shift.scheduled_start).getTime(), transferred: input.transfers.length, uncovered };
   });
 }
+
+/**
+ * 177 (F5): parte de asignaciones del panel (solo administración; el llamador ya comprobó el rol y el interruptor).
+ * Un residente está sin cobertura ahora si su establecimiento tiene turnos en curso y ninguno lo cubre en este momento.
+ */
+export async function assignmentsPanelSection(trx: Trx, organizationId: string, now = new Date()) {
+  const ongoing = (await sql<ShiftRow>`
+    SELECT s.id, t.location_id, l.name AS location_name, s.scheduled_start, s.scheduled_end, s.status::text AS status, s.required_role
+    FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id JOIN locations l ON l.id = t.location_id
+    WHERE s.organization_id = ${organizationId} AND s.status::text <> 'cancelled' AND l.archived_at IS NULL
+      AND s.scheduled_start <= ${now.toISOString()}::timestamptz AND s.scheduled_end > ${now.toISOString()}::timestamptz
+    ORDER BY l.name, s.scheduled_start, s.id`.execute(trx)).rows;
+  const byLocation = new Map<string, { name: string; residents: Map<string, { name: string; covered: boolean }> }>();
+  for (const sh of ongoing) {
+    const b = await board(trx, organizationId, sh, now);
+    const loc = byLocation.get(sh.location_id) ?? { name: sh.location_name, residents: new Map() };
+    for (const r of b.residents) {
+      const prev = loc.residents.get(r.id);
+      loc.residents.set(r.id, { name: r.name, covered: (prev?.covered ?? false) || !r.uncovered });
+    }
+    byLocation.set(sh.location_id, loc);
+  }
+  const uncovered = [...byLocation.values()].flatMap((l) => [...l.residents.entries()].filter(([, r]) => !r.covered)
+    .map(([id, r]) => ({ careRecipientId: id, name: r.name, establishment: l.name })));
+  const alerts = (await sql<{ n: number }>`SELECT count(*)::int AS n FROM shift_coverage_alerts WHERE organization_id = ${organizationId} AND resolved_at IS NULL`.execute(trx)).rows[0]?.n ?? 0;
+  return { ongoingShifts: ongoing.length, uncovered, openCoverageAlerts: alerts };
+}
+
+/**
+ * 177 (F5): informe de asignaciones de un establecimiento en un rango de días locales (máximo 31). Por turno: personal,
+ * residentes atendidos, periodos, sustituciones y alertas de cobertura; con el detalle de sustituciones y alertas.
+ */
+export async function assignmentsReportIn(trx: Trx, organizationId: string, locationId: string, range: { from: string; to: string; days: number }) {
+  {
+    const loc = (await sql<{ id: string; name: string }>`SELECT l.id, l.name FROM locations l JOIN establishment_technical_rooms t ON t.location_id = l.id
+      WHERE l.id = ${locationId} AND l.organization_id = ${organizationId}`.execute(trx)).rows[0];
+    if (!loc) throw notFound();
+    const shifts = (await sql<{ id: string; scheduled_start: string; scheduled_end: string; status: string; staff: number; residents: number; periods: number;
+      substitutions: number; alerts: number }>`
+      SELECT s.id, s.scheduled_start, s.scheduled_end, s.status::text AS status,
+             (SELECT count(*)::int FROM assignments a WHERE a.shift_id = s.id AND a.response_status = 'accepted') AS staff,
+             (SELECT count(DISTINCT x.care_recipient_id)::int FROM shift_resident_assignments x WHERE x.shift_id = s.id) AS residents,
+             (SELECT count(*)::int FROM shift_resident_assignments x WHERE x.shift_id = s.id) AS periods,
+             (SELECT count(*)::int FROM shift_substitutions x WHERE x.shift_id = s.id) AS substitutions,
+             (SELECT count(*)::int FROM shift_coverage_alerts x WHERE x.shift_id = s.id) AS alerts
+      FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id AND t.location_id = ${locationId}
+      WHERE s.organization_id = ${organizationId}
+        AND s.scheduled_start >= (${range.from}::date::timestamp AT TIME ZONE 'America/Puerto_Rico')
+        AND s.scheduled_start < ((${range.from}::date + ${range.days}::int)::timestamp AT TIME ZONE 'America/Puerto_Rico')
+      ORDER BY s.scheduled_start, s.id`.execute(trx)).rows;
+    const ids = shifts.map((x) => x.id);
+    const subs = ids.length === 0 ? [] : (await sql<{ shift_id: string; original: string | null; substitute: string | null; effective_at: string; full_replacement: boolean;
+      reason_code: string; availability_warning: boolean; uncovered: number; created_by: string | null }>`
+      SELECT x.shift_id, wo.display_name AS original, ws.display_name AS substitute, x.effective_at, x.full_replacement, x.reason_code, x.availability_warning,
+             jsonb_array_length(x.uncovered) AS uncovered, u.email AS created_by
+      FROM shift_substitutions x
+      JOIN organization_worker_memberships mo ON mo.id = x.original_membership_id JOIN workers wo ON wo.id = mo.worker_id
+      JOIN organization_worker_memberships ms ON ms.id = x.substitute_membership_id JOIN workers ws ON ws.id = ms.worker_id
+      LEFT JOIN users u ON u.id = x.created_by_user_id
+      WHERE x.shift_id = ANY(${ids}::uuid[]) ORDER BY x.effective_at, x.id`.execute(trx)).rows;
+    const alerts = ids.length === 0 ? [] : (await sql<{ shift_id: string; resident: string; uncovered_from: string; reason: string; resolved_at: string | null }>`
+      SELECT a.shift_id, COALESCE(NULLIF(cr.preferred_name, ''), cr.first_name || ' ' || cr.last_name) AS resident, a.uncovered_from, a.reason, a.resolved_at
+      FROM shift_coverage_alerts a JOIN care_recipients cr ON cr.id = a.care_recipient_id
+      WHERE a.shift_id = ANY(${ids}::uuid[]) ORDER BY a.uncovered_from, a.id`.execute(trx)).rows;
+    return {
+      establishment: { id: loc.id, name: loc.name }, from: range.from, to: range.to, days: range.days,
+      shifts: shifts.map((x) => ({ shiftId: x.id, scheduledStart: x.scheduled_start, scheduledEnd: x.scheduled_end, status: x.status, staff: x.staff,
+        residents: x.residents, periods: x.periods, substitutions: x.substitutions, coverageAlerts: x.alerts })),
+      substitutions: subs.map((x) => ({ shiftId: x.shift_id, original: x.original, substitute: x.substitute, effectiveAt: x.effective_at, fullReplacement: x.full_replacement,
+        reasonCode: x.reason_code, availabilityWarning: x.availability_warning, uncoveredCount: x.uncovered, createdBy: x.created_by })),
+      coverageAlerts: alerts.map((a) => ({ shiftId: a.shift_id, resident: a.resident, uncoveredFrom: a.uncovered_from, reason: a.reason, resolvedAt: a.resolved_at })),
+      totals: { shifts: shifts.length, cancelled: shifts.filter((x) => x.status === "cancelled").length, substitutions: subs.length, coverageAlerts: alerts.length,
+        openCoverageAlerts: alerts.filter((a) => !a.resolved_at).length },
+    };
+  }
+}

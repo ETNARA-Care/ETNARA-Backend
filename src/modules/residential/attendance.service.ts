@@ -13,6 +13,7 @@ import type {
 } from "./attendance.schemas.js";
 import { GEO_CONSENT_VERSION } from "./attendance.schemas.js";
 import { ResidentialError, RESIDENTIAL_MANAGER_REQUIRED, RESIDENTIAL_NOT_FOUND } from "./residentialErrors.js";
+export { reportRange, REPORT_MAX_DAYS } from "./reportRange.js";
 
 /**
  * 173–175 · Hogares F4: ponches con QR y código de 6 dígitos, geocerca, revisión, correcciones y alertas.
@@ -563,37 +564,75 @@ export function acknowledgeAlert(userId: string, organizationId: string, alertId
 }
 
 /** Asistencia de la semana por turno y persona: tardanzas, salidas anticipadas y ausencias como datos administrativos. */
+/**
+ * Filas de asistencia de un establecimiento entre dos días locales (Puerto Rico), por turno y persona aceptada.
+ * 176 (F3): cada persona con su parte del turno (cobertura) cuando hubo una sustitución; las horas salen solo de los
+ * ponches y se recortan en el límite de la sustitución, así que nunca se duplican.
+ */
+async function attendanceRows(trx: Trx, organizationId: string, locationId: string, fromDate: string, days: number, policy: Policy, now: Date) {
+  const rows = (await sql<{ shift_id: string; scheduled_start: string; scheduled_end: string; membership_id: string; worker_name: string | null; shift_status: string;
+    cov_start: string; cov_end: string }>`
+    SELECT s.id AS shift_id, s.scheduled_start, s.scheduled_end, a.organization_worker_membership_id AS membership_id, w.display_name AS worker_name, s.status::text AS shift_status,
+           c.cov_start, c.cov_end
+    FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id AND t.location_id = ${locationId}
+    JOIN assignments a ON a.shift_id = s.id AND a.response_status = 'accepted'
+    CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
+    JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id JOIN workers w ON w.id = m.worker_id
+    WHERE s.organization_id = ${organizationId} AND s.status::text <> 'cancelled'
+      AND s.scheduled_start >= (${fromDate}::date::timestamp AT TIME ZONE 'America/Puerto_Rico')
+      AND s.scheduled_start < ((${fromDate}::date + ${days}::int)::timestamp AT TIME ZONE 'America/Puerto_Rico')
+    ORDER BY s.scheduled_start, w.display_name, a.organization_worker_membership_id`.execute(trx)).rows;
+  const out = [];
+  for (const r of rows) {
+    const ps = (await sql<{ id: string; punch_type: PunchType; effective_at: string; effective_status: EffectiveStatus; session_in_punch_id: string | null }>`
+      SELECT p.id, p.punch_type, p.effective_at, ${EFFECTIVE} AS effective_status, p.session_in_punch_id FROM attendance_punches p
+      WHERE p.shift_id = ${r.shift_id} AND p.organization_worker_membership_id = ${r.membership_id}`.execute(trx)).rows;
+    const clipFrom = r.cov_start !== r.scheduled_start && new Date(r.cov_start).getTime() !== new Date(r.scheduled_start).getTime() ? new Date(r.cov_start) : null;
+    const clipTo = new Date(r.cov_end).getTime() !== new Date(r.scheduled_end).getTime() ? new Date(r.cov_end) : null;
+    const a = shiftAttendance({ start: new Date(r.cov_start), end: new Date(r.cov_end), now, policy, clip: { from: clipFrom, to: clipTo },
+      punches: ps.map((p) => ({ id: p.id, type: p.punch_type, at: new Date(p.effective_at), status: p.effective_status, sessionInId: p.session_in_punch_id })) });
+    out.push({ shiftId: r.shift_id, scheduledStart: r.cov_start, scheduledEnd: r.cov_end, membershipId: r.membership_id, workerName: r.worker_name,
+      substitutedPart: clipFrom !== null || clipTo !== null, ...a });
+  }
+  return out;
+}
+
 export function weekAttendance(userId: string, organizationId: string, locationId: string, weekStart: string, now = new Date()) {
   return manage(userId, organizationId, async (trx) => {
     const est = await establishment(trx, organizationId, locationId);
     const policy = await policyOf(trx, locationId);
-    // 176 (F3): cada persona con su parte del turno (cobertura) cuando hubo una sustitución.
-    const rows = (await sql<{ shift_id: string; scheduled_start: string; scheduled_end: string; membership_id: string; worker_name: string | null; shift_status: string;
-      cov_start: string; cov_end: string }>`
-      SELECT s.id AS shift_id, s.scheduled_start, s.scheduled_end, a.organization_worker_membership_id AS membership_id, w.display_name AS worker_name, s.status::text AS shift_status,
-             c.cov_start, c.cov_end
-      FROM shifts s JOIN establishment_technical_rooms t ON t.room_id = s.room_id AND t.location_id = ${locationId}
-      JOIN assignments a ON a.shift_id = s.id AND a.response_status = 'accepted'
-      CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
-      JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id JOIN workers w ON w.id = m.worker_id
-      WHERE s.organization_id = ${organizationId} AND s.status::text <> 'cancelled'
-        AND s.scheduled_start >= (${weekStart}::date::timestamp AT TIME ZONE 'America/Puerto_Rico')
-        AND s.scheduled_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE 'America/Puerto_Rico')
-      ORDER BY s.scheduled_start, w.display_name, a.organization_worker_membership_id`.execute(trx)).rows;
-    const out = [];
-    for (const r of rows) {
-      const ps = (await sql<{ id: string; punch_type: PunchType; effective_at: string; effective_status: EffectiveStatus; session_in_punch_id: string | null }>`
-        SELECT p.id, p.punch_type, p.effective_at, ${EFFECTIVE} AS effective_status, p.session_in_punch_id FROM attendance_punches p
-        WHERE p.shift_id = ${r.shift_id} AND p.organization_worker_membership_id = ${r.membership_id}`.execute(trx)).rows;
-      const clipFrom = r.cov_start !== r.scheduled_start && new Date(r.cov_start).getTime() !== new Date(r.scheduled_start).getTime() ? new Date(r.cov_start) : null;
-      const clipTo = new Date(r.cov_end).getTime() !== new Date(r.scheduled_end).getTime() ? new Date(r.cov_end) : null;
-      const a = shiftAttendance({ start: new Date(r.cov_start), end: new Date(r.cov_end), now, policy, clip: { from: clipFrom, to: clipTo },
-        punches: ps.map((p) => ({ id: p.id, type: p.punch_type, at: new Date(p.effective_at), status: p.effective_status, sessionInId: p.session_in_punch_id })) });
-      out.push({ shiftId: r.shift_id, scheduledStart: r.cov_start, scheduledEnd: r.cov_end, membershipId: r.membership_id, workerName: r.worker_name,
-        substitutedPart: clipFrom !== null || clipTo !== null, ...a });
-    }
-    return { establishment: { id: est.id, name: est.name }, weekStart, policy, rows: out };
+    return { establishment: { id: est.id, name: est.name }, weekStart, policy, rows: await attendanceRows(trx, organizationId, locationId, weekStart, 7, policy, now) };
   });
+}
+
+/**
+ * 177 (F5): informe de asistencia y horas trabajadas de un establecimiento en un rango. Validadas y pendientes siempre
+ * por separado; tardanzas, salidas anticipadas y ausencias como datos administrativos. No es nómina.
+ */
+export async function attendanceReportIn(trx: Trx, organizationId: string, locationId: string, range: { from: string; to: string; days: number }, now = new Date()) {
+  {
+    const est = await establishment(trx, organizationId, locationId);
+    const policy = await policyOf(trx, locationId);
+    const rows = await attendanceRows(trx, organizationId, locationId, range.from, range.days, policy, now);
+    const blank = () => ({ shifts: 0, validatedMinutes: 0, pendingMinutes: 0, breakMinutes: 0, mealMinutes: 0, lateCount: 0, lateMinutes: 0,
+      earlyLeaveCount: 0, earlyLeaveMinutes: 0, absences: 0, openSessions: 0 });
+    type Tot = ReturnType<typeof blank>;
+    const add = (t: Tot, r: (typeof rows)[number]) => {
+      t.shifts += 1; t.validatedMinutes += r.validatedMinutes; t.pendingMinutes += r.pendingMinutes; t.breakMinutes += r.breakMinutes; t.mealMinutes += r.mealMinutes;
+      if (r.lateMinutes > 0) { t.lateCount += 1; t.lateMinutes += r.lateMinutes; }
+      if (r.earlyLeaveMinutes > 0) { t.earlyLeaveCount += 1; t.earlyLeaveMinutes += r.earlyLeaveMinutes; }
+      if (r.absent) t.absences += 1;
+      if (r.openSession) t.openSessions += 1;
+    };
+    const people = new Map<string, { membershipId: string; workerName: string | null } & Tot>();
+    const totals = blank();
+    for (const r of rows) {
+      const p = people.get(r.membershipId) ?? { membershipId: r.membershipId, workerName: r.workerName, ...blank() };
+      add(p, r); add(totals, r); people.set(r.membershipId, p);
+    }
+    return { establishment: { id: est.id, name: est.name }, from: range.from, to: range.to, days: range.days, policy, rows,
+      people: [...people.values()].sort((a, b) => (a.workerName ?? "").localeCompare(b.workerName ?? "", "es") || a.membershipId.localeCompare(b.membershipId)), totals };
+  }
 }
 
 /** Establecimientos de hogar abiertos (para las pantallas de la administración). */
@@ -603,4 +642,36 @@ export function attendanceEstablishments(userId: string, organizationId: string)
       AND EXISTS (SELECT 1 FROM establishment_technical_rooms t WHERE t.location_id = l.id) ORDER BY l.name, l.id`.execute(trx);
     return r.rows;
   });
+}
+
+/**
+ * 177 (F5): parte de asistencia del panel del hogar (solo administración; el llamador ya comprobó el rol y el interruptor).
+ * Presentes: sesiones abiertas ahora con la entrada CONFIRMADA (validada o justificada; una entrada pendiente de revisión
+ * no es presencia confirmada y solo cuenta en «por revisar»), en un turno no cancelado y de las últimas 24 h. La sesión
+ * se cierra con la misma regla que el cálculo de horas (attendanceModel): una salida de esa sesión (o sin sesión y
+ * posterior) que no esté marcada como no reconocida. Solo nombre del personal y establecimiento: sin ubicación ni datos
+ * del ponche.
+ */
+export async function attendancePanelSection(trx: Trx, organizationId: string, now = new Date()) {
+  const present = (await sql<{ worker_name: string | null; location_name: string; since: string }>`
+    SELECT DISTINCT ON (p.organization_worker_membership_id) w.display_name AS worker_name, l.name AS location_name, p.effective_at AS since
+    FROM attendance_punches p
+    JOIN shifts s ON s.id = p.shift_id AND s.status::text <> 'cancelled'
+    JOIN organization_worker_memberships m ON m.id = p.organization_worker_membership_id
+    JOIN workers w ON w.id = m.worker_id JOIN locations l ON l.id = p.location_id
+    WHERE p.organization_id = ${organizationId} AND p.punch_type = 'in' AND ${EFFECTIVE} IN ('validated', 'justified')
+      AND p.effective_at <= ${now.toISOString()}::timestamptz AND p.effective_at > ${now.toISOString()}::timestamptz - interval '24 hours'
+      AND NOT EXISTS (SELECT 1 FROM attendance_punches o WHERE o.shift_id = p.shift_id
+        AND o.organization_worker_membership_id = p.organization_worker_membership_id AND o.punch_type = 'out'
+        AND (o.session_in_punch_id = p.id OR (o.session_in_punch_id IS NULL AND o.effective_at > p.effective_at))
+        AND COALESCE((SELECT r.decision FROM attendance_reviews r WHERE r.punch_id = o.id ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), o.initial_validation) <> 'not_recognized')
+    ORDER BY p.organization_worker_membership_id, p.effective_at DESC`.execute(trx)).rows;
+  const counts = (await sql<{ pending: number; alerts: number }>`
+    SELECT (SELECT count(*)::int FROM attendance_punches p WHERE p.organization_id = ${organizationId} AND ${EFFECTIVE} = 'pending_review') AS pending,
+           (SELECT count(*)::int FROM attendance_alerts a WHERE a.organization_id = ${organizationId} AND a.acknowledged_at IS NULL) AS alerts`.execute(trx)).rows[0];
+  return {
+    present: present.map((r) => ({ workerName: r.worker_name, establishment: r.location_name, since: r.since }))
+      .sort((a, b) => a.establishment.localeCompare(b.establishment, "es") || (a.workerName ?? "").localeCompare(b.workerName ?? "", "es")),
+    pendingReview: counts?.pending ?? 0, openAlerts: counts?.alerts ?? 0,
+  };
 }

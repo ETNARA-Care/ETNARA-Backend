@@ -543,6 +543,24 @@ jobs:
           ETNARA_DISPOSABLE_DB: "true"
         run: npx tsx scripts/verifyMigration176ProductionOrder.ts
 
+      - name: PostgreSQL 177 residential reports and portals F5 (family conversation only with the administration in API and RLS, family portal per D5 with only their resident, home and room and activities with author, role, date and time, never shifts, schedules, punches, attendance, location, credentials or other residents, family-only RLS closed in homes with multi-role users keeping legitimate access, caregiver non-clinical activities only for assigned residents, attendance report reconciles with punches with validated and pending apart and a free range of 1 to 31 days, assignments report, full panel by switch, operations center without technical-room shifts, Central counts unique active residents without names and alerts above 10 without blocking and excludes Hogar Demo, agencies unchanged, never 500)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyResidentialPortals177.ts
+
+      - name: PostgreSQL 177 rollback (schema identical to 176, messaging window restored exactly, existing rows unchanged, re-apply, idempotent)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigrationRollback.ts 177
+
+      - name: PostgreSQL 177 on the production sequence (175 → 180 → 176 → 177 gives the same schema as 176 → 177 → 180, rolling 177 back leaves production exactly as it is with 180 and 176, re-apply identical, 180 and 176 objects untouched, only the messaging window redefined)
+        env:
+          MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
+          ETNARA_DISPOSABLE_DB: "true"
+        run: npx tsx scripts/verifyMigration177ProductionOrder.ts
+
       - name: PostgreSQL 160 rollback (schema identical to 159, every row unchanged, re-apply, idempotent)
         env:
           MIGRATIONS_DATABASE_URL: postgres://postgres@localhost:5432/etnara_ci
