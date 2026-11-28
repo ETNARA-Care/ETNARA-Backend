@@ -261,9 +261,20 @@ export async function createCareEvent(
       if (existing) return { event: replayOrConflict(existing, shiftId, input), replayed: true };
     }
 
-    const checkInAt = await assertActiveVisit(trx, shiftId, membership.id);
-    const occurredAt = resolveOccurredAt(input, checkInAt);
-    await assertRecipientConsistency(trx, organizationId, shift, input.careRecipientId);
+    // 176 (hogares F3): en un turno de establecimiento no hay verificación de visita; el evento solo se acepta para un
+    // residente asignado AHORA a esta persona en este turno (desde el inicio de esa asignación). Agencias: igual que siempre.
+    const residential = (await sql<{ is_residential: boolean; active_from: string | null }>`
+      SELECT * FROM app_residential_care_event_window(${shiftId}::uuid, ${input.careRecipientId}::uuid)
+    `.execute(trx)).rows[0];
+    let occurredAt: string | null;
+    if (residential?.is_residential) {
+      if (!residential.active_from) throw new RecipientNotInContextError();
+      occurredAt = resolveOccurredAt(input, residential.active_from);
+    } else {
+      const checkInAt = await assertActiveVisit(trx, shiftId, membership.id);
+      occurredAt = resolveOccurredAt(input, checkInAt);
+      await assertRecipientConsistency(trx, organizationId, shift, input.careRecipientId);
+    }
     const eventTypeId = await resolveEnabledEventType(trx, organizationId, input.typeCode);
 
     let structuredData: unknown = null;

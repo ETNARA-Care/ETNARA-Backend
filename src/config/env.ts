@@ -102,6 +102,16 @@ const envSchema = z.object({
   EMAIL_SENDER_ADDRESS: z.string().email().default("invitations@etnara.care"),
   EMAIL_SENDER_NAME: z.string().default("ETNARA Care"),
   ACTIVATION_BASE_URL: z.string().url().default("https://app.etnara.care"),
+  // 173–175 (hogares F4, D4): secreto del servidor para derivar el QR y el código de 6 dígitos (HMAC-SHA256). No vive
+  // en la base. Sin él, los ponches y la pantalla del QR responden 503 ATTENDANCE_UNAVAILABLE (nunca un código débil).
+  // El identificador de clave permite rotarlo; la clave anterior solo sirve para verificar códigos ya emitidos con ella.
+  ATTENDANCE_CODE_SECRET: z.string().min(32).optional(),
+  ATTENDANCE_CODE_KEY_ID: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).default("k1"),
+  ATTENDANCE_CODE_PREVIOUS_SECRET: z.string().min(32).optional(),
+  ATTENDANCE_CODE_PREVIOUS_KEY_ID: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/).optional(),
+  // Trabajo programado de asistencia (códigos de la semana siguiente, aviso de disponibilidad, sesiones de 16 h). Solo
+  // actúa en hogares con HOGAR_PONCHES encendido.
+  ATTENDANCE_JOB: z.enum(["on", "off"]).default("on"),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -8,7 +8,7 @@ import {
   createShiftFromSmartMatch, getSmartMatchShiftDraft, cancelSmartMatchOpportunity, listSmartMatchOpportunityHistory, smartMatchCancelSchema, getShiftPrivateInstructions, saveShiftPrivateInstructions,
   smartMatchCreateShiftSchema, shiftPrivateInstructionsSchema,
 } from "./smartmatch.shifts.service.js";
-import { RecipientNotInOrgError, InvalidShiftTimesError } from "../scheduling/scheduling.service.js";
+import { RecipientNotInOrgError, InvalidShiftTimesError, ResidentialShiftTargetError } from "../scheduling/scheduling.service.js";
 import { LocationNotFoundError } from "../careRecipients/serviceLocations.service.js";
 import {
   ShiftNotFoundError, MembershipNotInOrgError, ShiftCancelledError, WorkerNotEligibleError,
@@ -29,6 +29,7 @@ function fail(res: Response, error: unknown): void {
   if (error instanceof SmartMatchConflictError) { res.status(409).json({ error: error.reason }); return; }
   if (error instanceof LocationNotFoundError) { res.status(400).json({ error: "SERVICE_LOCATION_NOT_IN_RECIPIENT" }); return; }
   if (error instanceof RecipientNotInOrgError) { res.status(400).json({ error: "RECIPIENT_NOT_IN_AGENCY" }); return; }
+  if (error instanceof ResidentialShiftTargetError) { res.status(409).json({ error: error.code }); return; }
   if (error instanceof InvalidShiftTimesError) { res.status(400).json({ error: "INVALID_SHIFT_TIMES" }); return; }
   if (error instanceof ScheduleConflictError) { res.status(409).json({ error: "SCHEDULE_CONFLICT" }); return; }
   if (error instanceof DuplicateAssignmentError) { res.status(409).json({ error: "ASSIGNMENT_ALREADY_EXISTS" }); return; }

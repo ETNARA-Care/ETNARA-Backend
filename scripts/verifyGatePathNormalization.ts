@@ -137,7 +137,11 @@ async function main() {
   const leaks1: string[] = [];
   for (const { r, m } of featureCases) for (const v of variantsOf(r, A)) {
     const res = await raw(m, v.path, tA, bodyFor(m));
-    const ok = m === "HEAD" ? res.status === 404 : (res.status === 404 && res.body.error === "FEATURE_NOT_ENABLED") || unmatched(res);
+    // 172: las funcionalidades de hogar (/residential/…) ni siquiera existen en una agencia: las cierra antes residentialGate
+    // (403 MODALITY_NOT_AVAILABLE). Con el interruptor apagado en un hogar, verifyResidentialSchedule172 (G1–G3) exige el 404.
+    const residentialOnly = /\/residential(\/|$)/i.test(decodeURIComponent(v.path));
+    const closedByModality = residentialOnly && res.status === 403 && (m === "HEAD" || res.body.error === "MODALITY_NOT_AVAILABLE");
+    const ok = closedByModality || (m === "HEAD" ? res.status === 404 : (res.status === 404 && res.body.error === "FEATURE_NOT_ENABLED") || unmatched(res));
     if (!ok) leaks1.push(`${m} | ${v.name} | ${v.path} → ${res.status} ${res.body.error ?? ""}`);
   }
   check("G1. orgFeatureGate: ninguna variante ni método llega a una funcionalidad apagada (404 FEATURE_NOT_ENABLED o sin ruta)", leaks1.length === 0 && featureCases.length > 100,
@@ -203,7 +207,7 @@ async function main() {
   check("G6.1 orgFeatureGate: sin la función de interruptores → 503 FEATURE_CHECK_UNAVAILABLE", f1.status === 503 && f1.body.error === "FEATURE_CHECK_UNAVAILABLE", f1);
   check("G6.2 modalityGate: sin la función de modalidad → 503 MODALITY_CHECK_UNAVAILABLE", f2.status === 503 && f2.body.error === "MODALITY_CHECK_UNAVAILABLE", f2);
   check("G6.3 Fallo inesperado al validar la sesión → 503 en las tres guardas (nunca continúa)",
-    f3[0].status === 503 && f3[0].body.error === "FEATURE_CHECK_UNAVAILABLE" && f3[1].status === 503 && f3[1].body.error === "MODALITY_CHECK_UNAVAILABLE" && f3[2].status === 503 && f3[2].body.error === "CONTRACT_CHECK_UNAVAILABLE", f3);
+    f3[0].status === 503 && ["FEATURE_CHECK_UNAVAILABLE", "MODALITY_CHECK_UNAVAILABLE"].includes(f3[0].body.error) /* 170: /finance también la cierra antes la guarda de hogares */ && f3[1].status === 503 && f3[1].body.error === "MODALITY_CHECK_UNAVAILABLE" && f3[2].status === 503 && f3[2].body.error === "CONTRACT_CHECK_UNAVAILABLE", f3);
   const created = Number((await q<{ n: number }>(`SELECT count(*)::int n FROM care_recipients WHERE organization_id=$1`, [B])).rows[0].n);
   check("G6.4 contractEnforcementGate: si el estado contractual no se puede leer → 503 CONTRACT_CHECK_UNAVAILABLE y no se crea nada", f4.status === 503 && f4.body.error === "CONTRACT_CHECK_UNAVAILABLE" && created === 0, [f4, created]);
   const bad = await raw("GET", `/organizations/${A}/smartmatch/opportunities`, "token-inexistente"), noTok = await raw("GET", `/organizations/${I}/team`, "");
@@ -275,7 +279,8 @@ async function main() {
     cOther.body.error === "CONTRACT_ACCEPTANCE_REQUIRED" && bNew.body.error === "CONTRACT_ACCEPTANCE_REQUIRED", [cOther, bNew]);
   // e) Modalidad: un independiente usa todas sus rutas abiertas (GET/HEAD, también con barra final) y su ficha de credenciales.
   const bad8m: string[] = [];
-  for (const r of getRoutes.filter((x) => !teamRouteFor(fill(x.path, I, []), "GET"))) { const p = fill(r.path, I, []); for (const v of [p, p + "/"]) {
+  // 170: /residential solo existe para hogares (residentialGate la cierra a independientes por diseño).
+  for (const r of getRoutes.filter((x) => !teamRouteFor(fill(x.path, I, []), "GET") && !/\/residential(\/|$)/.test(x.path))) { const p = fill(r.path, I, []); for (const v of [p, p + "/"]) {
     const g = await raw("GET", v, tI); const h = await raw("HEAD", v, tI);
     if (g.body.error === "MODALITY_NOT_AVAILABLE" || h.status !== g.status) bad8m.push(`GET/HEAD ${v} → ${g.status} ${g.body.error ?? ""} / ${h.status}`); } }
   const cred = await raw("POST", `/organizations/${I}/workers/${randomUUID()}/credentials/`, tI, {});
@@ -285,7 +290,8 @@ async function main() {
   // f) Funcionalidades encendidas (B): cuidador y familiar no reciben FEATURE_NOT_ENABLED en GET/HEAD de rutas de funcionalidad.
   const bad8f: string[] = [];
   for (const [who, t] of [["cuidador B", tWB], ["familiar B", tFB]] as const)
-    for (const r of getRoutes.filter((x) => gatedFeatureFor(fill(x.path, B, []), "GET"))) { const p = fill(r.path, B, []); for (const v of [p, p + "/"]) {
+    // 170/172: /residential solo existe para hogares (B es una agencia), como en G8.3.
+    for (const r of getRoutes.filter((x) => gatedFeatureFor(fill(x.path, B, []), "GET") && !/\/residential(\/|$)/.test(x.path))) { const p = fill(r.path, B, []); for (const v of [p, p + "/"]) {
       const g = await raw("GET", v, t); const h = await raw("HEAD", v, t);
       if (g.body.error === "FEATURE_NOT_ENABLED" || gateBlock(g) && g.body.error !== "CONTRACT_ACCEPTANCE_REQUIRED" || h.status !== g.status) bad8f.push(`${who} ${v} → ${g.status} ${g.body.error ?? ""} / HEAD ${h.status}`); } }
   check("G8.4 Funcionalidades encendidas: cuidadores y familiares no quedan cerrados por la guarda (GET y HEAD, también con barra final)", bad8f.length === 0, bad8f.slice(0, 8));

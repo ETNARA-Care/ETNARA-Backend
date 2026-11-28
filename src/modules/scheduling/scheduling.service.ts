@@ -46,6 +46,34 @@ export class RecipientNotInOrgError extends Error {
     this.name = "RecipientNotInOrgError";
   }
 }
+/** 171: el destino del turno es un establecimiento de hogar cerrado o una habitación archivada (409). */
+/** 27-nov: establishmentId solo en hogares y de un establecimiento activo de la organización (400). */
+export class EstablishmentNotInOrgError extends Error {
+  constructor() {
+    super("Establishment does not belong to this residential organization");
+    this.name = "EstablishmentNotInOrgError";
+  }
+}
+
+/**
+ * 27-nov (decisión B de Rafa): el turno de «Todo el establecimiento» solo existe con HOGAR_CALENDARIO encendido en el
+ * hogar. Apagado, la API responde como el resto de rutas del calendario (404 FEATURE_NOT_ENABLED) y no crea nada; el
+ * turno para una persona residente no cambia.
+ */
+export class EstablishmentShiftsNotEnabledError extends Error {
+  constructor() {
+    super("Establishment shifts require HOGAR_CALENDARIO");
+    this.name = "EstablishmentShiftsNotEnabledError";
+  }
+}
+
+export class ResidentialShiftTargetError extends Error {
+  constructor(public readonly code: "RESIDENTIAL_ESTABLISHMENT_CLOSED" | "RESIDENTIAL_ROOM_ARCHIVED") {
+    super(code);
+    this.name = "ResidentialShiftTargetError";
+  }
+}
+
 export class RoomNotInOrgError extends Error {
   constructor() {
     super("ROOM_NOT_IN_ORGANIZATION");
@@ -98,14 +126,19 @@ export const createShiftSchema = z
   .object({
     careRecipientId: z.string().uuid().optional(),
     roomId: z.string().uuid().optional(),
+    /** 27-nov (hogares): turno del establecimiento sin residente concreto. El servidor lo lleva a su habitación técnica. */
+    establishmentId: z.string().uuid().optional(),
     scheduledStart: z.string().datetime(),
     scheduledEnd: z.string().datetime(),
     requiredRole: z.string().trim().min(1).max(80).optional(),
     /** Gate 6: confirmed service address (one of the person's addresses). Defaults to the primary one. */
     serviceLocationId: z.string().uuid().optional(),
   })
-  .refine((d) => d.careRecipientId || d.roomId, {
-    message: "Either careRecipientId (home care) or roomId (residential) is required",
+  .refine((d) => d.careRecipientId || d.roomId || d.establishmentId, {
+    message: "Either careRecipientId (home care), roomId or establishmentId (residential) is required",
+  })
+  .refine((d) => !d.establishmentId || (!d.careRecipientId && !d.roomId), {
+    message: "establishmentId is a shift for the whole establishment: no careRecipientId or roomId",
   })
   .refine((d) => new Date(d.scheduledStart).getTime() < new Date(d.scheduledEnd).getTime(), {
     message: "scheduledStart must be strictly before scheduledEnd",
@@ -179,6 +212,20 @@ export async function insertShiftInTransaction(
     throw new InvalidShiftTimesError();
   }
   {
+    // 27-nov (hogares): turno del establecimiento sin residente. Solo hogares; se resuelve a su habitación técnica, que
+    // nunca sale en ninguna respuesta (las filas devuelven room_id NULL y el nombre del establecimiento).
+    let technicalRoomId: string | null = null;
+    if (input.establishmentId) {
+      const t = await sql<{ room_id: string }>`
+        SELECT t.room_id FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id
+        WHERE t.location_id = ${input.establishmentId} AND l.organization_id = ${organizationId}
+          AND l.archived_at IS NULL AND app_org_is_residential(${organizationId}::uuid) LIMIT 1
+      `.execute(trx);
+      if (!t.rows[0]) throw new EstablishmentNotInOrgError();
+      const enabled = await sql<{ on: boolean }>`SELECT app_org_feature_enabled(${organizationId}::uuid, 'HOGAR_CALENDARIO') AS on`.execute(trx);
+      if (enabled.rows[0]?.on !== true) throw new EstablishmentShiftsNotEnabledError();
+      technicalRoomId = t.rows[0].room_id;
+    }
     if (input.careRecipientId) {
       const check = await sql<{ id: string }>`
         SELECT id FROM care_recipients WHERE id = ${input.careRecipientId} AND organization_id = ${organizationId} LIMIT 1
@@ -186,10 +233,21 @@ export async function insertShiftInTransaction(
       if (!check.rows[0]) throw new RecipientNotInOrgError();
     }
     if (input.roomId) {
+      // 171: la habitación técnica de un hogar no se usa desde la ruta genérica (solo el calendario de hogares, F2).
       const check = await sql<{ id: string }>`
-        SELECT id FROM rooms WHERE id = ${input.roomId} AND organization_id = ${organizationId} LIMIT 1
+        SELECT id FROM rooms WHERE id = ${input.roomId} AND organization_id = ${organizationId} AND NOT app_is_technical_room(id) LIMIT 1
       `.execute(trx);
       if (!check.rows[0]) throw new RoomNotInOrgError();
+    }
+    // 171: en hogares, bloquea el establecimiento (frente a un cierre simultáneo) y exige que siga abierto y que la
+    // habitación esté activa. Fuera de hogares no hace nada.
+    if (input.roomId || input.careRecipientId || technicalRoomId) {
+      const target = await sql<{ state: string }>`
+        SELECT app_residential_shift_target_state(${technicalRoomId ?? input.roomId ?? null}::uuid, ${input.careRecipientId ?? null}::uuid) AS state
+      `.execute(trx);
+      const state = target.rows[0]?.state;
+      if (state === "establishment_closed") throw new ResidentialShiftTargetError("RESIDENTIAL_ESTABLISHMENT_CLOSED");
+      if (state === "room_archived") throw new ResidentialShiftTargetError("RESIDENTIAL_ROOM_ARCHIVED");
     }
 
     const serviceLocationId = input.careRecipientId
@@ -197,8 +255,8 @@ export async function insertShiftInTransaction(
       : null;
     const result = await sql<ShiftRow>`
       INSERT INTO shifts (organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id)
-      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
+      VALUES (${organizationId}, ${input.careRecipientId ?? null}, ${technicalRoomId ?? input.roomId ?? null}, ${input.scheduledStart}, ${input.scheduledEnd}, ${input.requiredRole ?? "Cuidador/a"}, ${serviceLocationId})
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at
     `.execute(trx);
     return result.rows[0];
   }
@@ -236,10 +294,12 @@ export async function listShifts(userId: string, organizationId: string, filter:
     }
 
     const result = await sql<ShiftRow & { assignment_count: number }>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
+      SELECT s.id, s.organization_id, s.care_recipient_id, CASE WHEN app_is_technical_room(s.room_id) THEN NULL ELSE s.room_id END AS room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.service_location_id, s.status, s.created_at, s.updated_at, count(a.id)::int as assignment_count,
              -- 154: visual «Cerrado sin servicio» (managers only: RLS hides closures from caregivers).
-             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL) AS closed_without_service
+             EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = s.id AND c.rectified_at IS NULL) AS closed_without_service,
+             -- 172 (hogares F2): un turno del calendario se presenta como del establecimiento (nunca la habitación técnica).
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id) AS establishment_name
       FROM shifts s
       LEFT JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       WHERE ${whereClause}
@@ -269,14 +329,16 @@ export async function listMyShifts(userId: string, organizationId: string) {
     if (!workerId) throw new WorkerNotLinkedError();
 
     const result = await sql<ShiftRow>`
-      SELECT s.id, s.organization_id, s.care_recipient_id, s.room_id, s.scheduled_start, s.scheduled_end, s.required_role,
+      SELECT s.id, s.organization_id, s.care_recipient_id, CASE WHEN app_is_technical_room(s.room_id) THEN NULL ELSE s.room_id END AS room_id, s.scheduled_start, s.scheduled_end, s.required_role,
              s.status, s.created_at, s.updated_at, a.id AS assignment_id,
              a.response_status AS assignment_response_status,
              -- Only a name and the municipality (migration 134): the full name once she
              -- accepted, a short one (preferred name, or first name + initial) while the
              -- assignment is pending. Never the rest of the person's profile or the address.
              prev.display_name AS care_recipient_display_name,
-             prev.municipality AS service_municipality
+             prev.municipality AS service_municipality,
+             -- 172 (hogares F2): turno del establecimiento (nunca la habitación técnica).
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id) AS establishment_name
       FROM shifts s
       JOIN assignments a
         ON a.shift_id = s.id
@@ -435,7 +497,9 @@ export async function getShift(userId: string, organizationId: string, shiftId: 
   return withTenantContext({ userId, organizationId }, async (trx) => {
     await assertStaffCaller(trx);
     const result = await sql<ShiftRow>`
-      SELECT id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at,
+      SELECT id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, service_location_id, status, created_at, updated_at,
+             -- 172: turno del calendario de un hogar → del establecimiento.
+             (SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = shifts.room_id) AS establishment_name,
              EXISTS (SELECT 1 FROM shift_attention_closures c WHERE c.shift_id = shifts.id AND c.rectified_at IS NULL) AS closed_without_service
       FROM shifts
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
@@ -484,7 +548,7 @@ export async function updateShift(
       UPDATE shifts
       SET ${sql.join(fragments, sql`, `)}
       WHERE id = ${shiftId} AND organization_id = ${organizationId}
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start, scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx).catch(async (error: { message?: string }) => {
       // Guards in migration 107: a cancelled shift never comes back; a visit whose
       // journey/arrival started cannot be moved (cancel and create a new one instead).
@@ -518,7 +582,7 @@ export async function cancelShift(userId: string, organizationId: string, shiftI
         AND organization_id = ${organizationId}
         AND status IN ('unassigned', 'confirmed')
         AND scheduled_start > now()
-      RETURNING id, organization_id, care_recipient_id, room_id, scheduled_start,
+      RETURNING id, organization_id, care_recipient_id, CASE WHEN app_is_technical_room(room_id) THEN NULL ELSE room_id END AS room_id, scheduled_start,
                 scheduled_end, required_role, status, created_at, updated_at
     `.execute(trx);
     if (result.rows[0]) {

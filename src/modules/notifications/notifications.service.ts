@@ -81,6 +81,23 @@ function summarizeType(notificationType: string, itemCount?: number | null, orgN
       return "Nuevo incidente";
     case "SHIFT_ASSIGNMENT_PENDING":
       return "Nuevo turno pendiente de respuesta";
+    // 172 (hogares F2): aviso general, sin nombres ni datos de residentes.
+    case "SCHEDULE_WEEK_PUBLISHED":
+      return "Horario semanal publicado";
+    case "SCHEDULE_WEEK_UPDATED":
+      return "Horario semanal modificado";
+    // 173–175 (hogares F4): avisos generales a la administración, sin nombres, horas ni ubicación.
+    case "ATTENDANCE_CODE_AVAILABLE":
+      return "Código de asistencia disponible para imprimir";
+    case "ATTENDANCE_REVIEW_NEEDED":
+      return "Ponche por revisar";
+    case "ATTENDANCE_ALERT":
+      return "Alerta de asistencia";
+    // 176 (hogares F3): aviso general de una sustitución, sin motivo, residentes ni datos de salud.
+    case "SHIFT_SUBSTITUTION_ASSIGNED":
+      return "Te asignaron un turno por sustitución";
+    case "SHIFT_SUBSTITUTION_RELEASED":
+      return "Un turno tuyo fue cubierto por sustitución";
     case "SHIFT_ASSIGNMENT_ACCEPTED":
       return "Turno aceptado por la cuidadora";
     case "SHIFT_ASSIGNMENT_REJECTED":
