@@ -1,5 +1,13 @@
 # ETNARA Agent State
 
+## 2026-11-28 — 181 Integración Care ↔ Connect C-2/C-3: vínculo de cuentas y estado firmado con aviso inmediato (rama integracion-connect, local, sin publicar; aprobada por Rafa 28-nov como rama independiente)
+- 181: connect_link_codes (solo la huella SHA-256 del código; un solo uso; ≤ 10 min), connect_links (una fila por organización; referencia de Connect única entre vínculos activos; revocación con autor), connect_outbox (ORG_STATUS_CHANGED / LINK_REVOKED, reintentos exponenciales hasta 1 h, 7 días de vida). FORCE RLS; app_runtime no lee ni escribe las tablas: todo pasa por funciones SECURITY DEFINER (crear código solo administración de la organización y no suspendida; canjear evita duplicados en ambos sentidos; estado por referencia; desvincular; reclamar y reportar la bandeja). Disparador AFTER UPDATE OF status, archived_at en organizations: solo organizaciones vinculadas.
+- Hechos que se comparten con Connect: organizationId, tipo (agencia/independiente/hogar), activa, suspendida, contrato satisfecho, orden de suscripción, referencia. Ninguna persona, residente ni monto.
+- src/modules/connect: firma Ed25519 compacta (iss/aud/typ/iat/exp ≤ 24 h/jti), configuración apagada salvo CONNECT_INTEGRATION=on con CONNECT_SIGNING_KEY, CONNECT_SERVICE_TOKEN_SHA256 y CONNECT_WEBHOOK_URL (https), rutas /organizations/:id/connect{,/link-code,/unlink} e /integrations/connect/{redeem,status/:ref,public-key} (404 si apagada), repartidor cada 30 s + aviso inmediato tras updatePlatformOrganizationLifecycle y tras desvincular.
+- El inicio de sesión de Care no cambia. Bases de datos independientes.
+- Pruebas: verifyConnect181 17/17, rollback 181 4/4, verifyTenantIsolation OK, tests/connect181.test.ts 6, suite 909/909; manifiesto de privilegios regenerado.
+- Sin fusionar, publicar, desplegar ni migrar. Producción necesitará las tres variables (con autorización) y la URL real de Connect.
+
 ## 2026-11-28 — Hogares F6 actualizado sobre main (F0–F5, 180 y body-parser en producción; sin migración)
 - Recorrido F6 14/14 con la corrección de F5 (presentes solo con entrada confirmada). Procedimientos al día: integración hecha; Hogar Demo permanente como propuesta de procedimiento definitivo (sección 2), nada ejecutado.
 

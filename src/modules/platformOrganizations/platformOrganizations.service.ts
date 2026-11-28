@@ -1,3 +1,4 @@
+import { kickConnectOutbox } from "../connect/connect.worker.js";
 import { randomBytes } from "node:crypto";
 import { sql } from "kysely";
 import { z } from "zod";
@@ -33,7 +34,7 @@ export const organizationLifecycleSchema=z.object({action:z.enum(["suspend","arc
 export type OrganizationLifecycleInput=z.infer<typeof organizationLifecycleSchema>;
 export async function updatePlatformOrganizationLifecycle(userId:string,organizationId:string,input:OrganizationLifecycleInput){
   if(!z.string().uuid().safeParse(organizationId).success)throw new Error("INVALID_ORGANIZATION_ID");
-  return withPlatformContext(userId,async trx=>{
+  const result=await withPlatformContext(userId,async trx=>{
     const current=(await sql<{id:string;name:string;status:string;archived_at:Date|null}>`SELECT id,name,status::text status,archived_at FROM organizations WHERE id=${organizationId} FOR UPDATE`.execute(trx)).rows[0];
     if(!current)throw new Error("ORGANIZATION_NOT_FOUND");
     const valid=input.action==="suspend"?(current.status==="active"||current.status==="trial")&&current.archived_at===null:input.action==="archive"?current.status==="suspended"&&current.archived_at===null:current.status==="suspended";
@@ -48,6 +49,8 @@ export async function updatePlatformOrganizationLifecycle(userId:string,organiza
     if(input.action!=="reactivate")await sql`UPDATE access_invitations SET status='revoked',revoked_at=now(),updated_at=now() WHERE organization_id=${organizationId} AND status='pending'`.execute(trx);
     return result.rows[0];
   });
+  kickConnectOutbox(); // 181: aviso inmediato a Connect (el disparador ya dejó el evento en connect_outbox)
+  return result;
 }
 export async function createPlatformOrganization(userId:string,input:CreatePlatformOrganizationInput){return withPlatformContext(userId,async trx=>{if(input.organizationType==="INDEPENDENT_PROVIDER"&&!(await independentModalityEnabled(trx)))throw new Error("INDEPENDENT_MODALITY_DISABLED");const created=await sql<{id:string;name:string;organization_type:string;status:string;created_at:Date}>`INSERT INTO organizations (name,organization_type,status) VALUES (${input.name},${input.organizationType}::organization_type_enum,${input.status}::organization_status_enum) RETURNING id,name,organization_type,status,created_at`.execute(trx);const organization=created.rows[0];await sql`INSERT INTO organization_settings (organization_id) VALUES (${organization.id})`.execute(trx);if(input.organizationType==="INDEPENDENT_PROVIDER")await enableIndependentDefaults(trx,organization.id,userId);return organization;});}
 /** 164: una práctica independiente nace con «De camino» (EN_CAMINO) e Informe del proveedor (SHIFT_REPORTS) encendidos, con su motivo en el historial de interruptores. Central puede apagarlos después como cualquier otro. Agencias y hogares no cambian. */

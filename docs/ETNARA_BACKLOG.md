@@ -2,6 +2,10 @@
 
 ## In Progress
 
+### CONNECT-181 — Integración Care ↔ Connect C-2/C-3 (vínculo de cuentas, estado firmado, aviso inmediato)
+- Estado: implementado en la rama local integracion-connect; pruebas verdes (verifyConnect181 17/17, rollback 4/4, suite 909/909). Pendiente: C-1 (identidad para Connect), C-4 (solicitudes entrantes y «Crear cliente desde Connect»), C-5 (Stripe en Care, una cuenta, Premium como una sola suscripción), C-6 (pruebas de seguridad conjuntas).
+- No fusionar, desplegar ni activar sin autorización de Rafa.
+
 ### CARE-TYPES-148 — Tipos de registro de cuidado por defecto para agencias nuevas (A1, bloqueante del piloto)
 
 - Status: PR de backend (migración 148 + verifyDefaultCareEventTypes 26/26 en ambos modos + rollback 19/19). Sin cambios en el portal. Not authorized: merge, deploy, applying 148 in production.
