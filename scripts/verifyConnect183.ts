@@ -190,7 +190,7 @@ async function main() {
   const { runSaasPendingTick } = await import("../src/modules/saas/saas.routes.js");
   const notice = (until: string | null, ref = refA, token = serviceToken) => call("POST", "/integrations/connect/plan", token, { connectProviderRef: ref, connectPlanUntil: until });
   const en = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
-  const nBad = await notice(en(20), randomUUID()), nNoTok = await notice(en(20), refA, "");
+  const nBad = await notice(en(20), randomUUID()), nNoTok = await notice(en(20), refA, ""), nFar = await notice(en(500));
   const n20 = await notice(en(20));
   stripeCalls.length = 0;
   const coTrial = await call("POST", `/organizations/${A}/saas/checkout`, tA, { plan: "premium" });
@@ -198,7 +198,7 @@ async function main() {
   await notice(en(1));
   const coSoon = await call("POST", `/organizations/${A}/saas/checkout`, tA, { plan: "premium" });
   check("S11. Connect pagado 20 días más: Premium nuevo empieza a cobrarse cuando termina (prueba de Stripe hasta esa fecha); con < 48 h, se espera; aviso de plan solo con token y vínculo",
-    n20.status === 200 && nBad.status === 404 && nNoTok.status === 401 && coTrial.status === 200 && Math.abs(trialEnd * 1000 - Date.parse(en(20))) < 120_000
+    n20.status === 200 && nBad.status === 404 && nFar.status === 400 && nNoTok.status === 401 && coTrial.status === 200 && Math.abs(trialEnd * 1000 - Date.parse(en(20))) < 120_000
     && coSoon.status === 409 && coSoon.body.error === "SAAS_PREMIUM_AFTER_CONNECT", { n20: n20.body, coTrial: coTrial.body, trialEnd, coSoon: coSoon.body });
 
   // S12 · Con un plan de Care vivo: el cambio a Premium se PROGRAMA para cuando termina lo pagado en Connect.

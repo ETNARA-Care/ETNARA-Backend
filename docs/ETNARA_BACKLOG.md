@@ -3,7 +3,7 @@
 ## In Progress
 
 ### CONNECT-181 — Integración Care ↔ Connect C-2/C-3 (vínculo de cuentas, estado firmado, aviso inmediato)
-- Estado: implementado en la rama local integracion-connect; pruebas verdes (verifyConnect181 17/17, rollback 4/4, suite 909/909). Pendiente: C-1 (identidad para Connect), C-4 (solicitudes entrantes y «Crear cliente desde Connect»), C-5 (Stripe en Care, una cuenta, Premium como una sola suscripción), C-6 (pruebas de seguridad conjuntas).
+- Estado (28-nov): C-1 a C-6 implementados en integracion-connect (PR #301 en borrador); verifyConnect181 19/19, 182 10/10, 183 13/13, rollbacks 4/4, suite 912/912. Pendiente: autorización de fusión y despliegue (secuencia en el procedimiento de lanzamiento del proyecto Connect). Migraciones 181–183 reservadas; hogares usa 184+.
 - No fusionar, desplegar ni activar sin autorización de Rafa.
 
 ### CARE-TYPES-148 — Tipos de registro de cuidado por defecto para agencias nuevas (A1, bloqueante del piloto)

@@ -258,6 +258,8 @@ SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
+  -- Auditoría: una fecha absurda dejaría Premium sin empezar (y Stripe rechaza un periodo de prueba de más de 2 años).
+  IF p_until > now() + interval '400 days' THEN RETURN 'invalid'; END IF;
   UPDATE public.connect_links SET connect_plan_until = CASE WHEN p_until > now() THEN p_until END
    WHERE connect_provider_ref = p_ref::text AND revoked_at IS NULL;
   RETURN CASE WHEN FOUND THEN 'ok' ELSE 'not_linked' END;

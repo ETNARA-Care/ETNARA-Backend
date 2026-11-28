@@ -105,7 +105,7 @@ router.post("/integrations/connect/plan", service, async (req, res) => {
   const p = PlanNotice.safeParse(req.body); if (!p.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
   try {
     const r = (await sql<{ r: string }>`SELECT public.app_connect_plan_notice(${p.data.connectProviderRef}::uuid, ${p.data.connectPlanUntil}::timestamptz) AS r`.execute(db)).rows[0].r;
-    res.status(r === "ok" ? 200 : 404).json({ result: r });
+    res.status(r === "ok" ? 200 : r === "invalid" ? 400 : 404).json({ result: r });
   } catch (e) { fail(res, e, req); }
 });
 router.post("/integrations/connect/transfers", service, async (req, res) => {

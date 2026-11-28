@@ -1,5 +1,11 @@
 # ETNARA Agent State
 
+## 2026-11-28 — Antes de fusionar integracion-connect (PR #301; sin fusionar ni desplegar)
+- 181: una residencia (hogar) no puede generar código de vínculo con Connect (CONNECT_ORG_TYPE_NOT_ALLOWED, 409). verifyConnect181 19/19.
+- 182: varias personas atendidas por familia: connect_transfers.connect_recipient_ref; connect_recipient_links por (organización, persona de Connect); payload persona.etiqueta (≤ 40). verifyConnect182 10/10.
+- 183: sin cobros superpuestos Connect → Premium: connect_links.connect_plan_until (aviso de Connect por /integrations/connect/plan, máximo 400 días), checkout con trial_end, saas_pending_changes + app_saas_upgrade_premium (programa o cambia el precio de la MISMA suscripción con prorrateo), trabajador cada 10 min. verifyConnect183 13/13. Suite 912/912.
+- RESERVA DE NÚMEROS: las migraciones 181, 182 y 183 están reservadas para integracion-connect. El desarrollo de hogares debe usar 184 en adelante (o renumerar si se fusiona antes, avisando). Ninguna rama de hogares usa ≥ 181 al 28-nov.
+
 ## 2026-11-28 — 183 C-5: Stripe del ecosistema ETNARA en modo de prueba (rama integracion-connect; sin fusionar ni desplegar)
 - saas_prices (Care Esencial/Profesional/Avanzado y Premium; precio de Stripe solo lo fija el dueño del esquema, con historial; nunca real), saas_customers, saas_subscriptions (UNA viva por organización: un solo cobro; cambiar de plan = misma suscripción), saas_events (idempotente). No confundir con billing_* (facturación de agencias a clientes).
 - Webhook /integrations/stripe/webhook con cuerpo exacto (express.raw antes de express.json), firma ±5 min, modo real ignorado/bloqueado; checkout para administración; GET de plan para miembros. Apagado salvo SAAS_STRIPE=on; una clave real detiene el módulo.
