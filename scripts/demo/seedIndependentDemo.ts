@@ -68,7 +68,7 @@ async function orgAdmin(C: string, name: string, type: string, a: { email: strin
   await sleep(600);
   const token = tokenFor(a.email); if (!token) throw new Error(`no se interceptó la invitación de ${a.email}`);
   if (existing) must(await call("POST", "/platform/admin-invitations/accept", await login(a), { token }), [200, 201], `aceptar ${a.email}`);
-  else must(await call("POST", "/platform/admin-invitations/activate", undefined, { token, password: a.pw() }), [201], `activar ${a.email}`);
+  else must(await call("POST", "/platform/admin-invitations/activate", undefined, { token, password: a.pw(), professionalName: `${a.email.split("@")[0]} Demo (ficticia)` }), [201], `activar ${a.email}`);
   log(`${name} creada; administración ${a.email} activa`);
   return org.id as string;
 }
@@ -255,6 +255,119 @@ async function selfCheck(db: Client) {
       ajenoCodificado: (await call("GET", `/organizations/${enc(A)}/care-recipients`, tH)).s };
     ck("K9c accesos legítimos iguales con variantes (200) y una organización ajena sigue cerrada (403)", legit.agencia === 200 && legit.agenciaCodificada === 200 && legit.practica === 200 && legit.practicaCodificada === 200 && legit.hogar === 200 && legit.hogarBarra === 200 && legit.ajenoCodificado === 403, legit);
   } catch (e) { ck("K9 variantes de dirección", false, (e as Error).message); }
+  // K10 (hogares F2–F4 y F3): carga ficticia de Hogar Demo (una sola vez) y autocomprobación en cada arranque.
+  try {
+    const H = ids["Hogar Demo"];
+    const L = (await db.query(`SELECT id FROM locations WHERE organization_id=$1 AND name='Residencia Demo Las Palmas'`, [H])).rows[0]?.id as string;
+    const R = `/organizations/${H}/residential`, S = `${R}/schedule`, AS = `${R}/assignments`, SU = `${R}/substitutions`, PU = `${R}/attendance`;
+    const prLocal = (d: Date) => new Date(d.getTime() - 4 * 3_600_000).toISOString().slice(0, 16);
+    const mondayOf = (d: Date) => { const l = new Date(d.getTime() - 4 * 3_600_000); const wd = (l.getUTCDay() + 6) % 7; return new Date(l.getTime() - wd * 86_400_000).toISOString().slice(0, 10); };
+    const prAt = (dayOffset: number, hh: number) => { const l = new Date(Date.now() - 4 * 3_600_000); const base = Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate() + dayOffset, hh, 0); return new Date(base + 4 * 3_600_000); };
+    const STAFF = [
+      { key: "marisol", name: "Marisol Demo (ficticia)", pw: env("DEMO_PW_HOGAR_CUIDADORA"), eligible: true },
+      { key: "luisa", name: "Luisa Demo (ficticia)", pw: "", eligible: true },
+      { key: "ramon", name: "Ramón Demo (ficticio)", pw: "", eligible: true },
+      { key: "teresa", name: "Teresa Demo (ficticia)", pw: "", eligible: true },
+      { key: "nuevo", name: "Personal Nuevo Demo (ficticio, sin credenciales)", pw: "", eligible: false },
+    ];
+    const done = (await db.query(`SELECT 1 FROM users WHERE email='marisol@demo.invalid'`)).rowCount;
+    if (!done) {
+      for (const f of ["HOGAR_CALENDARIO", "HOGAR_ASIGNACIONES", "HOGAR_PONCHES", "DEMO_ENVIRONMENT"])
+        must(await call("PUT", `/platform/organizations/${H}/features/${f}`, C, { enabled: true, reason: "Demo aislada de hogares con datos ficticios" }), [200], `interruptor ${f}`);
+      const cred = (await db.query(`SELECT id FROM credential_types ORDER BY code LIMIT 1`)).rows[0].id;
+      if (!(await db.query(`SELECT 1 FROM requirement_sets WHERE organization_id=$1`, [H])).rowCount) {
+        const rs = (await db.query(`INSERT INTO requirement_sets (organization_id,name) VALUES ($1,'Requisitos ficticios del hogar') RETURNING id`, [H])).rows[0].id;
+        await db.query(`INSERT INTO requirements (requirement_set_id,credential_type_id,is_mandatory,requires_organization_review) VALUES ($1,$2,true,false)`, [rs, cred]);
+      }
+      await db.query(`INSERT INTO organization_care_event_types (organization_id,care_event_type_id,is_enabled) SELECT $1,id,true FROM care_event_types ON CONFLICT DO NOTHING`, [H]);
+      const rooms: string[] = [];
+      for (let i = 1; i <= 4; i++) rooms.push(must(await call("POST", `${R}/establishments/${L}/rooms`, tH, { name: `Habitación ${100 + i}`, bedCapacity: 2 }), [201], `habitación ${i}`).room.id);
+      must(await call("PUT", `${R}/establishments/${L}/geofence`, tH, { radiusMeters: 100, latitude: 18.401234, longitude: -66.051234, reason: "Centro ficticio de la demo (no corresponde a ningún lugar real)" }), [200], "geocerca");
+      const rosa = (await db.query(`SELECT id FROM care_recipients WHERE organization_id=$1 AND first_name='Rosa'`, [H])).rows[0].id;
+      const res: string[] = [rosa];
+      for (const n of ["Gloria", "Héctor", "Irma", "Julio", "Nilda"])
+        res.push((await db.query(`INSERT INTO care_recipients (organization_id,location_id,first_name,last_name,status) VALUES ($1,$2,$3,'Demo (ficticio)','active') RETURNING id`, [H, L, n])).rows[0].id);
+      for (let i = 0; i < res.length; i++) must(await call("PUT", `${R}/residents/${res[i]}/placement`, tH, { roomId: rooms[Math.floor(i / 2)], reason: "Ingreso ficticio de la demo" }), [200], `ubicar residente ${i}`);
+      const { hashPassword } = await import("../../src/security/password.js");
+      const st: Record<string, { userId: string; owm: string; token: string }> = {};
+      for (const p of STAFF) {
+        const email = `${p.key}@demo.invalid`, pw = p.pw || `Demo-${crypto.randomUUID()}`;
+        const userId = (await db.query(`INSERT INTO users (email,password_hash,status) VALUES ($1,$2,'active') RETURNING id`, [email, await hashPassword(pw)])).rows[0].id;
+        const m = (await db.query(`INSERT INTO organization_memberships (user_id,organization_id,status) VALUES ($1,$2,'active') RETURNING id`, [userId, H])).rows[0].id;
+        await db.query(`INSERT INTO user_roles (organization_membership_id,organization_id,role_id) SELECT $1,$2,id FROM roles WHERE code='WORKER'`, [m, H]);
+        const w = (await db.query(`INSERT INTO workers (user_id,display_name) VALUES ($1,$2) RETURNING id`, [userId, p.name])).rows[0].id;
+        const owm = (await db.query(`INSERT INTO organization_worker_memberships (worker_id,organization_id,status,internal_role) VALUES ($1,$2,'active','caregiver') RETURNING id`, [w, H])).rows[0].id;
+        if (p.eligible) await db.query(`INSERT INTO credentials (worker_id,credential_type_id,issuing_entity_type,status,expires_at) VALUES ($1,$2,'external_provider','active',current_date+365)`, [w, cred]);
+        await db.query(`INSERT INTO establishment_worker_assignments (organization_id,location_id,organization_worker_membership_id) VALUES ($1,$2,$3)`, [H, L, owm]);
+        const token = must(await call("POST", "/auth/login", undefined, { email, password: pw }), [200], `login ${p.key}`).token;
+        await call("POST", "/me/active-organization", token, { organizationId: H });
+        st[p.key] = { userId, owm, token };
+      }
+      // Esta semana: un turno esta noche (para ponchar ya) y turnos de los dos días siguientes.
+      const t0 = new Date(Math.ceil((Date.now() + 30 * 60_000) / (30 * 60_000)) * 30 * 60_000);
+      const plan: Array<[string, Date, number, string]> = [
+        ["marisol", t0, 240, "Demo esta noche"],
+        ["marisol", prAt(1, 8), 480, "Día"], ["luisa", prAt(1, 8), 480, "Día"], ["ramon", prAt(1, 16), 480, "Tarde"],
+        ["marisol", prAt(2, 8), 480, "Día"], ["teresa", prAt(2, 8), 480, "Día"],
+      ];
+      const shift: Record<string, string> = {}; const weeks = new Set<string>();
+      for (const [k, at, dur, label] of plan) {
+        const wk = mondayOf(at); weeks.add(wk);
+        const e = must(await call("POST", `${S}/establishments/${L}/weeks/${wk}/entries`, tH, { startsAt: prLocal(at), durationMinutes: dur, membershipId: st[k].owm, label }), [201], `turno ${k} ${label}`).entry;
+        shift[`${k}:${label}:${at.toISOString()}`] = e.id;
+      }
+      for (const wk of weeks) must(await call("POST", `${S}/establishments/${L}/weeks/${wk}/publish`, tH, {}), [200], `publicar ${wk}`);
+      const sid = async (entryId: string) => (await db.query(`SELECT shift_id FROM schedule_week_shifts WHERE id=$1`, [entryId])).rows[0].shift_id as string;
+      const [eTonight, eM1, eL1, eR1, , eT2] = Object.values(shift);
+      const [sTonight, sM1, sL1, sR1, sT2] = [await sid(eTonight), await sid(eM1), await sid(eL1), await sid(eR1), await sid(eT2)];
+      for (const [k, s] of [["marisol", sTonight], ["marisol", sM1], ["luisa", sL1], ["ramon", sR1], ["teresa", sT2]] as const)
+        must(await call("POST", `/organizations/${H}/me/shifts/${s}/respond`, st[k].token, { decision: "accepted" }), [200], `aceptar ${k}`);
+      // La semana siguiente: plantilla de día, tarde y noche, con parte del personal asignado, publicada.
+      const next = mondayOf(new Date(Date.now() + 7 * 86_400_000));
+      if (!weeks.has(next)) {
+        const slots = [1, 2, 3, 4, 5, 6, 7].flatMap((weekday) => [
+          { weekday, startTime: "07:00", durationMinutes: 480, headcount: 2, label: "Día" },
+          { weekday, startTime: "15:00", durationMinutes: 480, headcount: 2, label: "Tarde" },
+          { weekday, startTime: "23:00", durationMinutes: 480, headcount: 1, label: "Noche" }]);
+        const tpl = must(await call("POST", `${S}/establishments/${L}/templates`, tH, { name: "Día, tarde y noche (demo)", slots }), [201], "plantilla").template;
+        must(await call("POST", `${S}/establishments/${L}/weeks/${next}/apply-template`, tH, { templateId: tpl.id }), [200], "aplicar plantilla");
+        const entries = (must(await call("GET", `${S}/establishments/${L}/weeks/${next}`, tH), [200], "semana siguiente").schedule.entries ?? []) as any[];
+        const rot = ["marisol", "luisa", "ramon", "teresa"]; let k = 0;
+        for (const e of entries.filter((x) => x.label === "Día").slice(0, 10)) await call("PATCH", `${S}/entries/${e.id}`, tH, { membershipId: st[rot[k++ % 4]].owm });
+        must(await call("POST", `${S}/establishments/${L}/weeks/${next}/publish`, tH, {}), [200], "publicar semana siguiente");
+      }
+      // F3: residentes asignados por turno y una sustitución completa (Ramón → Teresa).
+      must(await call("POST", `${AS}/shifts/${sTonight}/residents`, tH, { membershipId: st.marisol.owm, careRecipientIds: res.slice(0, 3) }), [201], "asignar esta noche");
+      must(await call("POST", `${AS}/shifts/${sM1}/residents`, tH, { membershipId: st.marisol.owm, careRecipientIds: res.slice(0, 3) }), [201], "asignar Marisol");
+      must(await call("POST", `${AS}/shifts/${sL1}/residents`, tH, { membershipId: st.luisa.owm, careRecipientIds: res.slice(3, 6) }), [201], "asignar Luisa");
+      must(await call("POST", `${AS}/shifts/${sR1}/residents`, tH, { membershipId: st.ramon.owm, careRecipientIds: res.slice(0, 4) }), [201], "asignar Ramón");
+      must(await call("POST", `${SU}/shifts/${sR1}`, tH, { originalMembershipId: st.ramon.owm, substituteMembershipId: st.teresa.owm, reasonCode: "schedule_change",
+        transfers: res.slice(0, 4).map((r) => ({ careRecipientId: r, toMembershipId: st.teresa.owm })) }), [201], "sustitución Ramón → Teresa");
+      log(`Hogar Demo: 4 habitaciones, 6 residentes, 5 personas, turnos de esta semana y la siguiente, asignaciones y una sustitución (todo ficticio)`);
+    } else log("carga de Hogar Demo (K10) ya hecha antes: no se repite");
+
+    const mar = must(await call("POST", "/auth/login", undefined, { email: "marisol@demo.invalid", password: env("DEMO_PW_HOGAR_CUIDADORA") }), [200], "login Marisol").token;
+    await call("POST", "/me/active-organization", mar, { organizationId: H });
+    const ov = await call("GET", `${R}/overview`, tH);
+    const on = (ov.j.overview?.features ?? []).filter((f: any) => f.enabled).map((f: any) => f.code ?? f.feature);
+    ck("K10a Hogar Demo: calendario, asignaciones, ponches y DEMO encendidos solo en la demo", ov.s === 200 && on.length >= 4, { s: ov.s, on });
+    const wk = mondayOf(new Date());
+    const week = await call("GET", `${S}/establishments/${L}/weeks/${wk}`, tH);
+    const nextW = await call("GET", `${S}/establishments/${L}/weeks/${mondayOf(new Date(Date.now() + 7 * 86_400_000))}`, tH);
+    ck("K10b calendario semanal: esta semana y la siguiente con turnos", week.s === 200 && nextW.s === 200 && (week.j.schedule?.entries ?? []).length + (nextW.j.schedule?.entries ?? []).length >= 6, { a: week.s, b: nextW.s, n: [(week.j.schedule?.entries ?? []).length, (nextW.j.schedule?.entries ?? []).length] });
+    const mine = await call("GET", `${S}/me/weeks/${wk}`, mar);
+    const mineE = (mine.j.schedule?.entries ?? mine.j.schedule?.shifts ?? []) as any[];
+    ck("K10c «Mi horario» de Marisol: solo sus turnos publicados", mine.s === 200 && mineE.length >= 1 && !JSON.stringify(mine.j).includes("Luisa Demo"), { s: mine.s, n: mineE.length });
+    const codes = await call("GET", `${PU}/establishments/${L}/codes`, tH);
+    ck("K10d ponches: secreto de la demo configurado y código de la semana disponible (sin 503)", codes.s === 200, { s: codes.s, e: codes.j.error });
+    const subId = (await db.query(`SELECT shift_id FROM shift_substitutions WHERE organization_id=$1 ORDER BY created_at DESC LIMIT 1`, [H])).rows[0]?.shift_id;
+    const hist = subId ? await call("GET", `${AS}/shifts/${subId}/history`, tH) : { s: 0, j: {} };
+    ck("K10e F3: la sustitución Ramón → Teresa queda en el historial del turno", hist.s === 200 && JSON.stringify(hist.j).length > 20, { s: hist.s });
+    const ag = await call("GET", `/organizations/${ids["Agencia Demo"]}/residential/overview`, tA);
+    const agOk = await call("GET", `/organizations/${ids["Agencia Demo"]}/shifts`, tA);
+    ck("K10f la agencia sigue igual y no entra a /residential (403)", ag.s === 403 && agOk.s === 200, { ag: ag.s, ok: agOk.s });
+  } catch (e) { ck("K10 Hogar Demo", false, (e as Error).message); }
+
 
 
   const failed = out.filter((x) => !x[1]).length;
