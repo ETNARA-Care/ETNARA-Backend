@@ -33,7 +33,7 @@ export function stripeSignatureValid(secret: string, header: string | undefined,
 }
 
 export interface SaasEvent { id: string; type: string; mode: "test" | "live"; organizationId: string | null; customer: string | null;
-  subscription: string | null; price: string | null; status: string | null; periodEnd: Date | null; cancelAtPeriodEnd: boolean | null }
+  subscription: string | null; price: string | null; status: string | null; periodEnd: Date | null; cancelAtPeriodEnd: boolean | null; item: string | null }
 const s = (v: unknown) => (typeof v === "string" ? v : null);
 export function parseStripeEvent(body: string): SaasEvent | null {
   let e: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -50,11 +50,12 @@ export function parseStripeEvent(body: string): SaasEvent | null {
     status: s(o.status),
     periodEnd: typeof (o.current_period_end ?? o.items?.data?.[0]?.current_period_end) === "number" ? new Date((o.current_period_end ?? o.items.data[0].current_period_end) * 1000) : null,
     cancelAtPeriodEnd: typeof o.cancel_at_period_end === "boolean" ? o.cancel_at_period_end : null,
+    item: e.type.startsWith("customer.subscription.") ? s(o.items?.data?.[0]?.id) : null,
   };
 }
 
 /** Sesión de pago (modo suscripción). La tarjeta la escribe la persona SOLO en Stripe. */
-export async function createCheckoutSession(cfg: SaasConfig, d: { organizationId: string; priceId: string; customerId: string | null; email: string | null; plan: string },
+export async function createCheckoutSession(cfg: SaasConfig, d: { organizationId: string; priceId: string; customerId: string | null; email: string | null; plan: string; trialEnd?: number | null },
   pedir: typeof fetch = fetch): Promise<{ url: string }> {
   const form = new URLSearchParams({
     mode: "subscription", "line_items[0][price]": d.priceId, "line_items[0][quantity]": "1",
@@ -63,6 +64,8 @@ export async function createCheckoutSession(cfg: SaasConfig, d: { organizationId
     success_url: `${cfg.returnUrl}?plan=ok`, cancel_url: `${cfg.returnUrl}?plan=cancelado`,
   });
   if (d.customerId) form.set("customer", d.customerId); else if (d.email) form.set("customer_email", d.email);
+  // Premium con un plan de Connect ya pagado: no se cobra hasta que termina lo pagado (sin superposición).
+  if (d.trialEnd) form.set("subscription_data[trial_end]", String(d.trialEnd));
   const r = await pedir("https://api.stripe.com/v1/checkout/sessions", {
     method: "POST", headers: { authorization: `Bearer ${cfg.secretKey}`, "content-type": "application/x-www-form-urlencoded" }, body: form.toString(),
     signal: AbortSignal.timeout(15_000),
@@ -70,4 +73,17 @@ export async function createCheckoutSession(cfg: SaasConfig, d: { organizationId
   const j = (await r.json().catch(() => ({}))) as { url?: unknown; livemode?: unknown };
   if (!r.ok || typeof j.url !== "string" || !j.url.startsWith("https://checkout.stripe.com/") || j.livemode === true) throw new SaasConfigError("STRIPE_CHECKOUT_FAILED");
   return { url: j.url };
+}
+
+/** Cambia el precio de la MISMA suscripción (un solo cobro), con prorrateo de Stripe. */
+export async function changeSubscriptionPrice(cfg: SaasConfig, subscriptionId: string, itemId: string, priceId: string, pedir: typeof fetch = fetch): Promise<boolean> {
+  if (!/^sub_[A-Za-z0-9]{6,64}$/.test(subscriptionId) || !/^si_[A-Za-z0-9]{6,64}$/.test(itemId) || !/^price_[A-Za-z0-9]{6,64}$/.test(priceId)) return false;
+  const form = new URLSearchParams({ "items[0][id]": itemId, "items[0][price]": priceId, proration_behavior: "create_prorations" });
+  try {
+    const r = await pedir(`https://api.stripe.com/v1/subscriptions/${subscriptionId}`, {
+      method: "POST", headers: { authorization: `Bearer ${cfg.secretKey}`, "content-type": "application/x-www-form-urlencoded" }, body: form.toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return r.ok;
+  } catch { return false; }
 }

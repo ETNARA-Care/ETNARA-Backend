@@ -98,12 +98,12 @@ async function main() {
   const cA = await call("POST", `/organizations/${A}/connect/link-code`, tA);
   const red = await svc("/integrations/connect/redeem", { code: cA.body.code, connectProviderRef: refA });
   check("T00. Preparación: organización vinculada", red.status === 200, red.status);
-  const fam = randomUUID();
-  const payload = (n = "Familia Ficticia") => ({ familia: { nombre: n, correo: "familia.ficticia@example.invalid" }, municipio: "Bayamón",
+  const fam = randomUUID(), persona1 = randomUUID();
+  const payload = (n = "Familia Ficticia", etiqueta = "Mamá") => ({ familia: { nombre: n, correo: "familia.ficticia@example.invalid" }, persona: { etiqueta }, municipio: "Bayamón",
     servicio: { servicio: "cuido_domiciliario", inicio: "2026-12-07", horario: { dias: [1, 3, 5] }, precio: { centavos: 2000, unidad: "hora" } },
     consentimiento: { version: "care-transfer-v1", en: new Date().toISOString() } });
-  const send = (id: string, acuerdoId: string, familyRef = fam, p: Json = payload(), ref = refA, token = serviceToken) =>
-    call("POST", "/integrations/connect/transfers", token, { id, connectProviderRef: ref, acuerdoId, familyRef, payload: p });
+  const send = (id: string, acuerdoId: string, familyRef = fam, p: Json = payload(), ref = refA, token = serviceToken, recipientRef = familyRef === fam ? persona1 : randomUUID()) =>
+    call("POST", "/integrations/connect/transfers", token, { id, connectProviderRef: ref, acuerdoId, familyRef, recipientRef, payload: p });
   const t1 = randomUUID(), ac1 = randomUUID();
   const r1 = await send(t1, ac1), r1b = await send(t1, ac1), r1c = await send(randomUUID(), ac1);
   const rUnknown = await send(randomUUID(), randomUUID(), fam, payload(), randomUUID());
@@ -141,9 +141,19 @@ async function main() {
   const dupNew = await call("POST", `/organizations/${A}/connect/transfers/${t2}/decision`, tA, { decision: "accept", newRecipient: { firstName: "Otra", lastName: "Persona" } });
   const useLinked = await call("POST", `/organizations/${A}/connect/transfers/${t2}/decision`, tA, { decision: "accept", recipientId: acc.body.careRecipientId });
   const after2 = Number((await q<{ n: string }>(`SELECT count(*)::text n FROM care_recipients WHERE organization_id = $1`, [A])).rows[0].n);
-  check("T04. Sin clientes duplicados: la misma familia propone la persona ya enlazada; crear otra se rechaza (y no queda creada); usar la enlazada sí",
+  check("T04. Sin clientes duplicados: la MISMA persona trae su persona atendida enlazada; crear otra se rechaza (y no queda creada); usar la enlazada sí",
     pend?.linkedRecipient?.id === acc.body.careRecipientId && dupNew.status === 409 && dupNew.body.error === "CONNECT_RECIPIENT_ALREADY_LINKED"
     && useLinked.status === 200 && after2 === after, { pend, dupNew: [dupNew.status, dupNew.body], useLinked: useLinked.body, after2 });
+
+  // T04b · La misma familia contrata para OTRA persona: no se le impone la primera; se ofrece como sugerencia.
+  const t2b = randomUUID();
+  await send(t2b, randomUUID(), fam, payload("Familia Ficticia", "Papá"), refA, serviceToken, randomUUID());
+  const l2b = (await call("GET", `/organizations/${A}/connect/transfers`, tA)).body.transfers.find((x: Json) => x.id === t2b);
+  const acc2b = await call("POST", `/organizations/${A}/connect/transfers/${t2b}/decision`, tA, { decision: "accept", newRecipient: { firstName: "Segunda", lastName: "Ficticia" } });
+  const after3 = Number((await q<{ n: string }>(`SELECT count(*)::text n FROM care_recipients WHERE organization_id = $1`, [A])).rows[0].n);
+  check("T04b. Una familia, varias personas: la segunda persona se acepta como persona atendida NUEVA; la primera aparece solo como sugerencia",
+    l2b?.linkedRecipient === null && l2b?.familyRecipients?.length === 1 && l2b.familyRecipients[0].id === acc.body.careRecipientId
+    && l2b.payload.persona.etiqueta === "Papá" && acc2b.status === 200 && after3 === after + 1, { l2b, acc2b: acc2b.body, after3 });
 
   const t3 = randomUUID();
   await send(t3, randomUUID(), randomUUID());

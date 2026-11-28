@@ -1,5 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
+import { sql } from "kysely";
+import { db } from "../../config/db.js";
 import { requireAuth, type AuthenticatedRequest } from "../../middleware/auth.js";
 import { isTenantAccessDenied, TENANT_ACCESS_DENIED_BODY } from "../../security/tenantAccessDenied.js";
 import { respondInternalError } from "../../observability/internalError.js";
@@ -96,6 +98,15 @@ router.post("/organizations/:organizationId/connect/transfers/:transferId/decisi
   const o = orgId(req); const t = uuid.safeParse(req.params.transferId); const b = Decide.safeParse(req.body);
   if (!o || !t.success || !b.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
   try { res.json(await decideTransfer(req.auth!.userId, o, t.data, b.data)); } catch (e) { fail(res, e, req); }
+});
+// C-5 · Connect avisa hasta cuándo está pagado su plan (para que Premium empiece cuando termine, sin superposición).
+const PlanNotice = z.object({ connectProviderRef: uuid, connectPlanUntil: z.string().datetime({ offset: true }).nullable() }).strict();
+router.post("/integrations/connect/plan", service, async (req, res) => {
+  const p = PlanNotice.safeParse(req.body); if (!p.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }
+  try {
+    const r = (await sql<{ r: string }>`SELECT public.app_connect_plan_notice(${p.data.connectProviderRef}::uuid, ${p.data.connectPlanUntil}::timestamptz) AS r`.execute(db)).rows[0].r;
+    res.status(r === "ok" ? 200 : 404).json({ result: r });
+  } catch (e) { fail(res, e, req); }
 });
 router.post("/integrations/connect/transfers", service, async (req, res) => {
   const p = InboundTransfer.safeParse(req.body); if (!p.success) { res.status(400).json({ error: "INVALID_REQUEST" }); return; }

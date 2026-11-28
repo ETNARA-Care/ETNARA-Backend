@@ -105,6 +105,10 @@ BEGIN
   IF (SELECT status::text FROM public.organizations WHERE id = v_org) = 'suspended' THEN
     RAISE EXCEPTION 'CONNECT_ORG_SUSPENDED' USING ERRCODE = 'P0001';
   END IF;
+  -- Los hogares (RESIDENTIAL_CARE_HOME) no reciben solicitudes de Connect: ni código ni vínculo.
+  IF (SELECT organization_type::text FROM public.organizations WHERE id = v_org) = 'RESIDENTIAL_CARE_HOME' THEN
+    RAISE EXCEPTION 'CONNECT_ORG_TYPE_NOT_ALLOWED' USING ERRCODE = 'P0001';
+  END IF;
   UPDATE public.connect_link_codes SET expires_at = least(expires_at, now() + interval '1 second') WHERE organization_id = v_org AND redeemed_at IS NULL AND expires_at > now();
   INSERT INTO public.connect_link_codes (organization_id, code_sha256, created_by_user_id, expires_at) VALUES (v_org, p_code_sha256, v_user, v_exp);
   INSERT INTO public.audit_log (actor_user_id, organization_id, action, entity_type, entity_id)

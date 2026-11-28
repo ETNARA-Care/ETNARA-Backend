@@ -23,7 +23,7 @@ function translate(err: unknown): never {
 }
 
 export const InboundTransfer = z.object({
-  id: z.string().uuid(), connectProviderRef: z.string().uuid(), acuerdoId: z.string().uuid(), familyRef: z.string().uuid(),
+  id: z.string().uuid(), connectProviderRef: z.string().uuid(), acuerdoId: z.string().uuid(), familyRef: z.string().uuid(), recipientRef: z.string().uuid(),
   payload: z.record(z.string(), z.unknown()),
 }).strict();
 export const Withdraw = z.object({ id: z.string().uuid(), connectProviderRef: z.string().uuid() }).strict();
@@ -34,7 +34,7 @@ export const Decide = z.union([
 ]);
 
 export async function receiveTransfer(t: z.infer<typeof InboundTransfer>): Promise<string> {
-  return (await sql<{ r: string }>`SELECT public.app_connect_transfer_receive(${t.id}::uuid, ${t.connectProviderRef}::uuid, ${t.acuerdoId}::uuid, ${t.familyRef}::uuid, ${JSON.stringify(t.payload)}::jsonb) AS r`.execute(db)).rows[0].r;
+  return (await sql<{ r: string }>`SELECT public.app_connect_transfer_receive(${t.id}::uuid, ${t.connectProviderRef}::uuid, ${t.acuerdoId}::uuid, ${t.familyRef}::uuid, ${t.recipientRef}::uuid, ${JSON.stringify(t.payload)}::jsonb) AS r`.execute(db)).rows[0].r;
 }
 export async function withdrawTransfer(t: z.infer<typeof Withdraw>): Promise<string> {
   return (await sql<{ r: string }>`SELECT public.app_connect_transfer_withdraw(${t.id}::uuid, ${t.connectProviderRef}::uuid) AS r`.execute(db)).rows[0].r;

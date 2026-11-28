@@ -4,8 +4,9 @@
 --   * Connect envía (servidor a servidor, token de servicio) SOLO lo que la familia autorizó: su nombre y correo de
 --     contacto y el servicio acordado (tipo, fechas, horario, precio, política). Nunca diagnósticos ni documentos.
 --   * Sin duplicados: una transferencia viva por acuerdo de Connect y organización; el mismo envío repetido es
---     idempotente; una familia de Connect queda enlazada a UNA persona atendida de la organización, y las siguientes
---     transferencias de esa familia se asocian a ella en vez de crear otra.
+--     idempotente. Una FAMILIA puede contratar para VARIAS personas: cada persona llega con su propia referencia
+--     seudónima (connect_recipient_ref) y queda enlazada a UNA persona atendida; las siguientes transferencias de esa
+--     misma persona se asocian a ella en vez de crear otra, y las otras personas de la familia se ofrecen como sugerencia.
 --   * La administración (o supervisión) decide: aceptar (crear la persona atendida o usar la existente) o rechazar.
 --     La decisión se avisa a Connect al instante por la bandeja firmada de la 181.
 --   * La familia puede retirar su autorización mientras no se haya aceptado: se borran sus datos de contacto.
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS connect_transfers (
   organization_id    uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
   connect_acuerdo_id uuid NOT NULL,
   connect_family_ref uuid NOT NULL,
+  connect_recipient_ref uuid NOT NULL,                      -- la persona atendida (seudónimo por proveedor)
   payload            jsonb,                                 -- NULL tras rechazo o retiro (datos borrados)
   status             text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected', 'withdrawn')),
   care_recipient_id  uuid REFERENCES care_recipients(id) ON DELETE RESTRICT,
@@ -31,12 +33,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_connect_transfers_live ON connect_transfers
 CREATE INDEX IF NOT EXISTS idx_connect_transfers_org ON connect_transfers (organization_id, status, received_at DESC);
 
 CREATE TABLE IF NOT EXISTS connect_recipient_links (
-  organization_id    uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
-  connect_family_ref uuid NOT NULL,
-  care_recipient_id  uuid NOT NULL REFERENCES care_recipients(id) ON DELETE RESTRICT,
-  linked_at          timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (organization_id, connect_family_ref)
+  organization_id       uuid NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+  connect_recipient_ref uuid NOT NULL,
+  connect_family_ref    uuid NOT NULL,
+  care_recipient_id     uuid NOT NULL REFERENCES care_recipients(id) ON DELETE RESTRICT,
+  linked_at             timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (organization_id, connect_recipient_ref)
 );
+CREATE INDEX IF NOT EXISTS idx_connect_recipient_links_family ON connect_recipient_links (organization_id, connect_family_ref);
 
 DO $$
 DECLARE t text;
@@ -90,7 +94,10 @@ IMMUTABLE
 SET search_path = pg_catalog, public
 AS $$
   SELECT jsonb_typeof(p) = 'object'
-     AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(p) k WHERE k NOT IN ('familia', 'servicio', 'municipio', 'consentimiento'))
+     AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(p) k WHERE k NOT IN ('familia', 'persona', 'servicio', 'municipio', 'consentimiento'))
+     AND jsonb_typeof(p->'persona') = 'object'
+     AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(p->'persona') k WHERE k NOT IN ('etiqueta'))
+     AND char_length(coalesce(p->'persona'->>'etiqueta', '')) BETWEEN 1 AND 40
      AND jsonb_typeof(p->'familia') = 'object'
      AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(p->'familia') k WHERE k NOT IN ('nombre', 'correo'))
      AND char_length(coalesce(p->'familia'->>'nombre', '')) BETWEEN 1 AND 80
@@ -104,7 +111,7 @@ $$;
 REVOKE ALL ON FUNCTION public.app_connect_transfer_payload_ok(jsonb) FROM PUBLIC;
 
 -- Servidor a servidor: recibir (idempotente). Devuelve 'received' | 'duplicate' | 'not_linked' | 'invalid'.
-CREATE OR REPLACE FUNCTION public.app_connect_transfer_receive(p_id uuid, p_ref uuid, p_acuerdo uuid, p_family uuid, p_payload jsonb)
+CREATE OR REPLACE FUNCTION public.app_connect_transfer_receive(p_id uuid, p_ref uuid, p_acuerdo uuid, p_family uuid, p_recipient uuid, p_payload jsonb)
 RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -114,22 +121,22 @@ DECLARE v_org uuid; v_prev public.connect_transfers%ROWTYPE;
 BEGIN
   SELECT l.organization_id INTO v_org FROM public.connect_links l WHERE l.connect_provider_ref = p_ref::text AND l.revoked_at IS NULL;
   IF v_org IS NULL THEN RETURN 'not_linked'; END IF;
-  IF p_id IS NULL OR p_acuerdo IS NULL OR p_family IS NULL OR NOT public.app_connect_transfer_payload_ok(p_payload) THEN RETURN 'invalid'; END IF;
+  IF p_id IS NULL OR p_acuerdo IS NULL OR p_family IS NULL OR p_recipient IS NULL OR NOT public.app_connect_transfer_payload_ok(p_payload) THEN RETURN 'invalid'; END IF;
   SELECT * INTO v_prev FROM public.connect_transfers WHERE id = p_id;
   IF FOUND THEN RETURN CASE WHEN v_prev.organization_id = v_org THEN 'duplicate' ELSE 'invalid' END; END IF;
   IF EXISTS (SELECT 1 FROM public.connect_transfers t WHERE t.organization_id = v_org AND t.connect_acuerdo_id = p_acuerdo
                AND t.status IN ('pending', 'accepted')) THEN
     RETURN 'duplicate';
   END IF;
-  INSERT INTO public.connect_transfers (id, organization_id, connect_acuerdo_id, connect_family_ref, payload)
-  VALUES (p_id, v_org, p_acuerdo, p_family, p_payload);
+  INSERT INTO public.connect_transfers (id, organization_id, connect_acuerdo_id, connect_family_ref, connect_recipient_ref, payload)
+  VALUES (p_id, v_org, p_acuerdo, p_family, p_recipient, p_payload);
   INSERT INTO public.audit_log (actor_user_id, organization_id, action, entity_type, entity_id)
   VALUES (NULL, v_org, 'CONNECT_TRANSFER_RECEIVED', 'connect_transfer', p_id);
   RETURN 'received';
 END;
 $$;
-REVOKE ALL ON FUNCTION public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, jsonb) TO app_runtime;
+REVOKE ALL ON FUNCTION public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, uuid, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, uuid, jsonb) TO app_runtime;
 
 -- Servidor a servidor: la familia retiró su autorización. 'withdrawn' | 'already_decided' | 'unknown'.
 CREATE OR REPLACE FUNCTION public.app_connect_transfer_withdraw(p_id uuid, p_ref uuid)
@@ -171,7 +178,12 @@ BEGIN
       'careRecipientId', t.care_recipient_id,
       'linkedRecipient', (SELECT jsonb_build_object('id', r.id, 'firstName', r.first_name, 'lastName', r.last_name)
                             FROM public.connect_recipient_links k JOIN public.care_recipients r ON r.id = k.care_recipient_id
-                           WHERE k.organization_id = t.organization_id AND k.connect_family_ref = t.connect_family_ref))
+                           WHERE k.organization_id = t.organization_id AND k.connect_recipient_ref = t.connect_recipient_ref),
+      -- Otras personas de la MISMA familia ya atendidas: sugerencias (por si la familia nombró distinto a la misma persona).
+      'familyRecipients', coalesce((SELECT jsonb_agg(DISTINCT jsonb_build_object('id', r.id, 'firstName', r.first_name, 'lastName', r.last_name))
+                            FROM public.connect_recipient_links k JOIN public.care_recipients r ON r.id = k.care_recipient_id
+                           WHERE k.organization_id = t.organization_id AND k.connect_family_ref = t.connect_family_ref
+                             AND k.connect_recipient_ref <> t.connect_recipient_ref AND r.status = 'active'), '[]'::jsonb))
       ORDER BY (t.status = 'pending') DESC, t.received_at DESC)
     FROM public.connect_transfers t
    WHERE t.organization_id = v_org AND (t.status = 'pending' OR t.received_at > now() - interval '90 days')), '[]'::jsonb);
@@ -204,11 +216,13 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.care_recipients r WHERE r.id = p_recipient AND r.organization_id = v_org AND r.status = 'active') THEN
       RAISE EXCEPTION 'CONNECT_RECIPIENT_INVALID' USING ERRCODE = '22023';
     END IF;
+    -- Esa PERSONA ya está enlazada: se exige su persona atendida (sin duplicados).
     SELECT k.care_recipient_id INTO v_linked FROM public.connect_recipient_links k
-     WHERE k.organization_id = v_org AND k.connect_family_ref = v_t.connect_family_ref;
+     WHERE k.organization_id = v_org AND k.connect_recipient_ref = v_t.connect_recipient_ref;
     IF v_linked IS NOT NULL AND v_linked <> p_recipient THEN RAISE EXCEPTION 'CONNECT_RECIPIENT_ALREADY_LINKED' USING ERRCODE = '23505'; END IF;
     IF v_linked IS NULL THEN
-      INSERT INTO public.connect_recipient_links (organization_id, connect_family_ref, care_recipient_id) VALUES (v_org, v_t.connect_family_ref, p_recipient);
+      INSERT INTO public.connect_recipient_links (organization_id, connect_recipient_ref, connect_family_ref, care_recipient_id)
+      VALUES (v_org, v_t.connect_recipient_ref, v_t.connect_family_ref, p_recipient);
     END IF;
     UPDATE public.connect_transfers SET status = 'accepted', care_recipient_id = p_recipient, decided_by = v_user, decided_at = now() WHERE id = p_id;
   ELSE

@@ -2,7 +2,11 @@
 -- ecosistema y devuelve los hechos firmados para Connect a los de la 181 (sin Premium). No toca la facturación de las
 -- agencias a sus clientes (billing_*).
 BEGIN;
-DROP FUNCTION IF EXISTS public.app_saas_stripe_event(text, text, text, uuid, text, text, text, text, timestamptz, boolean);
+DROP FUNCTION IF EXISTS public.app_saas_pending_done(bigint, boolean, boolean);
+DROP FUNCTION IF EXISTS public.app_saas_pending_due(integer);
+DROP FUNCTION IF EXISTS public.app_saas_upgrade_premium();
+DROP FUNCTION IF EXISTS public.app_connect_plan_notice(uuid, timestamptz);
+DROP FUNCTION IF EXISTS public.app_saas_stripe_event(text, text, text, uuid, text, text, text, text, timestamptz, boolean, text);
 DROP FUNCTION IF EXISTS public.app_saas_checkout_data(text);
 DROP FUNCTION IF EXISTS public.app_saas_status();
 CREATE OR REPLACE FUNCTION public.app_connect_org_facts(p_org uuid)
@@ -31,6 +35,8 @@ REVOKE ALL ON FUNCTION public.app_connect_org_facts(uuid) FROM PUBLIC;
 DROP FUNCTION IF EXISTS public.app_saas_entitlement(uuid);
 DROP FUNCTION IF EXISTS public.app_saas_price_set(text, text, integer, text, text);
 DROP TABLE IF EXISTS public.saas_events;
+DROP TABLE IF EXISTS public.saas_pending_changes;
+ALTER TABLE public.connect_links DROP COLUMN IF EXISTS connect_plan_until;
 DROP TABLE IF EXISTS public.saas_subscriptions;
 DROP TABLE IF EXISTS public.saas_customers;
 DROP TABLE IF EXISTS public.saas_price_history;

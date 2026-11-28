@@ -4,7 +4,7 @@ BEGIN;
 DROP FUNCTION IF EXISTS public.app_connect_transfer_decide(uuid, text, uuid, text);
 DROP FUNCTION IF EXISTS public.app_connect_transfers_list();
 DROP FUNCTION IF EXISTS public.app_connect_transfer_withdraw(uuid, uuid);
-DROP FUNCTION IF EXISTS public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, jsonb);
+DROP FUNCTION IF EXISTS public.app_connect_transfer_receive(uuid, uuid, uuid, uuid, uuid, jsonb);
 DROP FUNCTION IF EXISTS public.app_connect_transfer_payload_ok(jsonb);
 DROP TABLE IF EXISTS public.connect_recipient_links;
 DROP TABLE IF EXISTS public.connect_transfers;

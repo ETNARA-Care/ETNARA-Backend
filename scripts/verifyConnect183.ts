@@ -98,6 +98,7 @@ async function main() {
   const stripeCalls: { url: string; form: URLSearchParams }[] = [];
   setSaasFetchForTests((async (url: string, init: { body: string }) => {
     stripeCalls.push({ url, form: new URLSearchParams(init.body) });
+    if (url.includes("/v1/subscriptions/")) return new Response(JSON.stringify({ id: "sub_x", livemode: false }), { status: 200 });
     return new Response(JSON.stringify({ id: "cs_test_1", url: "https://checkout.stripe.com/c/pay/cs_test_1", livemode: false }), { status: 200 });
   }) as unknown as typeof fetch);
   const saasOff = await call("GET", `/organizations/${A}/saas`, tA);
@@ -185,6 +186,46 @@ async function main() {
   }
   await rt.end();
   check("S09. La aplicación no lee ni cambia suscripciones, clientes ni precios directamente, ni fija precios", deny.every((d) => d !== "ALLOWED"), deny);
+  // S11 · Sin cobros superpuestos al pasar de Connect a Premium
+  const { runSaasPendingTick } = await import("../src/modules/saas/saas.routes.js");
+  const notice = (until: string | null, ref = refA, token = serviceToken) => call("POST", "/integrations/connect/plan", token, { connectProviderRef: ref, connectPlanUntil: until });
+  const en = (d: number) => new Date(Date.now() + d * 86_400_000).toISOString();
+  const nBad = await notice(en(20), randomUUID()), nNoTok = await notice(en(20), refA, "");
+  const n20 = await notice(en(20));
+  stripeCalls.length = 0;
+  const coTrial = await call("POST", `/organizations/${A}/saas/checkout`, tA, { plan: "premium" });
+  const trialEnd = Number(stripeCalls[0]?.form.get("subscription_data[trial_end]"));
+  await notice(en(1));
+  const coSoon = await call("POST", `/organizations/${A}/saas/checkout`, tA, { plan: "premium" });
+  check("S11. Connect pagado 20 días más: Premium nuevo empieza a cobrarse cuando termina (prueba de Stripe hasta esa fecha); con < 48 h, se espera; aviso de plan solo con token y vínculo",
+    n20.status === 200 && nBad.status === 404 && nNoTok.status === 401 && coTrial.status === 200 && Math.abs(trialEnd * 1000 - Date.parse(en(20))) < 120_000
+    && coSoon.status === 409 && coSoon.body.error === "SAAS_PREMIUM_AFTER_CONNECT", { n20: n20.body, coTrial: coTrial.body, trialEnd, coSoon: coSoon.body });
+
+  // S12 · Con un plan de Care vivo: el cambio a Premium se PROGRAMA para cuando termina lo pagado en Connect.
+  await stripeHook("customer.subscription.created", sub("sub_testESEN0003", "price_TestEsencial01", { items: { data: [{ id: "si_TestItem0003", price: { id: "price_TestEsencial01" } }] } }));
+  await notice(en(15));
+  const upSup = await call("POST", `/organizations/${A}/saas/premium`, tSup);
+  const up = await call("POST", `/organizations/${A}/saas/premium`, tA);
+  const up2 = await call("POST", `/organizations/${A}/saas/premium`, tA);
+  const pend = (await q<{ n: string }>(`SELECT count(*)::text n FROM saas_pending_changes WHERE organization_id = $1 AND applied_at IS NULL`, [A])).rows[0].n;
+  stripeCalls.length = 0;
+  const notYet = await runSaasPendingTick();
+  await q(`UPDATE saas_pending_changes SET apply_at = now() - interval '1 minute' WHERE organization_id = $1`, [A]);
+  const tick = await runSaasPendingTick();
+  const call0 = stripeCalls[0];
+  const st2 = await call("GET", `/organizations/${A}/saas`, tA);
+  check("S12. Plan de Care vivo: pasar a Premium se programa para el fin de lo pagado en Connect (una vez); al vencer se cambia el precio de la MISMA suscripción",
+    upSup.status === 403 && up.status === 200 && up.body.scheduled === true && up2.status === 200 && pend === "1" && notYet.applied === 0
+    && tick.applied === 1 && call0?.url === "https://api.stripe.com/v1/subscriptions/sub_testESEN0003" && call0.form.get("items[0][id]") === "si_TestItem0003"
+    && call0.form.get("items[0][price]") === "price_TestPremium01" && st2.body.saas.pendingPremiumAt === null,
+    { upSup: upSup.status, up: up.body, pend, notYet, tick, call0: call0 && { url: call0.url, f: Object.fromEntries(call0.form) }, st2: st2.body });
+  await notice(null);
+  stripeCalls.length = 0;
+  await stripeHook("customer.subscription.updated", sub("sub_testESEN0003", "price_TestEsencial01", { items: { data: [{ id: "si_TestItem0003", price: { id: "price_TestEsencial01" } }] } }));
+  const now2 = await call("POST", `/organizations/${A}/saas/premium`, tA);
+  check("S13. Sin plan de Connect pagado, el cambio a Premium es inmediato sobre la misma suscripción (prorrateo de Stripe)",
+    now2.status === 200 && now2.body.applied === true && stripeCalls[0]?.form.get("proration_behavior") === "create_prorations", { now2: now2.body });
+
   const hist = (await q<{ n: string }>(`SELECT count(*)::text n FROM saas_price_history`)).rows[0].n;
   check("S10. Cada precio fijado queda en el historial con persona responsable", hist === "3", hist);
 
