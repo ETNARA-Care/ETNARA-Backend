@@ -87,6 +87,7 @@ type EntryRow = {
   id: string; starts_local: string; ends_local: string; starts_at: string; ends_at: string; required_role: string;
   membership_id: string | null; worker_name: string | null; label: string | null; shift_id: string | null;
   removed_at: string | null; shift_status: string | null; assignment_status: string | null;
+  substitute_name?: string | null; substitution_at?: string | null;
 };
 async function weekEntries(trx: Trx, weekId: string): Promise<EntryRow[]> {
   const r = await sql<EntryRow>`
@@ -96,7 +97,12 @@ async function weekEntries(trx: Trx, weekId: string): Promise<EntryRow[]> {
            e.starts_at, e.ends_at, e.required_role, e.organization_worker_membership_id AS membership_id,
            w.display_name AS worker_name, e.label, e.shift_id, e.removed_at, s.status::text AS shift_status,
            (SELECT a.response_status::text FROM assignments a WHERE a.shift_id = e.shift_id AND a.response_status IN ('pending', 'accepted')
-             ORDER BY a.created_at DESC LIMIT 1) AS assignment_status
+             ORDER BY a.created_at DESC LIMIT 1) AS assignment_status,
+           -- 176 (F3): última sustitución administrativa del turno (quién cubre y desde cuándo).
+           (SELECT sw.display_name FROM shift_substitutions x JOIN organization_worker_memberships sm ON sm.id = x.substitute_membership_id
+              JOIN workers sw ON sw.id = sm.worker_id WHERE x.shift_id = e.shift_id ORDER BY x.created_at DESC LIMIT 1) AS substitute_name,
+           (SELECT to_char(x.effective_at AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') FROM shift_substitutions x WHERE x.shift_id = e.shift_id
+              ORDER BY x.created_at DESC LIMIT 1) AS substitution_at
     FROM schedule_week_shifts e
     LEFT JOIN organization_worker_memberships m ON m.id = e.organization_worker_membership_id
     LEFT JOIN workers w ON w.id = m.worker_id
@@ -114,6 +120,7 @@ const presentEntry = (e: EntryRow) => ({
   requiredRole: e.required_role, membershipId: e.membership_id, workerName: e.worker_name, label: e.label,
   published: e.shift_id !== null, removed: e.removed_at !== null,
   shiftStatus: e.shift_status, assignmentStatus: e.assignment_status,
+  substitution: e.substitute_name ? { substituteName: e.substitute_name, effectiveAt: e.substitution_at ?? null } : null,
 });
 
 /**
@@ -525,9 +532,9 @@ export function getMyScheduleWeek(userId: string, organizationId: string, weekSt
     if (!worker.rows[0]) throw new ResidentialError("RESIDENTIAL_SCHEDULE_STAFF_ONLY", 403);
     const r = await sql<MyShiftRow>`
       SELECT s.id,
-             to_char(s.scheduled_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
-             to_char(s.scheduled_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
-             s.scheduled_start AS starts_at, s.scheduled_end AS ends_at, s.status::text AS status, a.response_status::text AS assignment_status,
+             to_char(c.cov_start AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS starts_local,
+             to_char(c.cov_end AT TIME ZONE ${TZ}, 'YYYY-MM-DD"T"HH24:MI') AS ends_local,
+             c.cov_start AS starts_at, c.cov_end AS ends_at, s.status::text AS status, a.response_status::text AS assignment_status,
              COALESCE((SELECT l.name FROM establishment_technical_rooms t JOIN locations l ON l.id = t.location_id WHERE t.room_id = s.room_id),
                       (SELECT l.name FROM rooms r JOIN units u ON u.id = r.unit_id JOIN locations l ON l.id = u.location_id WHERE r.id = s.room_id),
                       (SELECT l.name FROM care_recipients c JOIN locations l ON l.id = c.location_id WHERE c.id = s.care_recipient_id)) AS establishment_name,
@@ -537,12 +544,16 @@ export function getMyScheduleWeek(userId: string, organizationId: string, weekSt
       JOIN assignments a ON a.shift_id = s.id AND a.response_status IN ('pending', 'accepted')
       JOIN organization_worker_memberships m ON m.id = a.organization_worker_membership_id AND m.status = 'active'
       LEFT JOIN LATERAL app_my_shift_preview(s.id) prev ON true
+      -- 176 (F3): tras una sustitución parcial, cada persona ve SU parte (la original hasta la hora efectiva, la sustituta
+      -- desde ella), igual que en «Ponchar» y en las horas; sin sustitución, la cobertura es el turno entero.
+      CROSS JOIN LATERAL app_residential_coverage_bounds(s.id, a.organization_worker_membership_id) c
       WHERE s.organization_id = ${organizationId}
         AND m.worker_id = ${worker.rows[0].id}
         AND s.status <> 'cancelled'
-        AND s.scheduled_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
-        AND s.scheduled_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
-      ORDER BY s.scheduled_start, s.id`.execute(trx);
+        AND c.cov_end > c.cov_start
+        AND c.cov_start < ((${weekStart}::date + 7)::timestamp AT TIME ZONE ${TZ})
+        AND c.cov_end > (${weekStart}::date::timestamp AT TIME ZONE ${TZ})
+      ORDER BY c.cov_start, s.id`.execute(trx);
     const shifts = r.rows.map((x) => ({
       shiftId: x.id, startsAt: x.starts_local, endsAt: x.ends_local,
       durationMinutes: Math.round((new Date(x.ends_at).getTime() - new Date(x.starts_at).getTime()) / 60_000),

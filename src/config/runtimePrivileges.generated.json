@@ -488,6 +488,11 @@
     "shift_attention_closures": [
       "SELECT"
     ],
+    "shift_coverage_alerts": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
     "shift_finance_terms": [
       "INSERT",
       "SELECT"
@@ -515,6 +520,14 @@
     "shift_reports": [
       "SELECT",
       "UPDATE"
+    ],
+    "shift_resident_assignments": [
+      "INSERT",
+      "SELECT",
+      "UPDATE"
+    ],
+    "shift_substitutions": [
+      "SELECT"
     ],
     "shifts": [
       "INSERT",
@@ -757,9 +770,14 @@
     "app_record_timesheet_from_checkout",
     "app_rectify_shift_closure",
     "app_reset_credential_review_pending",
+    "app_residential_care_event_window",
     "app_residential_close_establishment",
+    "app_residential_coverage_bounds",
     "app_residential_lock_establishment",
+    "app_residential_membership_busy",
     "app_residential_shift_target_state",
+    "app_residential_substitute_shift",
+    "app_residential_worker_has_recipient",
     "app_review_activity_photo",
     "app_revoke_photo_consent",
     "app_role_terms_checkbox_text",
